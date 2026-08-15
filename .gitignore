@@ -1,0 +1,16 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+
+node_modules/
+.npm/
+.vite/
+out/
+artifacts/
+.runtime-cache/
+resources/runtimes/
+
+__pycache__/
+*.py[cod]
+python/whisperx/.venv/
