@@ -1,5 +1,6 @@
-import { spawn } from 'node:child_process';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { spawn, spawnSync } from 'node:child_process';
+import { constants } from 'node:fs';
+import { access, readFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +20,35 @@ const executable = path.join(
   'bin',
   `codex-app-server${isWindows ? '.exe' : ''}`,
 );
+const codeModeHost = path.join(
+  desktopRoot,
+  'resources',
+  'runtimes',
+  target,
+  'codex-app-server',
+  'bin',
+  `codex-code-mode-host${isWindows ? '.exe' : ''}`,
+);
+const packageManifestPath = path.join(
+  desktopRoot,
+  'resources',
+  'runtimes',
+  target,
+  'codex-app-server',
+  'codex-package.json',
+);
+await access(codeModeHost, constants.X_OK);
+const codeModeCheck = spawnSync(codeModeHost, ['--help'], { encoding: 'utf8' });
+if (codeModeCheck.status !== 0 || !codeModeCheck.stdout.includes('codex-code-mode-host')) {
+  throw new Error('O componente codex-code-mode-host nao esta executavel.');
+}
+const packageManifest = JSON.parse(await readFile(packageManifestPath, 'utf8'));
+if (
+  packageManifest.version !== manifest.runtimes['codex-app-server'].version ||
+  packageManifest.entrypoint !== `bin/${isWindows ? 'codex-app-server.exe' : 'codex-app-server'}`
+) {
+  throw new Error('A estrutura do pacote Codex esta invalida.');
+}
 const codexHome = await mkdtemp(path.join(tmpdir(), 'edvid-codex-smoke-'));
 const child = spawn(executable, ['--listen', 'stdio://', '--session-source', 'appServer'], {
   env: { ...process.env, CODEX_HOME: codexHome },
@@ -108,7 +138,7 @@ try {
   await request('account/login/cancel', { loginId: login.loginId });
 
   console.log(
-    `Codex App Server ${manifest.runtimes['codex-app-server'].version}: initialize, account/read, thread/start e OAuth OK`,
+    `Codex App Server ${manifest.runtimes['codex-app-server'].version}: pacote, Code Mode host, initialize, thread/start e OAuth OK`,
   );
 } finally {
   child.kill();

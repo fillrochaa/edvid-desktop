@@ -7,7 +7,6 @@ import {
   mkdir,
   mkdtemp,
   readFile,
-  readdir,
   rename,
   rm,
   writeFile,
@@ -27,13 +26,14 @@ const runtime = manifest.runtimes['codex-app-server'];
 const version = runtime.version;
 const target = process.argv[2] ?? `${process.platform}-${process.arch}`;
 const artifact = runtime.artifacts[target];
+const isWindowsTarget = target.startsWith('win32-');
 
 if (!artifact) {
   throw new Error(`Target sem distribuicao Codex App Server configurada: ${target}`);
 }
 
 const releaseBaseUrl = `https://github.com/openai/codex/releases/download/rust-v${version}`;
-const cacheDirectory = path.join(desktopRoot, '.runtime-cache', 'codex-app-server', version);
+const cacheDirectory = path.join(desktopRoot, '.runtime-cache', 'codex-app-server-package', version);
 const archivePath = path.join(cacheDirectory, artifact.name);
 const licensePath = path.join(cacheDirectory, 'LICENSE');
 const destination = path.join(
@@ -43,7 +43,10 @@ const destination = path.join(
   target,
   'codex-app-server',
 );
-const executableName = target.startsWith('win32-') ? 'codex-app-server.exe' : 'codex-app-server';
+const executableName = isWindowsTarget ? 'codex-app-server.exe' : 'codex-app-server';
+const codeModeHostName = isWindowsTarget
+  ? 'codex-code-mode-host.exe'
+  : 'codex-code-mode-host';
 
 await mkdir(cacheDirectory, { recursive: true });
 
@@ -118,18 +121,6 @@ function run(command, args, options = {}) {
   return result.stdout ?? '';
 }
 
-async function findExecutable(root) {
-  const entries = await readdir(root, { recursive: true, withFileTypes: true });
-  const match = entries.find(
-    (entry) =>
-      entry.isFile() &&
-      entry.name.startsWith('codex-app-server-') &&
-      (target.startsWith('win32-') ? entry.name.endsWith('.exe') : !entry.name.endsWith('.exe')),
-  );
-  if (!match) throw new Error(`Executavel ${executableName} ausente em ${artifact.name}.`);
-  return path.join(match.parentPath ?? match.path, match.name);
-}
-
 async function validateMacDependencies(executable) {
   if (!target.startsWith('darwin-')) return [];
   const output = run('otool', ['-L', executable], { capture: true });
@@ -149,6 +140,10 @@ async function validateMacDependencies(executable) {
   return dependencies;
 }
 
+function canExecuteTarget() {
+  return target === `${process.platform}-${process.arch}`;
+}
+
 const archiveHash = await ensurePinnedDownload(
   `${releaseBaseUrl}/${artifact.name}`,
   archivePath,
@@ -165,22 +160,81 @@ await ensurePinnedDownload(
 const temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'edvid-codex-'));
 try {
   run('tar', ['-xf', archivePath, '-C', temporaryDirectory]);
-  const extractedExecutable = await findExecutable(temporaryDirectory);
-  if (!target.startsWith('win32-')) await chmod(extractedExecutable, 0o755);
-
-  const versionOutput = run(extractedExecutable, ['--version'], { capture: true }).trim();
-  if (!versionOutput.includes(version)) {
-    throw new Error(`Versao Codex inesperada: ${versionOutput || '(sem resposta)'}`);
+  const packageManifestPath = path.join(temporaryDirectory, 'codex-package.json');
+  if (!(await exists(packageManifestPath))) {
+    throw new Error(`Manifesto codex-package.json ausente em ${artifact.name}.`);
   }
-  const dynamicLibraries = await validateMacDependencies(extractedExecutable);
+  const packageManifest = JSON.parse(await readFile(packageManifestPath, 'utf8'));
+  if (
+    packageManifest.layoutVersion !== 1 ||
+    packageManifest.version !== version ||
+    packageManifest.variant !== 'codex-app-server'
+  ) {
+    throw new Error(`Manifesto do pacote Codex inesperado: ${JSON.stringify(packageManifest)}.`);
+  }
+
+  const componentRelativePaths = {
+    appServer: packageManifest.entrypoint,
+    codeModeHost: path.join('bin', codeModeHostName),
+    rg: path.join('codex-path', isWindowsTarget ? 'rg.exe' : 'rg'),
+    ...(isWindowsTarget
+      ? {
+          commandRunner: path.join('codex-resources', 'codex-command-runner.exe'),
+          sandboxSetup: path.join('codex-resources', 'codex-windows-sandbox-setup.exe'),
+        }
+      : { shell: path.join('codex-resources', 'zsh', 'bin', 'zsh') }),
+  };
+  const extractedComponents = Object.fromEntries(
+    Object.entries(componentRelativePaths).map(([name, relativePath]) => [
+      name,
+      path.join(temporaryDirectory, relativePath),
+    ]),
+  );
+  for (const requiredPath of Object.values(extractedComponents)) {
+    if (!(await exists(requiredPath))) {
+      throw new Error(`Componente Codex ausente no pacote: ${requiredPath}.`);
+    }
+    if (!isWindowsTarget) await chmod(requiredPath, 0o755);
+  }
+
+  let versionOutput = 'validacao de execucao reservada para a plataforma de destino';
+  if (canExecuteTarget()) {
+    versionOutput = run(extractedComponents.appServer, ['--version'], { capture: true }).trim();
+    if (!versionOutput.includes(version)) {
+      throw new Error(`Versao Codex inesperada: ${versionOutput || '(sem resposta)'}`);
+    }
+    const codeModeHelp = run(extractedComponents.codeModeHost, ['--help'], { capture: true });
+    if (!codeModeHelp.includes('codex-code-mode-host')) {
+      throw new Error('O Code Mode host nao respondeu ao teste de inicializacao.');
+    }
+  }
+  const dynamicLibraries = Object.fromEntries(
+    await Promise.all(
+      Object.entries(extractedComponents).map(async ([name, componentPath]) => [
+        name,
+        await validateMacDependencies(componentPath),
+      ]),
+    ),
+  );
 
   await rm(destination, { recursive: true, force: true });
-  await mkdir(path.join(destination, 'bin'), { recursive: true });
+  await cp(temporaryDirectory, destination, { recursive: true });
   await mkdir(path.join(destination, 'licenses'), { recursive: true });
   const stagedExecutable = path.join(destination, 'bin', executableName);
-  await cp(extractedExecutable, stagedExecutable);
   await cp(licensePath, path.join(destination, 'licenses', 'LICENSE'));
-  if (!target.startsWith('win32-')) await chmod(stagedExecutable, 0o755);
+  const stagedCodeModeHost = path.join(destination, 'bin', codeModeHostName);
+  if (!isWindowsTarget) {
+    await chmod(stagedExecutable, 0o755);
+    await chmod(stagedCodeModeHost, 0o755);
+  }
+  const binaryHashes = Object.fromEntries(
+    await Promise.all(
+      Object.entries(componentRelativePaths).map(async ([name, relativePath]) => [
+        `${name}Sha256`,
+        await sha256(path.join(destination, relativePath)),
+      ]),
+    ),
+  );
 
   await writeFile(
     path.join(destination, 'build-metadata.json'),
@@ -192,7 +246,7 @@ try {
         sourceCommit: runtime.sourceCommit,
         artifactUrl: `${releaseBaseUrl}/${artifact.name}`,
         archiveSha256: archiveHash,
-        binarySha256: await sha256(stagedExecutable),
+        binaries: binaryHashes,
         licenseSha256: await sha256(licensePath),
         versionOutput,
         dynamicLibraries,

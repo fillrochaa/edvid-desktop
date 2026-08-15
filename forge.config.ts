@@ -56,7 +56,10 @@ const config: ForgeConfig = {
     new FusesPlugin({
       version: FuseVersion.V1,
       [FuseV1Options.RunAsNode]: false,
-      [FuseV1Options.EnableCookieEncryption]: true,
+      // Edvid does not persist Electron cookies. Keeping this fuse disabled avoids
+      // initializing Chromium Safe Storage (and prompting for the macOS Keychain)
+      // while Codex authentication remains isolated in its own CODEX_HOME.
+      [FuseV1Options.EnableCookieEncryption]: false,
       [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
       [FuseV1Options.EnableNodeCliInspectArguments]: false,
       [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,

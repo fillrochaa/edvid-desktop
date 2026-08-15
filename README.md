@@ -13,19 +13,22 @@ npm run stage:codex
 npm start
 ```
 
-O estagio atual (`0.2.1`) inclui selecao da pasta do projeto, login gerenciado do
+O estagio atual (`0.2.2`) inclui selecao da pasta do projeto, login gerenciado do
 ChatGPT, conversa em streaming, interrupcao do turno e aprovacoes explicitas de
 comandos e alteracoes de arquivo.
 
 ## Integracao com o ChatGPT
 
-O Electron inicia um Codex App Server oficial como processo local e se comunica
+O Electron inicia o pacote oficial do Codex App Server como processo local e se comunica
 com ele por JSONL em `stdio`. A versao `0.147.0` e fixada no manifesto, cada
 artefato de macOS/Windows possui SHA-256 esperado e a licenca acompanha o
-runtime empacotado.
+runtime empacotado. O pacote preserva o App Server, o Code Mode host e seus
+recursos auxiliares na estrutura publicada pela OpenAI.
 
 - O OAuth abre `auth.openai.com` no navegador padrao.
 - Tokens e estado de autenticacao ficam no processo do Codex, nunca no renderer.
+- O Electron nao persiste cookies; a criptografia de cookies permanece desativada
+  para nao inicializar o cofre do sistema sem necessidade.
 - O `CODEX_HOME` e exclusivo do Edvid dentro dos dados do aplicativo.
 - Cada conversa usa a pasta selecionada como workspace, sandbox
   `workspace-write` e politica de aprovacao `on-request`.
