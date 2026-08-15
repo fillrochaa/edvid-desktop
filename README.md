@@ -13,7 +13,7 @@ npm run stage:codex
 npm start
 ```
 
-O estagio atual (`0.4.0`) inclui projetos recentes, login gerenciado do ChatGPT,
+O estagio atual (`0.5.0`) inclui projetos recentes, login gerenciado do ChatGPT,
 conversa em streaming, aprovacao visual do corte limpo e um workspace integrado
 de preview, timeline, estilos e correcoes por intervalos In/Out.
 
@@ -26,6 +26,10 @@ de preview, timeline, estilos e correcoes por intervalos In/Out.
   legendas, inserts e trilha como novas tracks.
 - O corte limpo e aprovado por botao; marcacoes In/Out permitem agrupar varias
   correcoes na timeline e aplica-las ao agente em uma unica acao.
+- A timeline representa os cortes reais do EDL/J-cut nas tracks de video e voz;
+  marcacoes podem ser excluidas no hover e restauradas com `Cmd/Ctrl+Z`.
+- `Espaco` controla play/pause e as setas esquerda/direita percorrem um frame por
+  vez de acordo com o FPS medido do video.
 - Videos verticais colocam o preview a direita da timeline; horizontais mantem o
   preview acima dela.
 - A aba Estilos usa o catalogo oficial do Edvid e envia as escolhas ao agente como

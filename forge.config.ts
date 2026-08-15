@@ -13,6 +13,7 @@ const config: ForgeConfig = {
   packagerConfig: {
     appBundleId: 'com.creatorfactory.edvid',
     appCategoryType: 'public.app-category.video',
+    icon: path.resolve('src/brand/edvid-icon'),
     asar: true,
     extraResource: ['resources/runtime-manifest.json', 'resources/runtimes'],
     osxSign:
@@ -28,7 +29,7 @@ const config: ForgeConfig = {
   },
   rebuildConfig: {},
   makers: [
-    new MakerSquirrel({ name: 'edvid' }),
+    new MakerSquirrel({ name: 'edvid', setupIcon: path.resolve('src/brand/edvid-icon.ico') }),
     new MakerDMG({}, ['darwin']),
     new MakerZIP({}, ['darwin']),
   ],

@@ -82,10 +82,19 @@ type FfprobeOutput = {
   streams?: Array<{
     width?: number;
     height?: number;
+    avg_frame_rate?: string;
+    r_frame_rate?: string;
     tags?: { rotate?: string };
     side_data_list?: Array<{ rotation?: number }>;
   }>;
 };
+
+function parseFrameRate(value?: string): number {
+  if (!value) return 30;
+  const [numerator, denominator = '1'] = value.split('/');
+  const fps = Number(numerator) / Number(denominator);
+  return Number.isFinite(fps) && fps > 0 ? fps : 30;
+}
 
 function projectsFile(): string {
   return path.join(app.getPath('userData'), 'projects.json');
@@ -212,7 +221,7 @@ function inspectVideo(executable: string, argsPrefix: string[], filePath: string
         '-select_streams',
         'v:0',
         '-show_entries',
-        'format=duration:stream=width,height:stream_tags=rotate:stream_side_data=rotation',
+        'format=duration:stream=width,height,avg_frame_rate,r_frame_rate:stream_tags=rotate:stream_side_data=rotation',
         '-of',
         'json',
         filePath,
@@ -288,6 +297,7 @@ async function inspectProjectMedia(directory: string): Promise<ProjectMedia | nu
     width,
     height,
     duration: Number(probe.format?.duration) || 0,
+    fps: parseFrameRate(stream.avg_frame_rate || stream.r_frame_rate),
     orientation: height > width ? 'vertical' : 'horizontal',
     kind,
   };
@@ -296,7 +306,9 @@ async function inspectProjectMedia(directory: string): Promise<ProjectMedia | nu
 async function inspectProjectTimeline(directory: string): Promise<ProjectTimeline | null> {
   const candidatePaths = [
     path.join(directory, 'edit', 'edl.json'),
+    path.join(directory, 'edit', 'corte_limpo', 'edl.json'),
     path.join(directory, 'edicao', 'edl.json'),
+    path.join(directory, 'edicao', 'corte_limpo', 'edl.json'),
     path.join(directory, 'edl.json'),
   ];
   for (const candidatePath of candidatePaths) {
@@ -307,6 +319,8 @@ async function inspectProjectTimeline(directory: string): Promise<ProjectTimelin
           beat?: string;
           video_start_in_output?: number;
           video_duration?: number;
+          audio_start_in_output?: number;
+          audio_duration?: number;
         }>;
       };
       const jcut = Array.isArray(edl.jcut_timeline) ? edl.jcut_timeline : [];
@@ -317,8 +331,17 @@ async function inspectProjectTimeline(directory: string): Promise<ProjectTimelin
               label: segment.beat?.trim() || `Take ${String(index + 1).padStart(2, '0')}`,
               start: Number(segment.video_start_in_output),
               duration: Number(segment.video_duration),
+              audioStart: Number(segment.audio_start_in_output),
+              audioDuration: Number(segment.audio_duration),
             }))
-            .filter((segment) => Number.isFinite(segment.start) && segment.duration > 0),
+            .filter((segment) => Number.isFinite(segment.start) && segment.duration > 0)
+            .map((segment) => ({
+              ...segment,
+              audioStart: Number.isFinite(segment.audioStart) ? segment.audioStart : segment.start,
+              audioDuration: Number.isFinite(segment.audioDuration) && segment.audioDuration > 0
+                ? segment.audioDuration
+                : segment.duration,
+            })),
         };
       }
       const ranges = Array.isArray(edl.ranges) ? edl.ranges : [];
@@ -330,6 +353,8 @@ async function inspectProjectTimeline(directory: string): Promise<ProjectTimelin
           label: range.beat?.trim() || `Take ${String(index + 1).padStart(2, '0')}`,
           start: outputStart,
           duration,
+          audioStart: outputStart,
+          audioDuration: duration,
         };
         outputStart += duration;
         return [segment];

@@ -8,7 +8,8 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
-import edvidLogo from './brand/edvid-logo-white.png';
+import edvidIcon from './brand/edvid-icon.png';
+import edvidLogo from './brand/edvid-logo.png';
 import type {
   CodexAccountState,
   CodexApproval,
@@ -87,11 +88,11 @@ type IconName =
   | 'pause'
   | 'pin'
   | 'play'
-  | 'refresh'
   | 'settings'
   | 'skipBack'
   | 'skipForward'
   | 'sparkles'
+  | 'trash'
   | 'video'
   | 'volume'
   | 'volumeOff'
@@ -157,11 +158,11 @@ function Icon({ name }: { name: IconName }) {
     pause: <><path d="M5.2 3v10M10.8 3v10" /></>,
     pin: <path d="m5 2 6 1-1.4 3 2.1 2.1-3 1.1-2.5 4.5-.5-4.9-3-1.4 2.4-1.8z" />,
     play: <path d="m5 2.5 8 5.5-8 5.5z" />,
-    refresh: <><path d="M13 6.2A5.5 5.5 0 1 0 13.3 10" /><path d="M13 2.7v3.5H9.5" /></>,
     settings: <><circle cx="8" cy="8" r="2.2" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" /></>,
     skipBack: <><path d="M4 3v10M12.8 3.2 5.4 8l7.4 4.8z" /></>,
     skipForward: <><path d="M12 3v10M3.2 3.2 10.6 8l-7.4 4.8z" /></>,
     sparkles: <><path d="M8 1.5 9.2 5 12.5 6.2 9.2 7.4 8 11 6.8 7.4 3.5 6.2 6.8 5z" /><path d="m12.8 10 .5 1.5 1.4.5-1.4.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5z" /></>,
+    trash: <><path d="M3.2 4.6h9.6M6 4.6V2.8h4v1.8M4.5 4.6l.7 8.5h5.6l.7-8.5M6.8 7v3.7M9.2 7v3.7" /></>,
     video: <><rect x="1.4" y="3" width="10" height="10" rx="2" /><path d="m11.4 6.2 3.2-1.8v7.2l-3.2-1.8" /></>,
     volume: <><path d="M2 6h3l3-2.7v9.4L5 10H2z" /><path d="M10 5.4a3.2 3.2 0 0 1 0 5.2M12 3.5a5.7 5.7 0 0 1 0 9" /></>,
     volumeOff: <><path d="M2 6h3l3-2.7v9.4L5 10H2z" /><path d="m10.3 6 3.7 4M14 6l-3.7 4" /></>,
@@ -181,14 +182,16 @@ function formatTime(seconds: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
 }
 
+const TIMELINE_LANE_START = 46;
+
 function timelinePoint(progress: number): string {
   const clamped = Math.max(0, Math.min(progress, 1));
-  return `calc(90px + ${clamped * 100}% - ${clamped * 90}px)`;
+  return `calc(${TIMELINE_LANE_START}px + ${clamped * 100}% - ${clamped * TIMELINE_LANE_START}px)`;
 }
 
 function timelineSpan(progress: number): string {
   const clamped = Math.max(0, Math.min(progress, 1));
-  return `calc(${clamped * 100}% - ${clamped * 90}px)`;
+  return `calc(${clamped * 100}% - ${clamped * TIMELINE_LANE_START}px)`;
 }
 
 function cleanAssistantText(text: string): string {
@@ -296,7 +299,6 @@ function TimelineTrack({
     <div className="studio-track">
       <div className={`studio-track-label ${tone}`} title={label}>
         <Icon name={icon} />
-        <span>{label}</span>
       </div>
       <div className="studio-lane">{children}</div>
     </div>
@@ -307,7 +309,6 @@ function EditorWorkspace({
   workspace,
   style,
   styleApplied,
-  onRefresh,
   corrections,
   onCorrectionsChange,
   onApplyCorrections,
@@ -316,7 +317,6 @@ function EditorWorkspace({
   workspace: ProjectWorkspace | null;
   style: StyleSetup;
   styleApplied: boolean;
-  onRefresh: () => void;
   corrections: CorrectionRange[];
   onCorrectionsChange: (corrections: CorrectionRange[]) => void;
   onApplyCorrections: (corrections: CorrectionRange[]) => Promise<boolean>;
@@ -329,6 +329,7 @@ function EditorWorkspace({
   const [markIn, setMarkIn] = useState<number | null>(null);
   const [draftRange, setDraftRange] = useState<{ start: number; end: number } | null>(null);
   const [draftNote, setDraftNote] = useState('');
+  const correctionHistoryRef = useRef<CorrectionRange[][]>([]);
   const media = workspace?.media ?? null;
   const timelineSegments = workspace?.timeline?.segments ?? [];
   const timelineDuration = timelineSegments.reduce(
@@ -346,6 +347,7 @@ function EditorWorkspace({
     setMarkIn(null);
     setDraftRange(null);
     setDraftNote('');
+    correctionHistoryRef.current = [];
     setDuration(media?.duration ?? timelineDuration);
   }, [media?.url, media?.duration, timelineDuration]);
 
@@ -385,6 +387,10 @@ function EditorWorkspace({
     seek(currentTime + seconds);
   }
 
+  function stepByFrames(frames: number) {
+    seek(currentTime + frames / Math.max(media?.fps ?? 30, 1));
+  }
+
   function toggleMute() {
     const video = videoRef.current;
     if (!video) return;
@@ -397,7 +403,7 @@ function EditorWorkspace({
     if (event.type === 'pointermove' && (event.buttons & 1) === 0) return;
     const timeline = event.currentTarget;
     const rect = timeline.getBoundingClientRect();
-    const laneStart = 90;
+    const laneStart = TIMELINE_LANE_START;
     const laneEndPadding = 0;
     const laneWidth = Math.max(1, rect.width - laneStart - laneEndPadding);
     const pointer = event.clientX - rect.left - laneStart;
@@ -421,7 +427,7 @@ function EditorWorkspace({
   function saveDraftCorrection(event: FormEvent) {
     event.preventDefault();
     if (!draftRange || !draftNote.trim()) return;
-    onCorrectionsChange([
+    commitCorrections([
       ...corrections,
       {
         id: `correction:${Date.now()}`,
@@ -434,19 +440,60 @@ function EditorWorkspace({
     setDraftNote('');
   }
 
+  function commitCorrections(next: CorrectionRange[]) {
+    correctionHistoryRef.current.push(corrections);
+    onCorrectionsChange(next);
+  }
+
+  function deleteCorrection(id: string) {
+    commitCorrections(corrections.filter((correction) => correction.id !== id));
+  }
+
+  function undoTimelineAction() {
+    if (draftRange) {
+      setMarkIn(draftRange.start);
+      setDraftRange(null);
+      setDraftNote('');
+      return;
+    }
+    if (markIn !== null) {
+      setMarkIn(null);
+      return;
+    }
+    const previous = correctionHistoryRef.current.pop();
+    if (previous) onCorrectionsChange(previous);
+  }
+
   async function applyCorrections() {
     if (corrections.length === 0) return;
     if (await onApplyCorrections(corrections)) {
       onCorrectionsChange([]);
+      correctionHistoryRef.current = [];
       setMarkIn(null);
     }
   }
 
   useEffect(() => {
-    const handleMarkerShortcut = (event: KeyboardEvent) => {
+    const handleEditorShortcut = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest('textarea, input, [contenteditable="true"]')) return;
       const key = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && key === 'z' && !event.altKey) {
+        event.preventDefault();
+        undoTimelineAction();
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.code === 'Space') {
+        event.preventDefault();
+        if (!event.repeat) void togglePlayback();
+        return;
+      }
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        stepByFrames(event.key === 'ArrowLeft' ? -1 : 1);
+        return;
+      }
       if (key === 'm') {
         event.preventDefault();
         if (markIn === null) setInPoint();
@@ -459,27 +506,33 @@ function EditorWorkspace({
         setOutPoint();
       }
     };
-    window.addEventListener('keydown', handleMarkerShortcut);
-    return () => window.removeEventListener('keydown', handleMarkerShortcut);
-  }, [currentTime, markIn, media?.url]);
+    window.addEventListener('keydown', handleEditorShortcut);
+    return () => window.removeEventListener('keydown', handleEditorShortcut);
+  }, [corrections, currentTime, draftRange, markIn, media?.fps, media?.url]);
 
+  const visibleTrackCount = 2
+    + (phase === 2 && style.headline !== 'none' ? 1 : 0)
+    + (phase === 2 && style.captions !== 'none' ? 1 : 0)
+    + (phase === 2 && style.edit !== 'limpa' ? 1 : 0)
+    + (phase === 2 && style.elements.musicAI ? 1 : 0);
   const trackStyle = {
     '--timeline-playhead-left': timelinePoint(progress),
+    '--timeline-track-count': visibleTrackCount,
   } as CSSProperties;
   const orientation = media?.orientation ?? 'horizontal';
+  const displayedSegments = timelineSegments.length > 0
+    ? timelineSegments
+    : [{
+        label: media?.name ?? 'Vídeo',
+        start: 0,
+        duration: effectiveDuration || 1,
+        audioStart: 0,
+        audioDuration: effectiveDuration || 1,
+      }];
 
   return (
     <div className={`editor-workspace ${orientation}`}>
       <section className="preview-section">
-        <div className="preview-toolbar">
-          <div>
-            <span className="eyebrow">Preview</span>
-            <strong>{media?.name ?? 'Aguardando vídeo'}</strong>
-          </div>
-          <button type="button" className="icon-button" onClick={onRefresh} title="Atualizar arquivos do projeto">
-            <Icon name="refresh" />
-          </button>
-        </div>
         <div className={`video-stage ${orientation}`}>
           {media ? (
             <video
@@ -545,16 +598,13 @@ function EditorWorkspace({
               </TimelineTrack>
             )}
             <TimelineTrack icon="video" label="Vídeo" tone="orange">
-              {(timelineSegments.length > 0
-                ? timelineSegments
-                : [{ label: media?.name ?? 'Vídeo', start: 0, duration: effectiveDuration || 1 }]
-              ).map((segment, index) => (
+              {displayedSegments.map((segment, index) => (
                 <div
                   className={`timeline-clip video-clip ${index % 2 ? 'alt' : ''}`}
                   key={`${segment.start}:${segment.label}`}
                   style={{
                     left: `${effectiveDuration > 0 ? (segment.start / effectiveDuration) * 100 : 0}%`,
-                    width: `${effectiveDuration > 0 ? (segment.duration / effectiveDuration) * 100 : 100}%`,
+                    width: `calc(${effectiveDuration > 0 ? (segment.duration / effectiveDuration) * 100 : 100}% - ${index < displayedSegments.length - 1 ? 2 : 0}px)`,
                   }}
                   title={`${segment.label} · ${formatTime(segment.duration)}`}
                 >
@@ -563,7 +613,23 @@ function EditorWorkspace({
               ))}
             </TimelineTrack>
             <TimelineTrack icon="waveform" label="Voz" tone="teal">
-              <div className="timeline-clip audio-clip"><span>Voz tratada</span></div>
+              {displayedSegments.map((segment, index) => {
+                const start = segment.audioStart ?? segment.start;
+                const segmentDuration = segment.audioDuration ?? segment.duration;
+                return (
+                  <div
+                    className={`timeline-clip audio-clip ${index % 2 ? 'alt' : ''}`}
+                    key={`audio:${segment.start}:${segment.label}`}
+                    style={{
+                      left: `${effectiveDuration > 0 ? (start / effectiveDuration) * 100 : 0}%`,
+                      width: `calc(${effectiveDuration > 0 ? (segmentDuration / effectiveDuration) * 100 : 100}% - 2px)`,
+                    }}
+                    title={`${segment.label} · ${formatTime(segmentDuration)}`}
+                  >
+                    <span>{segment.label}</span>
+                  </div>
+                );
+              })}
             </TimelineTrack>
             {phase === 2 && style.elements.musicAI && (
               <TimelineTrack icon="music" label="Trilha" tone="olive">
@@ -581,7 +647,25 @@ function EditorWorkspace({
                 title={`${formatTime(correction.start)}–${formatTime(correction.end)} · ${correction.note}`}
               >
                 <span>{index + 1}</span>
+                <button
+                  type="button"
+                  className="delete-correction"
+                  title={`Excluir marcação ${index + 1}`}
+                  aria-label={`Excluir marcação ${index + 1}`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => { event.stopPropagation(); deleteCorrection(correction.id); }}
+                >
+                  <Icon name="trash" />
+                </button>
               </div>
+            ))}
+            {displayedSegments.slice(1).map((segment, index) => (
+              <div
+                className="timeline-cut-marker"
+                key={`cut:${segment.start}:${index}`}
+                style={{ '--cut-left': timelinePoint(effectiveDuration > 0 ? segment.start / effectiveDuration : 0) } as CSSProperties}
+                title={`Corte em ${formatTime(segment.start)}`}
+              />
             ))}
             {markIn !== null && (
               <div
@@ -1069,8 +1153,10 @@ export function App() {
     <div className={`studio-shell ${railPinned ? 'rail-pinned' : ''}`}>
       <aside className={`project-rail ${railPinned ? 'pinned' : ''}`}>
         <div className="rail-brand">
-          <div className="rail-logo"><img src={edvidLogo} alt="Edvid" /></div>
-          <div className="rail-brand-copy"><strong>Edvid</strong><span>Projetos</span></div>
+          <div className="rail-logo">
+            <img className="rail-brand-icon" src={edvidIcon} alt="" />
+            <img className="rail-brand-wordmark" src={edvidLogo} alt="Edvid" />
+          </div>
           <button type="button" className={`rail-pin ${railPinned ? 'active' : ''}`} onClick={toggleRailPinned} title={railPinned ? 'Recolher barra lateral' : 'Manter barra expandida'}><Icon name="pin" /></button>
         </div>
         <button type="button" className="new-project" onClick={chooseProjectDirectory} disabled={openingProject || Boolean(activeTurn)}>
@@ -1206,7 +1292,6 @@ export function App() {
                   workspace={workspace}
                   style={style}
                   styleApplied={styleApplied}
-                  onRefresh={refreshWorkspace}
                   corrections={corrections}
                   onCorrectionsChange={setCorrections}
                   onApplyCorrections={applyTimelineCorrections}

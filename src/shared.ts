@@ -38,6 +38,7 @@ export type ProjectMedia = {
   width: number;
   height: number;
   duration: number;
+  fps: number;
   orientation: 'vertical' | 'horizontal';
   kind: 'source' | 'clean-cut' | 'final';
 };
@@ -46,6 +47,8 @@ export type ProjectTimelineSegment = {
   label: string;
   start: number;
   duration: number;
+  audioStart?: number;
+  audioDuration?: number;
 };
 
 export type ProjectTimeline = {

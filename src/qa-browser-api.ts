@@ -21,14 +21,15 @@ const qaWorkspace: ProjectWorkspace = {
     width: 1080,
     height: 1920,
     duration: 10.7,
+    fps: 30,
     orientation: 'vertical',
     kind: 'clean-cut',
   },
   timeline: {
     segments: [
-      { label: 'HOOK', start: 0, duration: 3.2 },
-      { label: 'PROBLEMA', start: 3.2, duration: 4.1 },
-      { label: 'SOLUÇÃO', start: 7.3, duration: 3.4 },
+      { label: 'HOOK', start: 0, duration: 3.2, audioStart: 0, audioDuration: 3.2 },
+      { label: 'PROBLEMA', start: 3.2, duration: 4.1, audioStart: 3.03, audioDuration: 4.27 },
+      { label: 'SOLUÇÃO', start: 7.3, duration: 3.4, audioStart: 7.13, audioDuration: 3.57 },
     ],
   },
   style: null,
