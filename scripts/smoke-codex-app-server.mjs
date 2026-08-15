@@ -86,6 +86,17 @@ try {
     throw new Error('Resposta account/read invalida.');
   }
 
+  const thread = await request('thread/start', {
+    cwd: desktopRoot,
+    approvalPolicy: 'on-request',
+    sandbox: 'workspace-write',
+    serviceName: 'edvid_desktop_smoke',
+  });
+  if (typeof thread.thread?.id !== 'string') {
+    throw new Error('Resposta thread/start invalida.');
+  }
+  await request('thread/delete', { threadId: thread.thread.id });
+
   const login = await request('account/login/start', {
     type: 'chatgpt',
     useHostedLoginSuccessPage: true,
@@ -97,7 +108,7 @@ try {
   await request('account/login/cancel', { loginId: login.loginId });
 
   console.log(
-    `Codex App Server ${manifest.runtimes['codex-app-server'].version}: initialize, account/read e OAuth OK`,
+    `Codex App Server ${manifest.runtimes['codex-app-server'].version}: initialize, account/read, thread/start e OAuth OK`,
   );
 } finally {
   child.kill();

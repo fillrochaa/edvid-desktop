@@ -395,7 +395,6 @@ export class CodexAppServer {
     if (!threadId) {
       const started = await this.request<ThreadStartResponse>('thread/start', {
         cwd: projectDirectory,
-        runtimeWorkspaceRoots: [projectDirectory],
         approvalPolicy: 'on-request',
         sandbox: 'workspace-write',
         serviceName: 'edvid_desktop',

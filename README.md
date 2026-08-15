@@ -13,7 +13,7 @@ npm run stage:codex
 npm start
 ```
 
-O estagio atual (`0.2`) inclui selecao da pasta do projeto, login gerenciado do
+O estagio atual (`0.2.1`) inclui selecao da pasta do projeto, login gerenciado do
 ChatGPT, conversa em streaming, interrupcao do turno e aprovacoes explicitas de
 comandos e alteracoes de arquivo.
 
