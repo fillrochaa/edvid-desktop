@@ -5,6 +5,7 @@ import {
   useState,
   type CSSProperties,
   type FormEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 import edvidLogo from './brand/edvid-logo-white.png';
@@ -76,12 +77,17 @@ type IconName =
   | 'image'
   | 'layers'
   | 'music'
+  | 'pause'
   | 'pin'
   | 'play'
   | 'refresh'
   | 'settings'
+  | 'skipBack'
+  | 'skipForward'
   | 'sparkles'
   | 'video'
+  | 'volume'
+  | 'volumeOff'
   | 'waveform';
 
 const initialAccount: CodexAccountState = {
@@ -141,12 +147,17 @@ function Icon({ name }: { name: IconName }) {
     image: <><rect x="1.5" y="2.2" width="13" height="11.6" rx="2" /><path d="m3.5 11 3-3 2.1 2 1.7-1.5 2.2 2.5M11.3 5.5h.1" /></>,
     layers: <><path d="m8 1.8 6.2 3.4L8 8.6 1.8 5.2z" /><path d="m2 8 6 3.3L14 8M2 10.8l6 3.3 6-3.3" /></>,
     music: <><path d="M6 12.2V4l7-1.5v8" /><circle cx="3.9" cy="12.3" r="2" /><circle cx="10.9" cy="10.7" r="2" /></>,
+    pause: <><path d="M5.2 3v10M10.8 3v10" /></>,
     pin: <path d="m5 2 6 1-1.4 3 2.1 2.1-3 1.1-2.5 4.5-.5-4.9-3-1.4 2.4-1.8z" />,
     play: <path d="m5 2.5 8 5.5-8 5.5z" />,
     refresh: <><path d="M13 6.2A5.5 5.5 0 1 0 13.3 10" /><path d="M13 2.7v3.5H9.5" /></>,
     settings: <><circle cx="8" cy="8" r="2.2" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" /></>,
+    skipBack: <><path d="M4 3v10M12.8 3.2 5.4 8l7.4 4.8z" /></>,
+    skipForward: <><path d="M12 3v10M3.2 3.2 10.6 8l-7.4 4.8z" /></>,
     sparkles: <><path d="M8 1.5 9.2 5 12.5 6.2 9.2 7.4 8 11 6.8 7.4 3.5 6.2 6.8 5z" /><path d="m12.8 10 .5 1.5 1.4.5-1.4.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5z" /></>,
     video: <><rect x="1.4" y="3" width="10" height="10" rx="2" /><path d="m11.4 6.2 3.2-1.8v7.2l-3.2-1.8" /></>,
+    volume: <><path d="M2 6h3l3-2.7v9.4L5 10H2z" /><path d="M10 5.4a3.2 3.2 0 0 1 0 5.2M12 3.5a5.7 5.7 0 0 1 0 9" /></>,
+    volumeOff: <><path d="M2 6h3l3-2.7v9.4L5 10H2z" /><path d="m10.3 6 3.7 4M14 6l-3.7 4" /></>,
     waveform: <path d="M1 8h2l1.2-4 2 8 2.2-9 2 7 1.2-4 1.2 2H15" />,
   };
   return <svg className="icon" viewBox="0 0 16 16" aria-hidden="true">{paths[name]}</svg>;
@@ -274,6 +285,8 @@ function EditorWorkspace({
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
   const media = workspace?.media ?? null;
   const timelineSegments = workspace?.timeline?.segments ?? [];
   const timelineDuration = timelineSegments.reduce(
@@ -287,15 +300,57 @@ function EditorWorkspace({
 
   useEffect(() => {
     setCurrentTime(0);
+    setPlaying(false);
     setDuration(media?.duration ?? timelineDuration);
   }, [media?.url, media?.duration, timelineDuration]);
 
   function seek(value: number) {
-    setCurrentTime(value);
-    if (videoRef.current) videoRef.current.currentTime = value;
+    const nextTime = Math.max(0, Math.min(value, effectiveDuration || 0));
+    setCurrentTime(nextTime);
+    if (videoRef.current) videoRef.current.currentTime = nextTime;
   }
 
-  const trackStyle = { '--timeline-progress': `${progress * 100}%` } as CSSProperties;
+  async function togglePlayback() {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      try {
+        await video.play();
+      } catch {
+        setPlaying(false);
+      }
+    } else {
+      video.pause();
+    }
+  }
+
+  function jumpBy(seconds: number) {
+    seek(currentTime + seconds);
+  }
+
+  function toggleMute() {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = !video.muted;
+    setMuted(video.muted);
+  }
+
+  function seekFromTimeline(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!media || effectiveDuration <= 0) return;
+    if (event.type === 'pointermove' && (event.buttons & 1) === 0) return;
+    const timeline = event.currentTarget;
+    const rect = timeline.getBoundingClientRect();
+    const laneStart = 98;
+    const laneEndPadding = 8;
+    const laneWidth = Math.max(1, timeline.scrollWidth - laneStart - laneEndPadding);
+    const pointer = event.clientX - rect.left + timeline.scrollLeft - laneStart;
+    seek((Math.max(0, Math.min(pointer, laneWidth)) / laneWidth) * effectiveDuration);
+    if (event.type === 'pointerdown') timeline.setPointerCapture(event.pointerId);
+  }
+
+  const trackStyle = {
+    '--timeline-playhead-left': `calc(98px + ${progress * 100}% - ${progress * 106}px)`,
+  } as CSSProperties;
   const orientation = media?.orientation ?? 'horizontal';
 
   return (
@@ -316,10 +371,15 @@ function EditorWorkspace({
               key={media.url}
               ref={videoRef}
               src={media.url}
-              controls
               preload="metadata"
+              playsInline
+              style={{ aspectRatio: `${media.width} / ${media.height}` }}
               onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
               onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+              onClick={() => void togglePlayback()}
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onEnded={() => setPlaying(false)}
             />
           ) : (
             <div className="video-placeholder">
@@ -342,7 +402,12 @@ function EditorWorkspace({
           </div>
           <div className="timeline-time">{formatTime(currentTime)} <span>/ {formatTime(effectiveDuration)}</span></div>
         </div>
-        <div className="timeline-scroll" style={trackStyle}>
+        <div
+          className="timeline-scroll"
+          style={trackStyle}
+          onPointerDown={seekFromTimeline}
+          onPointerMove={seekFromTimeline}
+        >
           <div className="timeline-ruler">
             <span>00:00</span><span>{formatTime(effectiveDuration * 0.25)}</span><span>{formatTime(effectiveDuration * 0.5)}</span><span>{formatTime(effectiveDuration * 0.75)}</span><span>{formatTime(effectiveDuration)}</span>
           </div>
@@ -390,17 +455,24 @@ function EditorWorkspace({
           )}
           <div className="timeline-playhead" />
         </div>
-        <input
-          className="timeline-scrubber"
-          aria-label="Posição do vídeo"
-          type="range"
-          min="0"
-          max={effectiveDuration || 1}
-          step="0.01"
-          value={Math.min(currentTime, effectiveDuration || 1)}
-          onChange={(event) => seek(Number(event.target.value))}
-          disabled={!media}
-        />
+        <div className="timeline-transport" aria-label="Controles de reprodução">
+          <button type="button" className="transport-button" onClick={() => jumpBy(-5)} disabled={!media} title="Voltar 5 segundos">
+            <Icon name="skipBack" />
+            <span>5s</span>
+          </button>
+          <button type="button" className="transport-button transport-play" onClick={() => void togglePlayback()} disabled={!media} title={playing ? 'Pausar' : 'Reproduzir'}>
+            <Icon name={playing ? 'pause' : 'play'} />
+          </button>
+          <button type="button" className="transport-button" onClick={() => jumpBy(5)} disabled={!media} title="Avançar 5 segundos">
+            <Icon name="skipForward" />
+            <span>5s</span>
+          </button>
+          <span className="transport-time">{formatTime(currentTime)} <i>/</i> {formatTime(effectiveDuration)}</span>
+          <span className="transport-spacer" />
+          <button type="button" className="transport-button" onClick={toggleMute} disabled={!media} title={muted ? 'Ativar áudio' : 'Silenciar'}>
+            <Icon name={muted ? 'volumeOff' : 'volume'} />
+          </button>
+        </div>
       </section>
     </div>
   );
@@ -871,8 +943,8 @@ export function App() {
                   <h2>O que vamos editar?</h2>
                   <p>O corte limpo vem primeiro. Depois da aprovação, os estilos aparecem visualmente na aba ao lado.</p>
                   <div className="prompt-examples">
-                    <button type="button" onClick={() => setComposer('Inicie a edição do vídeo e prepare o corte limpo.')}>Iniciar corte limpo</button>
-                    <button type="button" onClick={() => setComposer('Analise os vídeos e imagens da pasta assets.')}>Analisar assets</button>
+                    <button type="button" onClick={() => void dispatchMessage('Inicie a edição do vídeo e prepare o corte limpo.')} disabled={sending}>Iniciar corte limpo</button>
+                    <button type="button" onClick={() => void dispatchMessage('Analise os vídeos e imagens da pasta assets.')} disabled={sending}>Analisar assets</button>
                   </div>
                 </div>
               )}
