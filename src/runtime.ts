@@ -28,6 +28,7 @@ const expectedVersions: Record<RuntimeName, string> = {
   'yt-dlp': manifest.runtimes['yt-dlp'].version,
   python: manifest.runtimes.python.version,
   whisperx: manifest.runtimes.whisperx.version,
+  'codex-app-server': manifest.runtimes['codex-app-server'].version,
 };
 
 function isExecutable(filePath: string): boolean {
@@ -146,6 +147,24 @@ function bundledResolution(
         // mode prevents imports from creating or updating __pycache__ files
         // inside the bundled runtime (and is harmless on Windows).
         argsPrefix: ['-B'],
+        expectedVersion: expectedVersions[name],
+        source: 'bundled',
+      };
+    }
+  }
+
+  if (name === 'codex-app-server') {
+    const executable = path.join(
+      root,
+      'codex-app-server',
+      'bin',
+      `codex-app-server${isWindows ? '.exe' : ''}`,
+    );
+    if (isExecutable(executable)) {
+      return {
+        name,
+        command: executable,
+        argsPrefix: [],
         expectedVersion: expectedVersions[name],
         source: 'bundled',
       };
