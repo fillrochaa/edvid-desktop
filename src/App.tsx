@@ -39,6 +39,13 @@ type ChatMessage = {
   text: string;
 };
 
+type CorrectionRange = {
+  id: string;
+  start: number;
+  end: number;
+  note: string;
+};
+
 type WorkTab = 'edit' | 'styles';
 type EditStyle = 'limpa' | 'split' | 'split2';
 type HeadlineStyle = 'outline' | 'card' | 'realce' | 'misto' | 'none';
@@ -174,6 +181,30 @@ function formatTime(seconds: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
 }
 
+function timelinePoint(progress: number): string {
+  const clamped = Math.max(0, Math.min(progress, 1));
+  return `calc(90px + ${clamped * 100}% - ${clamped * 90}px)`;
+}
+
+function timelineSpan(progress: number): string {
+  const clamped = Math.max(0, Math.min(progress, 1));
+  return `calc(${clamped * 100}% - ${clamped * 90}px)`;
+}
+
+function cleanAssistantText(text: string): string {
+  return text
+    .replace(/^\s*\[[^\]\n]*(?:assistir|abrir)[^\]\n]*\]\(\s*<\/(?:Users|home|Volumes)\/[^)\n>]+>\s*\)\s*$/gimu, '')
+    .replace(/^\s*\[[^\]\n]+\]\(\s*(?:file:\/\/)?\/(?:Users|home|Volumes)\/[^)\n]+\)\s*$/gimu, '')
+    .replace(/^\s*(?:arquivo|caminho|saída|output)\s*:\s*<?\/(?:Users|home|Volumes)\/.*$/gimu, '')
+    .replace(/^\s*(?:aprova\s+este\s+corte\?|se\s+aprovar.*(?:diga|responda)).*$/gimu, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function asksForCleanCutApproval(text: string): boolean {
+  return /(?:corte\s+limpo|corte).{0,80}(?:pronto\s+para\s+(?:sua\s+)?aprova|aprova(?:r|ção)|aprova\s+este\s+corte)/isu.test(text);
+}
+
 function styleStorageKey(directory: string): string {
   return `edvid:style:${directory}`;
 }
@@ -277,16 +308,27 @@ function EditorWorkspace({
   style,
   styleApplied,
   onRefresh,
+  corrections,
+  onCorrectionsChange,
+  onApplyCorrections,
+  applyingCorrections,
 }: {
   workspace: ProjectWorkspace | null;
   style: StyleSetup;
   styleApplied: boolean;
   onRefresh: () => void;
+  corrections: CorrectionRange[];
+  onCorrectionsChange: (corrections: CorrectionRange[]) => void;
+  onApplyCorrections: (corrections: CorrectionRange[]) => Promise<boolean>;
+  applyingCorrections: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [markIn, setMarkIn] = useState<number | null>(null);
+  const [draftRange, setDraftRange] = useState<{ start: number; end: number } | null>(null);
+  const [draftNote, setDraftNote] = useState('');
   const media = workspace?.media ?? null;
   const timelineSegments = workspace?.timeline?.segments ?? [];
   const timelineDuration = timelineSegments.reduce(
@@ -301,8 +343,23 @@ function EditorWorkspace({
   useEffect(() => {
     setCurrentTime(0);
     setPlaying(false);
+    setMarkIn(null);
+    setDraftRange(null);
+    setDraftNote('');
     setDuration(media?.duration ?? timelineDuration);
   }, [media?.url, media?.duration, timelineDuration]);
+
+  useEffect(() => {
+    if (!playing) return;
+    let frame = 0;
+    const updatePlayhead = () => {
+      const video = videoRef.current;
+      if (video) setCurrentTime(video.currentTime);
+      frame = window.requestAnimationFrame(updatePlayhead);
+    };
+    frame = window.requestAnimationFrame(updatePlayhead);
+    return () => window.cancelAnimationFrame(frame);
+  }, [playing]);
 
   function seek(value: number) {
     const nextTime = Math.max(0, Math.min(value, effectiveDuration || 0));
@@ -340,16 +397,74 @@ function EditorWorkspace({
     if (event.type === 'pointermove' && (event.buttons & 1) === 0) return;
     const timeline = event.currentTarget;
     const rect = timeline.getBoundingClientRect();
-    const laneStart = 98;
-    const laneEndPadding = 8;
-    const laneWidth = Math.max(1, timeline.scrollWidth - laneStart - laneEndPadding);
-    const pointer = event.clientX - rect.left + timeline.scrollLeft - laneStart;
+    const laneStart = 90;
+    const laneEndPadding = 0;
+    const laneWidth = Math.max(1, rect.width - laneStart - laneEndPadding);
+    const pointer = event.clientX - rect.left - laneStart;
     seek((Math.max(0, Math.min(pointer, laneWidth)) / laneWidth) * effectiveDuration);
     if (event.type === 'pointerdown') timeline.setPointerCapture(event.pointerId);
   }
 
+  function setInPoint() {
+    if (!media) return;
+    setMarkIn(currentTime);
+  }
+
+  function setOutPoint() {
+    if (markIn === null || currentTime <= markIn) return;
+    videoRef.current?.pause();
+    setDraftRange({ start: markIn, end: currentTime });
+    setDraftNote('');
+    setMarkIn(null);
+  }
+
+  function saveDraftCorrection(event: FormEvent) {
+    event.preventDefault();
+    if (!draftRange || !draftNote.trim()) return;
+    onCorrectionsChange([
+      ...corrections,
+      {
+        id: `correction:${Date.now()}`,
+        start: draftRange.start,
+        end: draftRange.end,
+        note: draftNote.trim(),
+      },
+    ]);
+    setDraftRange(null);
+    setDraftNote('');
+  }
+
+  async function applyCorrections() {
+    if (corrections.length === 0) return;
+    if (await onApplyCorrections(corrections)) {
+      onCorrectionsChange([]);
+      setMarkIn(null);
+    }
+  }
+
+  useEffect(() => {
+    const handleMarkerShortcut = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('textarea, input, [contenteditable="true"]')) return;
+      const key = event.key.toLowerCase();
+      if (key === 'm') {
+        event.preventDefault();
+        if (markIn === null) setInPoint();
+        else setOutPoint();
+      } else if (key === 'i') {
+        event.preventDefault();
+        setInPoint();
+      } else if (key === 'o') {
+        event.preventDefault();
+        setOutPoint();
+      }
+    };
+    window.addEventListener('keydown', handleMarkerShortcut);
+    return () => window.removeEventListener('keydown', handleMarkerShortcut);
+  }, [currentTime, markIn, media?.url]);
+
   const trackStyle = {
-    '--timeline-playhead-left': `calc(98px + ${progress * 100}% - ${progress * 106}px)`,
+    '--timeline-playhead-left': timelinePoint(progress),
   } as CSSProperties;
   const orientation = media?.orientation ?? 'horizontal';
 
@@ -376,6 +491,7 @@ function EditorWorkspace({
               style={{ aspectRatio: `${media.width} / ${media.height}` }}
               onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
               onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+              onSeeking={(event) => setCurrentTime(event.currentTarget.currentTime)}
               onClick={() => void togglePlayback()}
               onPlay={() => setPlaying(true)}
               onPause={() => setPlaying(false)}
@@ -402,77 +518,121 @@ function EditorWorkspace({
           </div>
           <div className="timeline-time">{formatTime(currentTime)} <span>/ {formatTime(effectiveDuration)}</span></div>
         </div>
-        <div
-          className="timeline-scroll"
-          style={trackStyle}
-          onPointerDown={seekFromTimeline}
-          onPointerMove={seekFromTimeline}
-        >
-          <div className="timeline-ruler">
-            <span>00:00</span><span>{formatTime(effectiveDuration * 0.25)}</span><span>{formatTime(effectiveDuration * 0.5)}</span><span>{formatTime(effectiveDuration * 0.75)}</span><span>{formatTime(effectiveDuration)}</span>
-          </div>
-          {phase === 2 && style.headline !== 'none' && (
-            <TimelineTrack icon="sparkles" label="Headline" tone="orange">
-              <div className="timeline-chip headline-chip" style={{ width: '31%' }}>Headline · {style.headline}</div>
+        <div className="timeline-scroll">
+          <div
+            className="timeline-content"
+            style={trackStyle}
+            onPointerDown={seekFromTimeline}
+            onPointerMove={seekFromTimeline}
+          >
+            <div className="timeline-ruler">
+              <span>00:00</span><span>{formatTime(effectiveDuration * 0.25)}</span><span>{formatTime(effectiveDuration * 0.5)}</span><span>{formatTime(effectiveDuration * 0.75)}</span><span>{formatTime(effectiveDuration)}</span>
+            </div>
+            {phase === 2 && style.headline !== 'none' && (
+              <TimelineTrack icon="sparkles" label="Headline" tone="orange">
+                <div className="timeline-chip headline-chip" style={{ width: '31%' }}>Headline · {style.headline}</div>
+              </TimelineTrack>
+            )}
+            {phase === 2 && style.captions !== 'none' && (
+              <TimelineTrack icon="captions" label="Legendas" tone="teal">
+                <div className="timeline-chip captions-chip" style={{ left: '2%', width: '96%' }}>Legendas · {style.captions}</div>
+              </TimelineTrack>
+            )}
+            {phase === 2 && style.edit !== 'limpa' && (
+              <TimelineTrack icon="image" label="Assets" tone="orange">
+                <div className="timeline-chip asset-chip" style={{ left: '8%', width: '22%' }}>Insert 01</div>
+                <div className="timeline-chip asset-chip" style={{ left: '48%', width: '28%' }}>Insert 02</div>
+              </TimelineTrack>
+            )}
+            <TimelineTrack icon="video" label="Vídeo" tone="orange">
+              {(timelineSegments.length > 0
+                ? timelineSegments
+                : [{ label: media?.name ?? 'Vídeo', start: 0, duration: effectiveDuration || 1 }]
+              ).map((segment, index) => (
+                <div
+                  className={`timeline-clip video-clip ${index % 2 ? 'alt' : ''}`}
+                  key={`${segment.start}:${segment.label}`}
+                  style={{
+                    left: `${effectiveDuration > 0 ? (segment.start / effectiveDuration) * 100 : 0}%`,
+                    width: `${effectiveDuration > 0 ? (segment.duration / effectiveDuration) * 100 : 100}%`,
+                  }}
+                  title={`${segment.label} · ${formatTime(segment.duration)}`}
+                >
+                  <span>{segment.label}</span>
+                </div>
+              ))}
             </TimelineTrack>
-          )}
-          {phase === 2 && style.captions !== 'none' && (
-            <TimelineTrack icon="captions" label="Legendas" tone="teal">
-              <div className="timeline-chip captions-chip" style={{ left: '2%', width: '96%' }}>Legendas · {style.captions}</div>
+            <TimelineTrack icon="waveform" label="Voz" tone="teal">
+              <div className="timeline-clip audio-clip"><span>Voz tratada</span></div>
             </TimelineTrack>
-          )}
-          {phase === 2 && style.edit !== 'limpa' && (
-            <TimelineTrack icon="image" label="Assets" tone="orange">
-              <div className="timeline-chip asset-chip" style={{ left: '8%', width: '22%' }}>Insert 01</div>
-              <div className="timeline-chip asset-chip" style={{ left: '48%', width: '28%' }}>Insert 02</div>
-            </TimelineTrack>
-          )}
-          <TimelineTrack icon="video" label="Vídeo" tone="orange">
-            {(timelineSegments.length > 0
-              ? timelineSegments
-              : [{ label: media?.name ?? 'Vídeo', start: 0, duration: effectiveDuration || 1 }]
-            ).map((segment, index) => (
+            {phase === 2 && style.elements.musicAI && (
+              <TimelineTrack icon="music" label="Trilha" tone="olive">
+                <div className="timeline-chip music-chip" style={{ left: '0%', width: '100%' }}>Trilha sonora · −15 dB</div>
+              </TimelineTrack>
+            )}
+            {corrections.map((correction, index) => (
               <div
-                className={`timeline-clip video-clip ${index % 2 ? 'alt' : ''}`}
-                key={`${segment.start}:${segment.label}`}
+                className="timeline-correction-range"
+                key={correction.id}
                 style={{
-                  left: `${effectiveDuration > 0 ? (segment.start / effectiveDuration) * 100 : 0}%`,
-                  width: `${effectiveDuration > 0 ? (segment.duration / effectiveDuration) * 100 : 100}%`,
-                }}
-                title={`${segment.label} · ${formatTime(segment.duration)}`}
+                  '--correction-left': timelinePoint(effectiveDuration > 0 ? correction.start / effectiveDuration : 0),
+                  '--correction-width': timelineSpan(effectiveDuration > 0 ? (correction.end - correction.start) / effectiveDuration : 0),
+                } as CSSProperties}
+                title={`${formatTime(correction.start)}–${formatTime(correction.end)} · ${correction.note}`}
               >
-                <span>{segment.label}</span>
+                <span>{index + 1}</span>
               </div>
             ))}
-          </TimelineTrack>
-          <TimelineTrack icon="waveform" label="Voz" tone="teal">
-            <div className="timeline-clip audio-clip"><span>Voz tratada</span></div>
-          </TimelineTrack>
-          {phase === 2 && style.elements.musicAI && (
-            <TimelineTrack icon="music" label="Trilha" tone="olive">
-              <div className="timeline-chip music-chip" style={{ left: '0%', width: '100%' }}>Trilha sonora · −15 dB</div>
-            </TimelineTrack>
-          )}
-          <div className="timeline-playhead" />
+            {markIn !== null && (
+              <div
+                className="timeline-in-marker"
+                style={{ '--marker-left': timelinePoint(effectiveDuration > 0 ? markIn / effectiveDuration : 0) } as CSSProperties}
+              >
+                <span>IN</span>
+              </div>
+            )}
+            <div className="timeline-playhead" />
+          </div>
         </div>
         <div className="timeline-transport" aria-label="Controles de reprodução">
-          <button type="button" className="transport-button" onClick={() => jumpBy(-5)} disabled={!media} title="Voltar 5 segundos">
-            <Icon name="skipBack" />
-            <span>5s</span>
-          </button>
-          <button type="button" className="transport-button transport-play" onClick={() => void togglePlayback()} disabled={!media} title={playing ? 'Pausar' : 'Reproduzir'}>
-            <Icon name={playing ? 'pause' : 'play'} />
-          </button>
-          <button type="button" className="transport-button" onClick={() => jumpBy(5)} disabled={!media} title="Avançar 5 segundos">
-            <Icon name="skipForward" />
-            <span>5s</span>
-          </button>
-          <span className="transport-time">{formatTime(currentTime)} <i>/</i> {formatTime(effectiveDuration)}</span>
-          <span className="transport-spacer" />
-          <button type="button" className="transport-button" onClick={toggleMute} disabled={!media} title={muted ? 'Ativar áudio' : 'Silenciar'}>
-            <Icon name={muted ? 'volumeOff' : 'volume'} />
-          </button>
+          <div className="marker-controls">
+            <button type="button" className={`marker-button ${markIn !== null ? 'active' : ''}`} onClick={setInPoint} disabled={!media} title="Marcar início da correção (I ou M)">IN</button>
+            <button type="button" className="marker-button" onClick={setOutPoint} disabled={!media || markIn === null || currentTime <= markIn} title="Marcar fim da correção (O ou M)">OUT</button>
+            {corrections.length > 0 && <span className="correction-count">{corrections.length} {corrections.length === 1 ? 'marcação' : 'marcações'}</span>}
+          </div>
+          <div className="transport-center">
+            <button type="button" className="transport-button" onClick={() => jumpBy(-5)} disabled={!media} title="Voltar 5 segundos">
+              <Icon name="skipBack" /><span>5s</span>
+            </button>
+            <button type="button" className="transport-button transport-play" onClick={() => void togglePlayback()} disabled={!media} title={playing ? 'Pausar' : 'Reproduzir'}>
+              <Icon name={playing ? 'pause' : 'play'} />
+            </button>
+            <button type="button" className="transport-button" onClick={() => jumpBy(5)} disabled={!media} title="Avançar 5 segundos">
+              <Icon name="skipForward" /><span>5s</span>
+            </button>
+          </div>
+          <div className="transport-right">
+            <button type="button" className="transport-button" onClick={toggleMute} disabled={!media} title={muted ? 'Ativar áudio' : 'Silenciar'}>
+              <Icon name={muted ? 'volumeOff' : 'volume'} />
+            </button>
+            {corrections.length > 0 && (
+              <button type="button" className="apply-corrections" onClick={() => void applyCorrections()} disabled={applyingCorrections}>
+                {applyingCorrections ? 'Aplicando...' : 'Aplicar'}
+              </button>
+            )}
+          </div>
         </div>
+        {draftRange && (
+          <form className="correction-note-popover" onSubmit={saveDraftCorrection}>
+            <span className="eyebrow">Correção na timeline</span>
+            <strong>{formatTime(draftRange.start)} → {formatTime(draftRange.end)}</strong>
+            <textarea autoFocus rows={3} value={draftNote} onChange={(event) => setDraftNote(event.target.value)} placeholder="Descreva o que precisa ser corrigido neste trecho..." />
+            <div>
+              <button type="button" className="btn ghost small" onClick={() => { setDraftRange(null); setDraftNote(''); }}>Cancelar</button>
+              <button type="submit" className="btn primary small" disabled={!draftNote.trim()}>Salvar marcação</button>
+            </div>
+          </form>
+        )}
       </section>
     </div>
   );
@@ -578,7 +738,7 @@ function StyleWorkspace({
       <div className="style-footer">
         <div><strong>Briefing visual pronto</strong><span>O Edvid receberá também tudo o que ficou desmarcado.</span></div>
         <button type="button" className="btn primary apply-style" onClick={onApply} disabled={!canApply || applying}>
-          <Icon name="sparkles" /> {applying ? 'Enviando...' : 'Aplicar escolhas'}
+          <Icon name="sparkles" /> {applying ? 'Enviando...' : 'Salvar e aplicar'}
         </button>
       </div>
     </div>
@@ -602,6 +762,9 @@ export function App() {
   const [workTab, setWorkTab] = useState<WorkTab>('edit');
   const [style, setStyle] = useState<StyleSetup>(defaultStyleSetup);
   const [styleApplied, setStyleApplied] = useState(false);
+  const [corrections, setCorrections] = useState<CorrectionRange[]>([]);
+  const [handledCutApprovalId, setHandledCutApprovalId] = useState<string | null>(null);
+  const [approvingCut, setApprovingCut] = useState(false);
   const [followingOutput, setFollowingOutput] = useState(true);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const activeProjectDirectoryRef = useRef<string | null>(null);
@@ -611,6 +774,14 @@ export function App() {
   const canChat = Boolean(projectDirectory) && account.status === 'signed-in';
   const readyRuntimes = runtimes.filter((runtime) => runtime.available).length;
   const accountLabel = account.account?.email ?? (account.status === 'waiting-for-browser' ? 'Conclua no navegador' : 'ChatGPT desconectado');
+  const pendingCutApprovalId = useMemo(
+    () => [...messages].reverse().find((message) => (
+      message.role === 'assistant' &&
+      message.id !== handledCutApprovalId &&
+      asksForCleanCutApproval(message.text)
+    ))?.id ?? null,
+    [handledCutApprovalId, messages],
+  );
 
   const missingRuntimeNames = useMemo(
     () => runtimes.filter((runtime) => !runtime.available).map((runtime) => labels[runtime.name]),
@@ -633,6 +804,8 @@ export function App() {
     setApprovals([]);
     setStyle(readStoredStyle(next.project.directory, next.style ?? defaultStyleSetup));
     setStyleApplied(next.media?.kind === 'final' || Boolean(next.style));
+    setCorrections([]);
+    setHandledCutApprovalId(null);
     setWorkTab('edit');
     setFollowingOutput(true);
   }
@@ -760,12 +933,12 @@ export function App() {
     }
   }
 
-  async function dispatchMessage(text: string) {
+  async function dispatchMessage(text: string, displayText = text) {
     const trimmed = text.trim();
     if (!trimmed || !projectDirectory || account.status !== 'signed-in' || sending) return false;
     setSending(true);
     setFollowingOutput(true);
-    setMessages((current) => [...current, { id: `user:${Date.now()}`, role: 'user', text: trimmed }]);
+    setMessages((current) => [...current, { id: `user:${Date.now()}`, role: 'user', text: displayText.trim() || trimmed }]);
     try {
       const result = await window.edvidDesktop.sendCodexMessage({ projectDirectory, text: trimmed });
       setActiveTurn(result);
@@ -803,6 +976,40 @@ export function App() {
       'Use essas seleções como briefing definitivo e não peça para eu escolher os estilos novamente no chat.',
     ].join('\n');
     if (await dispatchMessage(prompt)) setWorkTab('edit');
+  }
+
+  async function approveCleanCut(messageId: string) {
+    if (approvingCut || sending) return;
+    setApprovingCut(true);
+    const prompt = [
+      'Aprovado. Considere o corte limpo oficialmente aprovado e preserve este gate.',
+      'Não faça perguntas de estilo no chat: o usuário escolherá tipo de edição, headline, legendas e elementos visualmente na aba Estilos.',
+      'Aguarde o briefing estruturado que será enviado automaticamente ao clicar em “Salvar e aplicar”.',
+    ].join(' ');
+    const sent = await dispatchMessage(prompt, 'Aprovado');
+    if (sent) {
+      setHandledCutApprovalId(messageId);
+      setWorkTab('styles');
+      setMessages((current) => [...current, {
+        id: `style-gate:${Date.now()}`,
+        role: 'assistant',
+        text: 'Corte aprovado. Escolha agora os estilos visuais na aba Estilos. Ao clicar em “Salvar e aplicar”, suas escolhas serão salvas no projeto e a Fase 2 começará automaticamente.',
+      }]);
+    }
+    setApprovingCut(false);
+  }
+
+  async function applyTimelineCorrections(items: CorrectionRange[]) {
+    const prompt = [
+      `Aplique as ${items.length} correções marcadas na timeline do preview atual.`,
+      'Os tempos abaixo são In/Out do vídeo renderizado exibido no preview:',
+      ...items.map((item, index) => `${index + 1}. IN ${item.start.toFixed(3)}s | OUT ${item.end.toFixed(3)}s | ${item.note}`),
+      'Aplique todas as correções em uma única passagem, valide o novo resultado e atualize o preview. Não peça para eu reenviar estas marcações.',
+    ].join('\n');
+    return dispatchMessage(
+      prompt,
+      `Aplicar ${items.length} ${items.length === 1 ? 'correção marcada' : 'correções marcadas'} na timeline`,
+    );
   }
 
   async function interruptTurn() {
@@ -948,12 +1155,24 @@ export function App() {
                   </div>
                 </div>
               )}
-              {messages.map((message) => (
-                <article className={`chat-message ${message.role}`} key={message.id}>
-                  <span className="chat-role">{message.role === 'user' ? 'Você' : message.role === 'assistant' ? 'Edvid' : 'Sistema'}</span>
-                  <p>{message.text || '...'}</p>
-                </article>
-              ))}
+              {messages.map((message) => {
+                const visibleText = message.role === 'assistant' ? cleanAssistantText(message.text) : message.text;
+                const showsCutApproval = message.id === pendingCutApprovalId;
+                return (
+                  <article className={`chat-message ${message.role}`} key={message.id}>
+                    <span className="chat-role">{message.role === 'user' ? 'Você' : message.role === 'assistant' ? 'Edvid' : 'Sistema'}</span>
+                    <p>{visibleText || '...'}</p>
+                    {showsCutApproval && (
+                      <div className="clean-cut-gate">
+                        <div><strong>Corte limpo pronto</strong><span>Assista no preview e confirme para escolher os estilos.</span></div>
+                        <button type="button" className="btn primary" onClick={() => void approveCleanCut(message.id)} disabled={sending || approvingCut}>
+                          <Icon name="check" /> {approvingCut ? 'Aprovando...' : 'Aprovado'}
+                        </button>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
               {approvals.map((approval) => (
                 <div className="approval-card" key={approval.id}>
                   <span className="approval-kicker">Aprovação necessária</span>
@@ -982,7 +1201,18 @@ export function App() {
               <button type="button" className={workTab === 'styles' ? 'active' : ''} onClick={() => setWorkTab('styles')}><Icon name="sparkles" /><span><strong>Estilos</strong><small>Visual da Fase 2</small></span></button>
             </nav>
             <div className="work-content">
-              {workTab === 'edit' ? <EditorWorkspace workspace={workspace} style={style} styleApplied={styleApplied} onRefresh={refreshWorkspace} /> : <StyleWorkspace style={style} onChange={setStyle} onApply={applyStyleSelection} canApply={canChat} applying={sending} />}
+              {workTab === 'edit' ? (
+                <EditorWorkspace
+                  workspace={workspace}
+                  style={style}
+                  styleApplied={styleApplied}
+                  onRefresh={refreshWorkspace}
+                  corrections={corrections}
+                  onCorrectionsChange={setCorrections}
+                  onApplyCorrections={applyTimelineCorrections}
+                  applyingCorrections={sending}
+                />
+              ) : <StyleWorkspace style={style} onChange={setStyle} onApply={applyStyleSelection} canApply={canChat} applying={sending} />}
             </div>
           </section>
         </div>

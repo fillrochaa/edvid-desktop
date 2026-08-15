@@ -15,7 +15,15 @@ const qaProject: ProjectSummary = {
 
 const qaWorkspace: ProjectWorkspace = {
   project: qaProject,
-  media: null,
+  media: {
+    url: 'data:video/mp4;base64,',
+    name: 'corte_limpo_qa.mp4',
+    width: 1080,
+    height: 1920,
+    duration: 10.7,
+    orientation: 'vertical',
+    kind: 'clean-cut',
+  },
   timeline: {
     segments: [
       { label: 'HOOK', start: 0, duration: 3.2 },
@@ -49,6 +57,19 @@ const longQaResponse = Array.from(
   (_, index) => `Trecho ${index + 1}: esta resposta longa valida a rolagem independente do chat sem mover o preview ou a timeline.`,
 ).join('\n\n');
 
+const cleanCutQaResponse = [
+  'O corte limpo está pronto para aprovação:',
+  '',
+  '- Duração: 10,70 s — original com 16,13 s',
+  '- Removidos: silêncios e intervalos sem fala',
+  '- Preservados: respirações naturais e finais de palavras',
+  '- Arquivo validado, sem erros de áudio ou vídeo',
+  '',
+  '[Assistir ao corte limpo](</Users/qa/edicao/corte_limpo/corte_limpo_v1.mp4>)',
+  '',
+  'Aprova este corte? Depois da aprovação, posso avançar para os estilos.',
+].join('\n');
+
 export function createQaBrowserApi(): EdvidDesktopApi {
   return {
     getDesktopInfo: async () => ({
@@ -81,17 +102,20 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     }),
     cancelChatGPTLogin: async () => ({ status: 'signed-out', account: null, requiresOpenaiAuth: true }),
     logoutCodex: async () => ({ status: 'signed-out', account: null, requiresOpenaiAuth: true }),
-    sendCodexMessage: async () => {
+    sendCodexMessage: async ({ text }) => {
       turnNumber += 1;
       const threadId = 'qa-thread';
       const turnId = `qa-turn-${turnNumber}`;
+      const response = /inicie a edição|corte limpo/iu.test(text) && !/oficialmente aprovado/iu.test(text)
+        ? cleanCutQaResponse
+        : longQaResponse;
       window.setTimeout(() => emit({ type: 'turn-state', threadId, turnId, status: 'started' }), 20);
-      const chunks = longQaResponse.match(/.{1,120}/gsu) ?? [longQaResponse];
+      const chunks = response.match(/.{1,120}/gsu) ?? [response];
       chunks.forEach((delta, index) => {
         window.setTimeout(() => emit({ type: 'assistant-delta', threadId, turnId, itemId: `qa-item-${turnNumber}`, delta }), 35 + index * 8);
       });
       window.setTimeout(() => {
-        emit({ type: 'assistant-final', threadId, turnId, itemId: `qa-item-${turnNumber}`, text: longQaResponse });
+        emit({ type: 'assistant-final', threadId, turnId, itemId: `qa-item-${turnNumber}`, text: response });
         emit({ type: 'turn-state', threadId, turnId, status: 'completed' });
       }, 60 + chunks.length * 8);
       return { threadId, turnId };
