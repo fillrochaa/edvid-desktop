@@ -26,6 +26,54 @@ export type DesktopInfo = {
   embeddedNodeVersion: string;
 };
 
+export type ProjectSummary = {
+  directory: string;
+  name: string;
+  lastOpenedAt: string;
+};
+
+export type ProjectMedia = {
+  url: string;
+  name: string;
+  width: number;
+  height: number;
+  duration: number;
+  orientation: 'vertical' | 'horizontal';
+  kind: 'source' | 'clean-cut' | 'final';
+};
+
+export type ProjectTimelineSegment = {
+  label: string;
+  start: number;
+  duration: number;
+};
+
+export type ProjectTimeline = {
+  segments: ProjectTimelineSegment[];
+};
+
+export type ProjectStyleState = {
+  edit: 'limpa' | 'split' | 'split2';
+  headline: 'outline' | 'card' | 'realce' | 'misto' | 'none';
+  captions: 'karaoke' | 'stacked' | 'scatter' | 'simples' | 'serifada' | 'classica' | 'none';
+  accent: string;
+  elements: {
+    tracking: boolean;
+    zoomAuto: boolean;
+    zoomCuts: boolean;
+    flashCut: boolean;
+    musicAI: boolean;
+  };
+  note: string;
+};
+
+export type ProjectWorkspace = {
+  project: ProjectSummary;
+  media: ProjectMedia | null;
+  timeline: ProjectTimeline | null;
+  style: ProjectStyleState | null;
+};
+
 export type CodexAccount = {
   type: 'chatgpt' | 'apiKey' | 'amazonBedrock';
   email: string | null;
@@ -91,7 +139,10 @@ export type CodexApprovalDecision = 'accept' | 'acceptForSession' | 'decline';
 export type EdvidDesktopApi = {
   getDesktopInfo: () => Promise<DesktopInfo>;
   checkRuntimes: () => Promise<RuntimeCheck[]>;
-  selectProjectDirectory: () => Promise<string | null>;
+  listRecentProjects: () => Promise<ProjectSummary[]>;
+  selectProjectDirectory: () => Promise<ProjectWorkspace | null>;
+  openRecentProject: (directory: string) => Promise<ProjectWorkspace>;
+  refreshProjectWorkspace: (directory: string) => Promise<ProjectWorkspace>;
   getCodexAccount: () => Promise<CodexAccountState>;
   loginWithChatGPT: () => Promise<CodexAccountState>;
   cancelChatGPTLogin: () => Promise<CodexAccountState>;

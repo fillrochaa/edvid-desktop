@@ -13,9 +13,21 @@ npm run stage:codex
 npm start
 ```
 
-O estagio atual (`0.2.2`) inclui selecao da pasta do projeto, login gerenciado do
-ChatGPT, conversa em streaming, interrupcao do turno e aprovacoes explicitas de
-comandos e alteracoes de arquivo.
+O estagio atual (`0.3.0`) inclui projetos recentes, login gerenciado do ChatGPT,
+conversa em streaming, interrupcao do turno, aprovacoes explicitas e um workspace
+integrado de preview, timeline e estilos.
+
+## Interface de edicao
+
+- A barra de projetos nasce recolhida, expande no hover e pode ser fixada.
+- O chat tem scroll independente, acompanha o streaming enquanto o usuario esta
+  no fim e oferece retorno ao conteudo mais recente depois de uma rolagem manual.
+- A timeline e unica: Fase 1 mostra o corte limpo e a Fase 2 acrescenta headline,
+  legendas, inserts e trilha como novas tracks.
+- Videos verticais colocam o preview a direita da timeline; horizontais mantem o
+  preview acima dela.
+- A aba Estilos usa o catalogo oficial do Edvid e envia as escolhas ao agente como
+  um briefing estruturado, inclusive os elementos deixados de fora.
 
 ## Integracao com o ChatGPT
 

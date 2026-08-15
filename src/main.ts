@@ -1,17 +1,37 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron';
 import started from 'electron-squirrel-startup';
 import { spawn } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { CodexAppServer } from './codex-app-server';
 import { resolveRuntime, type RuntimeResolution } from './runtime';
 import type {
   CodexApprovalDecision,
   CodexEvent,
   CodexSendMessageInput,
+  ProjectMedia,
+  ProjectSummary,
+  ProjectStyleState,
+  ProjectTimeline,
+  ProjectWorkspace,
   RuntimeCheck,
   RuntimeName,
 } from './shared';
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'edvid-media',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+]);
 
 if (started) {
   app.quit();
@@ -40,6 +60,355 @@ const runtimeCommands: Array<{
 
 let codexAppServer: CodexAppServer | null = null;
 const selectedProjectDirectories = new Set<string>();
+const authorizedMedia = new Map<string, string>();
+const videoExtensions = new Set(['.mp4', '.m4v', '.mov', '.webm', '.mkv']);
+const ignoredMediaDirectories = new Set([
+  '.git',
+  '.runtime-cache',
+  '.venv',
+  'node_modules',
+  'out',
+]);
+
+type MediaCandidate = {
+  absolutePath: string;
+  relativePath: string;
+  modifiedAt: number;
+  score: number;
+};
+
+type FfprobeOutput = {
+  format?: { duration?: string };
+  streams?: Array<{
+    width?: number;
+    height?: number;
+    tags?: { rotate?: string };
+    side_data_list?: Array<{ rotation?: number }>;
+  }>;
+};
+
+function projectsFile(): string {
+  return path.join(app.getPath('userData'), 'projects.json');
+}
+
+function qaProject(): ProjectSummary | null {
+  const directory = process.env.EDVID_QA_PROJECT_PATH?.trim();
+  if (!directory) return null;
+  const resolvedDirectory = path.resolve(directory);
+  return {
+    directory: resolvedDirectory,
+    name: path.basename(resolvedDirectory),
+    lastOpenedAt: new Date().toISOString(),
+  };
+}
+
+async function readRecentProjects(): Promise<ProjectSummary[]> {
+  try {
+    const parsed = JSON.parse(await readFile(projectsFile(), 'utf8')) as {
+      projects?: unknown;
+    };
+    if (!Array.isArray(parsed.projects)) return [];
+    return parsed.projects
+      .filter((project): project is ProjectSummary => {
+        if (!project || typeof project !== 'object') return false;
+        const item = project as Partial<ProjectSummary>;
+        return (
+          typeof item.directory === 'string' &&
+          typeof item.name === 'string' &&
+          typeof item.lastOpenedAt === 'string'
+        );
+      })
+      .slice(0, 16);
+  } catch {
+    return [];
+  }
+}
+
+async function rememberProject(directory: string): Promise<ProjectSummary> {
+  const resolvedDirectory = path.resolve(directory);
+  const project: ProjectSummary = {
+    directory: resolvedDirectory,
+    name: path.basename(resolvedDirectory),
+    lastOpenedAt: new Date().toISOString(),
+  };
+  const current = await readRecentProjects();
+  const projects = [
+    project,
+    ...current.filter((item) => path.resolve(item.directory) !== resolvedDirectory),
+  ].slice(0, 16);
+  await mkdir(path.dirname(projectsFile()), { recursive: true });
+  await writeFile(projectsFile(), `${JSON.stringify({ version: 1, projects }, null, 2)}\n`);
+  selectedProjectDirectories.add(resolvedDirectory);
+  return project;
+}
+
+async function isDirectory(directory: string): Promise<boolean> {
+  try {
+    return (await stat(directory)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function scoreMedia(relativePath: string, modifiedAt: number): number {
+  const normalized = relativePath.toLocaleLowerCase('pt-BR').replaceAll('\\', '/');
+  const base = path.basename(normalized, path.extname(normalized));
+  let score = 0;
+  if (/^(final|resultado|render)/u.test(base)) score += 500;
+  if (/corte[_ -]?limpo|clean[_ -]?cut|^cut(?:[_ -]|$)/u.test(base)) score += 400;
+  if (normalized.includes('/edicao/') || normalized.includes('/edit/')) score += 160;
+  if (normalized.includes('/assets/')) score -= 160;
+  if (!normalized.includes('/')) score += 80;
+  if (['.mp4', '.m4v', '.webm'].includes(path.extname(normalized))) score += 40;
+  return score + modifiedAt / 1e12;
+}
+
+async function collectMedia(
+  root: string,
+  current: string,
+  depth: number,
+  candidates: MediaCandidate[],
+): Promise<void> {
+  if (depth > 5 || candidates.length >= 800) return;
+  let entries;
+  try {
+    entries = await readdir(current, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (candidates.length >= 800 || entry.isSymbolicLink()) return;
+      const absolutePath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (!ignoredMediaDirectories.has(entry.name) && !entry.name.startsWith('.')) {
+          await collectMedia(root, absolutePath, depth + 1, candidates);
+        }
+        return;
+      }
+      if (!entry.isFile() || !videoExtensions.has(path.extname(entry.name).toLowerCase())) {
+        return;
+      }
+      const fileStat = await stat(absolutePath);
+      const relativePath = path.relative(root, absolutePath);
+      candidates.push({
+        absolutePath,
+        relativePath,
+        modifiedAt: fileStat.mtimeMs,
+        score: scoreMedia(relativePath, fileStat.mtimeMs),
+      });
+    }),
+  );
+}
+
+function inspectVideo(executable: string, argsPrefix: string[], filePath: string): Promise<FfprobeOutput> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      executable,
+      [
+        ...argsPrefix,
+        '-v',
+        'error',
+        '-select_streams',
+        'v:0',
+        '-show_entries',
+        'format=duration:stream=width,height:stream_tags=rotate:stream_side_data=rotation',
+        '-of',
+        'json',
+        filePath,
+      ],
+      { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('Tempo esgotado ao analisar o video do projeto.'));
+    }, 15_000);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || 'O FFprobe nao conseguiu analisar o video.'));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout) as FfprobeOutput);
+      } catch {
+        reject(new Error('O FFprobe retornou dados invalidos para o video.'));
+      }
+    });
+  });
+}
+
+async function inspectProjectMedia(directory: string): Promise<ProjectMedia | null> {
+  const candidates: MediaCandidate[] = [];
+  await collectMedia(directory, directory, 0, candidates);
+  const candidate = candidates.sort((a, b) => b.score - a.score)[0];
+  if (!candidate) return null;
+
+  const ffprobe = resolveRuntime('ffprobe', {
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+  });
+  if (!ffprobe.command) return null;
+  const probe = await inspectVideo(ffprobe.command, ffprobe.argsPrefix, candidate.absolutePath);
+  const stream = probe.streams?.[0];
+  if (!stream?.width || !stream.height) return null;
+  const rotation = Math.abs(
+    Number(stream.side_data_list?.find((item) => item.rotation !== undefined)?.rotation)
+      || Number(stream.tags?.rotate)
+      || 0,
+  );
+  const rotated = rotation % 180 === 90;
+  const width = rotated ? stream.height : stream.width;
+  const height = rotated ? stream.width : stream.height;
+  const normalized = candidate.relativePath.toLocaleLowerCase('pt-BR');
+  const base = path.basename(normalized, path.extname(normalized));
+  const kind: ProjectMedia['kind'] = /^(final|resultado|render)/u.test(base)
+    ? 'final'
+    : /corte[_ -]?limpo|clean[_ -]?cut|^cut(?:[_ -]|$)/u.test(base)
+      ? 'clean-cut'
+      : 'source';
+  const token = randomUUID();
+  authorizedMedia.set(token, candidate.absolutePath);
+  return {
+    url: `edvid-media://local/${token}`,
+    name: path.basename(candidate.absolutePath),
+    width,
+    height,
+    duration: Number(probe.format?.duration) || 0,
+    orientation: height > width ? 'vertical' : 'horizontal',
+    kind,
+  };
+}
+
+async function inspectProjectTimeline(directory: string): Promise<ProjectTimeline | null> {
+  const candidatePaths = [
+    path.join(directory, 'edit', 'edl.json'),
+    path.join(directory, 'edicao', 'edl.json'),
+    path.join(directory, 'edl.json'),
+  ];
+  for (const candidatePath of candidatePaths) {
+    try {
+      const edl = JSON.parse(await readFile(candidatePath, 'utf8')) as {
+        ranges?: Array<{ beat?: string; start?: number; end?: number }>;
+        jcut_timeline?: Array<{
+          beat?: string;
+          video_start_in_output?: number;
+          video_duration?: number;
+        }>;
+      };
+      const jcut = Array.isArray(edl.jcut_timeline) ? edl.jcut_timeline : [];
+      if (jcut.length > 0) {
+        return {
+          segments: jcut
+            .map((segment, index) => ({
+              label: segment.beat?.trim() || `Take ${String(index + 1).padStart(2, '0')}`,
+              start: Number(segment.video_start_in_output),
+              duration: Number(segment.video_duration),
+            }))
+            .filter((segment) => Number.isFinite(segment.start) && segment.duration > 0),
+        };
+      }
+      const ranges = Array.isArray(edl.ranges) ? edl.ranges : [];
+      let outputStart = 0;
+      const segments = ranges.flatMap((range, index) => {
+        const duration = Number(range.end) - Number(range.start);
+        if (!Number.isFinite(duration) || duration <= 0) return [];
+        const segment = {
+          label: range.beat?.trim() || `Take ${String(index + 1).padStart(2, '0')}`,
+          start: outputStart,
+          duration,
+        };
+        outputStart += duration;
+        return [segment];
+      });
+      return segments.length > 0 ? { segments } : null;
+    } catch {
+      // Tenta a proxima localizacao conhecida do EDL.
+    }
+  }
+  return null;
+}
+
+async function inspectProjectStyle(directory: string): Promise<ProjectStyleState | null> {
+  const candidatePaths = [
+    path.join(directory, 'edit', 'state.json'),
+    path.join(directory, 'edicao', 'state.json'),
+    path.join(directory, 'state.json'),
+  ];
+  const validEdits = new Set(['limpa', 'split', 'split2']);
+  const validHeadlines = new Set(['outline', 'card', 'realce', 'misto', 'none']);
+  const validCaptions = new Set([
+    'karaoke', 'stacked', 'scatter', 'simples', 'serifada', 'classica', 'none',
+  ]);
+  for (const candidatePath of candidatePaths) {
+    try {
+      const state = JSON.parse(await readFile(candidatePath, 'utf8')) as {
+        style?: Partial<ProjectStyleState>;
+      };
+      const style = state.style;
+      if (
+        !style ||
+        !validEdits.has(String(style.edit)) ||
+        !validHeadlines.has(String(style.headline)) ||
+        !validCaptions.has(String(style.captions))
+      ) {
+        continue;
+      }
+      const elements = style.elements ?? {} as ProjectStyleState['elements'];
+      return {
+        edit: style.edit as ProjectStyleState['edit'],
+        headline: style.headline as ProjectStyleState['headline'],
+        captions: style.captions as ProjectStyleState['captions'],
+        accent: /^#[0-9a-f]{6}$/iu.test(style.accent ?? '') ? style.accent as string : '#ff5200',
+        elements: {
+          tracking: Boolean(elements.tracking),
+          zoomAuto: Boolean(elements.zoomAuto),
+          zoomCuts: Boolean(elements.zoomCuts),
+          flashCut: Boolean(elements.flashCut),
+          musicAI: Boolean(elements.musicAI),
+        },
+        note: typeof style.note === 'string' ? style.note : '',
+      };
+    } catch {
+      // Tenta a proxima localizacao conhecida do estado do projeto.
+    }
+  }
+  return null;
+}
+
+async function openProject(directory: string, remember = true): Promise<ProjectWorkspace> {
+  const resolvedDirectory = path.resolve(directory);
+  if (!(await isDirectory(resolvedDirectory))) {
+    throw new Error('A pasta deste projeto nao esta mais disponivel.');
+  }
+  const project = remember
+    ? await rememberProject(resolvedDirectory)
+    : {
+        directory: resolvedDirectory,
+        name: path.basename(resolvedDirectory),
+        lastOpenedAt: new Date().toISOString(),
+      };
+  selectedProjectDirectories.add(resolvedDirectory);
+  const [media, timeline, style] = await Promise.all([
+    inspectProjectMedia(resolvedDirectory),
+    inspectProjectTimeline(resolvedDirectory),
+    inspectProjectStyle(resolvedDirectory),
+  ]);
+  return { project, media, timeline, style };
+}
 
 function broadcastCodexEvent(event: CodexEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -178,6 +547,14 @@ function registerIpcHandlers(): void {
     })),
   );
 
+  ipcMain.handle('project:list', async () => {
+    const projects = await readRecentProjects();
+    const qa = qaProject();
+    return qa
+      ? [qa, ...projects.filter((project) => project.directory !== qa.directory)]
+      : projects;
+  });
+
   ipcMain.handle('project:select-directory', async () => {
     const result = await dialog.showOpenDialog({
       title: 'Escolha a pasta do projeto de video',
@@ -186,10 +563,30 @@ function registerIpcHandlers(): void {
     });
 
     if (result.canceled || !result.filePaths[0]) return null;
-    const selectedDirectory = path.resolve(result.filePaths[0]);
-    selectedProjectDirectories.add(selectedDirectory);
-    return selectedDirectory;
+    return openProject(result.filePaths[0]);
   });
+
+  ipcMain.handle('project:open-recent', async (_event, input: { directory?: string }) => {
+    const requestedDirectory = path.resolve(input.directory?.trim() ?? '');
+    const projects = await readRecentProjects();
+    const qa = qaProject();
+    const isRecent = projects.some(
+      (project) => path.resolve(project.directory) === requestedDirectory,
+    ) || qa?.directory === requestedDirectory;
+    if (!isRecent) throw new Error('Este projeto nao esta na lista recente do Edvid.');
+    return openProject(requestedDirectory, qa?.directory !== requestedDirectory);
+  });
+
+  ipcMain.handle(
+    'project:refresh-workspace',
+    async (_event, input: { directory?: string }) => {
+      const requestedDirectory = path.resolve(input.directory?.trim() ?? '');
+      if (!selectedProjectDirectories.has(requestedDirectory)) {
+        throw new Error('Abra o projeto antes de atualizar a edicao.');
+      }
+      return openProject(requestedDirectory, false);
+    },
+  );
 
   ipcMain.handle('codex:account', () => getCodexAppServer().readAccount());
 
@@ -236,10 +633,10 @@ function registerIpcHandlers(): void {
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    minWidth: 980,
-    minHeight: 680,
+    width: 1400,
+    height: 900,
+    minWidth: 1060,
+    minHeight: 700,
     backgroundColor: '#090b10',
     title: 'Edvid',
     webPreferences: {
@@ -290,6 +687,16 @@ function createWindow(): void {
 registerIpcHandlers();
 
 void app.whenReady().then(() => {
+  void protocol.handle('edvid-media', (request) => {
+    const url = new URL(request.url);
+    const token = url.hostname === 'local' ? url.pathname.slice(1) : '';
+    const mediaPath = authorizedMedia.get(token);
+    if (!mediaPath) return new Response('Midia nao autorizada.', { status: 404 });
+    return net.fetch(pathToFileURL(mediaPath).toString(), {
+      method: request.method,
+      headers: request.headers,
+    });
+  });
   createWindow();
 
   app.on('activate', () => {

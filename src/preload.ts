@@ -4,7 +4,11 @@ import type { CodexEvent, EdvidDesktopApi } from './shared';
 const api: EdvidDesktopApi = {
   getDesktopInfo: () => ipcRenderer.invoke('desktop:get-info'),
   checkRuntimes: () => ipcRenderer.invoke('runtime:check'),
+  listRecentProjects: () => ipcRenderer.invoke('project:list'),
   selectProjectDirectory: () => ipcRenderer.invoke('project:select-directory'),
+  openRecentProject: (directory) => ipcRenderer.invoke('project:open-recent', { directory }),
+  refreshProjectWorkspace: (directory) =>
+    ipcRenderer.invoke('project:refresh-workspace', { directory }),
   getCodexAccount: () => ipcRenderer.invoke('codex:account'),
   loginWithChatGPT: () => ipcRenderer.invoke('codex:login'),
   cancelChatGPTLogin: () => ipcRenderer.invoke('codex:login-cancel'),
