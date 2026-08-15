@@ -30,7 +30,34 @@ const config: ForgeConfig = {
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({ name: 'edvid', setupIcon: path.resolve('src/brand/edvid-icon.ico') }),
-    new MakerDMG({}, ['darwin']),
+    new MakerDMG(
+      {
+        background: path.resolve('src/brand/dmg-background.png'),
+        icon: path.resolve('src/brand/edvid-icon.icns'),
+        iconSize: 104,
+        contents: (options) => [
+          {
+            x: 180,
+            y: 220,
+            type: 'file',
+            path: options.appPath,
+          },
+          {
+            x: 480,
+            y: 220,
+            type: 'link',
+            path: '/Applications',
+          },
+        ],
+        additionalDMGOptions: {
+          window: {
+            position: { x: 160, y: 80 },
+            size: { width: 660, height: 400 },
+          },
+        },
+      },
+      ['darwin'],
+    ),
     new MakerZIP({}, ['darwin']),
   ],
   plugins: [
