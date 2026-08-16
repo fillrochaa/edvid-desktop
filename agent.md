@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-16 (0.7.3 — Fase 2 pelo Remotion, leitura tolerante do EDL)
+Atualizado em: 2026-08-16 (0.7.4 — Fase 2 pelo Remotion, leitura tolerante do EDL)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -253,7 +253,12 @@ Não depender do volume externo em builds futuros.
 - Ao finalizar o corte, o chat mostra somente um resumo do que foi feito.
 - Links Markdown, `file://` e caminhos absolutos locais são removidos da
   visualização.
-- O preview exibe automaticamente a mídia mais recente. A escolha está em
+- O preview exibe automaticamente a mídia mais recente. O protocolo
+  `edvid-media://` serve os arquivos com suporte a Range (206, sufixo,
+  Accept-Ranges) via `resolveByteRange` + `createReadStream`; o
+  `net.fetch(file://)` do Electron ignora Range e por isso a agulha não
+  buscava em arquivos grandes — em mídia pequena o Chromium bufferiza tudo e o
+  defeito fica invisível, inclusive no QA do navegador, que usa data URLs. A escolha está em
   `src/media-selection.ts` (módulo puro, testado): vence o arquivo dentro de
   `edit/` ou `edicao/` com a data mais nova; fontes na raiz, `assets/` e
   nomes de rascunho (`tmp`, `parte`, `sem_estilo`…) ficam de fora. Antes da
@@ -496,7 +501,7 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.7.3**.
+Versão corrente: **0.7.4**.
 
 Artefato local atual:
 
@@ -545,6 +550,9 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.7.4: o protocolo edvid-media passou a servir Range (206/Accept-Ranges).
+  O net.fetch(file://) ignorava o cabeçalho; em arquivos grandes o clique na
+  timeline era ignorado ou reiniciava o vídeo do zero.
 - 0.7.3: o limite do corte na prévia mapeada passou a ser imposto pelo próprio
   <video> (timeupdate). O motor de rAF só roda enquanto o React acha que está
   tocando; quando o elemento voltava a tocar fora desse estado, nada segurava

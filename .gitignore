@@ -14,3 +14,4 @@ resources/runtimes/
 __pycache__/
 *.py[cod]
 python/whisperx/.venv/
+dist/

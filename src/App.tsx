@@ -546,6 +546,10 @@ function EditorWorkspace({
   // O timeupdate vem do próprio elemento, então o limite vale sempre.
   function enforceMappedBoundary(video: HTMLVideoElement): void {
     if (!mappedRef.current || inGapRef.current) return;
+    // Um seek em voo (troca de fonte pendente ou busca num arquivo grande)
+    // ainda reporta o tempo antigo; tratar isso como "passou do fim" fazia a
+    // borda avançar de segmento sozinha no meio de um clique na timeline.
+    if (pendingVideoSeekRef.current || video.seeking) return;
     const currentProgramme = programmeRef.current;
     const index = mappedIndexRef.current;
     const segment = index >= 0 ? currentProgramme[index] : undefined;
@@ -555,8 +559,9 @@ function EditorWorkspace({
     }
     const speed = segment.speed || 1;
     const sourceEnd = segment.sourceIn + (segment.timelineEnd - segment.timelineStart) * speed;
-    // Tolerância maior que a do rAF: o timeupdate chega a cada ~250 ms.
-    if (video.currentTime < sourceEnd - 0.01 && video.currentTime >= segment.sourceIn - 0.5) {
+    // Só age quando o tempo PASSOU do fim do segmento. Antes do início não é
+    // estouro: é um seek aterrissando.
+    if (video.currentTime < sourceEnd - 0.01) {
       return;
     }
     const nextSegment = currentProgramme[index + 1];

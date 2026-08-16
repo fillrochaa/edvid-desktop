@@ -26,7 +26,7 @@ try {
     { stdio: 'inherit' },
   );
 
-  const { mediaKind, mediaTier, pickPreviewMedia } = await import(
+  const { mediaKind, mediaMimeType, mediaTier, pickPreviewMedia, resolveByteRange } = await import(
     pathToFileURL(path.join(outDir, 'media-selection.js')).href
   );
 
@@ -86,7 +86,30 @@ try {
   ]);
   assert.equal(empate.relativePath, 'edicao/fase_2/preview_fase2.mp4');
 
-  console.log('test:media-selection ok — Fase 2 vence o corte limpo, fontes e rascunhos ficam fora.');
+  // --- Ranges do servidor de mídia: sem eles a agulha não busca -------------
+  // O <video> pede "bytes=X-" para posicionar num arquivo grande; responder o
+  // arquivo inteiro com 200 fazia o clique na timeline ser ignorado ou
+  // reiniciar o vídeo do zero.
+  const SIZE = 1000;
+  assert.deepEqual(resolveByteRange(null, SIZE), { kind: 'full' });
+  assert.deepEqual(resolveByteRange('bytes=0-', SIZE), { kind: 'partial', start: 0, end: 999 });
+  assert.deepEqual(resolveByteRange('bytes=500-', SIZE), { kind: 'partial', start: 500, end: 999 });
+  assert.deepEqual(resolveByteRange('bytes=10-19', SIZE), { kind: 'partial', start: 10, end: 19 });
+  // Fim além do arquivo é aparado, como manda o RFC 9110.
+  assert.deepEqual(resolveByteRange('bytes=900-5000', SIZE), { kind: 'partial', start: 900, end: 999 });
+  // Sufixo: os últimos N bytes (o Chromium usa para achar o moov de mp4).
+  assert.deepEqual(resolveByteRange('bytes=-100', SIZE), { kind: 'partial', start: 900, end: 999 });
+  assert.deepEqual(resolveByteRange('bytes=-5000', SIZE), { kind: 'partial', start: 0, end: 999 });
+  // Insatisfazíveis: início após o fim do arquivo, invertido ou malformado.
+  for (const header of ['bytes=1000-', 'bytes=50-10', 'bytes=-', 'bytes=abc-', 'itens=0-1', 'bytes=-0']) {
+    assert.deepEqual(resolveByteRange(header, SIZE), { kind: 'unsatisfiable' }, header);
+  }
+
+  assert.equal(mediaMimeType('.mp4'), 'video/mp4');
+  assert.equal(mediaMimeType('.MOV'), 'video/quicktime');
+  assert.equal(mediaMimeType('.webm'), 'video/webm');
+
+  console.log('test:media-selection ok — Fase 2 vence o corte limpo, fontes e rascunhos ficam fora; ranges de mídia resolvidos por byte.');
 } finally {
   rmSync(outDir, { recursive: true, force: true });
 }

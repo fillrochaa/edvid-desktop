@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron';
 import started from 'electron-squirrel-startup';
 import { spawn } from 'node:child_process';
+import { createReadStream } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import {
   cp,
@@ -14,9 +15,9 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { Readable } from 'node:stream';
 import { CodexAppServer } from './codex-app-server';
-import { mediaKind, mediaTier, pickPreviewMedia } from './media-selection';
+import { mediaKind, mediaMimeType, mediaTier, pickPreviewMedia, resolveByteRange } from './media-selection';
 import { resolveRuntime, type RuntimeResolution } from './runtime';
 import type {
   CodexApprovalDecision,
@@ -1604,15 +1605,46 @@ void app.whenReady().then(async () => {
   await prepareCacheDirectories().catch((error: unknown) => {
     console.warn('Nao foi possivel preparar os caches do Edvid:', error);
   });
-  void protocol.handle('edvid-media', (request) => {
+  // Servidor de mídia com suporte a Range. Sem 206/Accept-Ranges o <video>
+  // não consegue posicionar a agulha em arquivos grandes: o clique na
+  // timeline era ignorado ou o vídeo reiniciava do zero.
+  void protocol.handle('edvid-media', async (request) => {
     const url = new URL(request.url);
     const token = url.hostname === 'local' ? url.pathname.slice(1) : '';
     const mediaPath = authorizedMedia.get(token);
     if (!mediaPath) return new Response('Midia nao autorizada.', { status: 404 });
-    return net.fetch(pathToFileURL(mediaPath).toString(), {
-      method: request.method,
-      headers: request.headers,
-    });
+    let size: number;
+    try {
+      size = (await stat(mediaPath)).size;
+    } catch {
+      return new Response('Midia indisponivel.', { status: 404 });
+    }
+    const baseHeaders: Record<string, string> = {
+      'Accept-Ranges': 'bytes',
+      'Content-Type': mediaMimeType(path.extname(mediaPath)),
+    };
+    const range = resolveByteRange(request.headers.get('range'), size);
+    if (range.kind === 'unsatisfiable') {
+      return new Response(null, {
+        status: 416,
+        headers: { ...baseHeaders, 'Content-Range': `bytes */${size}` },
+      });
+    }
+    const start = range.kind === 'partial' ? range.start : 0;
+    const end = range.kind === 'partial' ? range.end : size - 1;
+    const headers: Record<string, string> = {
+      ...baseHeaders,
+      'Content-Length': String(end - start + 1),
+      ...(range.kind === 'partial'
+        ? { 'Content-Range': `bytes ${start}-${end}/${size}` }
+        : null),
+    };
+    const status = range.kind === 'partial' ? 206 : 200;
+    if (request.method === 'HEAD') return new Response(null, { status, headers });
+    const stream = Readable.toWeb(
+      createReadStream(mediaPath, { start, end }),
+    ) as unknown as BodyInit;
+    return new Response(stream, { status, headers });
   });
   createWindow();
 

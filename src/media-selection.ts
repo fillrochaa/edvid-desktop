@@ -63,3 +63,57 @@ export function comparePreviewCandidates(a: MediaRanking, b: MediaRanking): numb
 export function pickPreviewMedia<T extends MediaRanking>(candidates: T[]): T | null {
   return [...candidates].sort(comparePreviewCandidates)[0] ?? null;
 }
+
+// ---------------------------------------------------------------------------
+// Serviço de mídia edvid-media://. O <video> só consegue posicionar a agulha
+// num arquivo grande pedindo bytes do meio (Range). O net.fetch(file://) do
+// Electron ignora o cabeçalho e devolve o arquivo inteiro com 200: em arquivos
+// pequenos o Chromium bufferiza tudo e o seek "funciona"; num render de
+// centenas de MB o clique na timeline era ignorado ou reiniciava do zero.
+// ---------------------------------------------------------------------------
+
+export type ByteRangeResolution =
+  | { kind: 'full' }
+  | { kind: 'partial'; start: number; end: number }
+  | { kind: 'unsatisfiable' };
+
+export function resolveByteRange(
+  rangeHeader: string | null,
+  size: number,
+): ByteRangeResolution {
+  if (!rangeHeader || size <= 0) return rangeHeader ? { kind: 'unsatisfiable' } : { kind: 'full' };
+  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+  if (!match || (match[1] === '' && match[2] === '')) return { kind: 'unsatisfiable' };
+  let start: number;
+  let end: number;
+  if (match[1] === '') {
+    // Sufixo: os últimos N bytes.
+    const suffix = Number(match[2]);
+    if (!Number.isFinite(suffix) || suffix <= 0) return { kind: 'unsatisfiable' };
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] === '' ? size - 1 : Math.min(Number(match[2]), size - 1);
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= size || start > end) {
+    return { kind: 'unsatisfiable' };
+  }
+  return { kind: 'partial', start, end };
+}
+
+export function mediaMimeType(extension: string): string {
+  switch (extension.toLowerCase()) {
+    case '.mp4':
+    case '.m4v':
+      return 'video/mp4';
+    case '.mov':
+      return 'video/quicktime';
+    case '.webm':
+      return 'video/webm';
+    case '.mkv':
+      return 'video/x-matroska';
+    default:
+      return 'application/octet-stream';
+  }
+}
