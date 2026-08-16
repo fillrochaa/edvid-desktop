@@ -385,8 +385,8 @@ Decisões apuradas com teste, não por suposição:
 - Os geradores oficiais estão embutidos em `resources/helpers/` (24 KB) e
   chegam ao agente pela variável `EDVID_HELPERS`, sem cópia dentro do projeto:
   `captions_for_remotion.py` (captions.json), `caption_style.py`
-  (caption-cues.json, obrigatório para a legenda empilhada) e `face_track.py`
-  (track.json).
+  (caption-cues.json, obrigatório para a legenda empilhada), `face_track.py`
+  (track.json) e `segments_for_remotion.py` (segments.json).
 - Eles vieram da skill esperando o formato do `transcribe.py`, com uma lista
   `words` no topo. O Desktop transcreve com o WhisperX empacotado, que emite
   `segments[].words[]` com a chave `word`. O resultado eram **zero palavras em
@@ -400,12 +400,18 @@ Decisões apuradas com teste, não por suposição:
 - Trocar o lock exige rodar `npm run stage:python-whisperx` para o `cv2`
   entrar no runtime empacotado.
 
+- O `segments_for_remotion.py` fecha os quatro arquivos de dados. Ele mede os
+  frames reais com `ffprobe -count_frames` quando existem clipes por corte e,
+  quando o corte é um arquivo único, deriva do EDL acumulando em **frames
+  inteiros**. Somar segundos acumula erro: num teste com cinco cortes a soma
+  ingênua ficava 57 ms atrás, o bastante para o zoom disparar fora do corte.
+  Os valores saem com 9 casas — com 6, um limite de 31 frames a 30 fps deixa
+  de voltar exatamente a 31.
+
 Pendências conhecidas deste marco:
 
 - As miniaturas da aba Estilos (`src/styles.css`) ainda são uma impressão
   aproximada; a especificação fiel está em `src/brand/preview-base.css`.
-- O `segments.json` continua por conta do agente (limites reais dos cortes via
-  `ffprobe -count_frames`); não há helper para isso.
 
 ## 11. Timeline como editor real — estado na 0.6.0
 

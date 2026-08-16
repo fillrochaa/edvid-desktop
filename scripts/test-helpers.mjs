@@ -91,8 +91,48 @@ try {
   run('captions_for_remotion.py', ['--transcript', vazio, '-o', path.join(work, 'v.json')]);
   assert.deepEqual(JSON.parse(readFileSync(path.join(work, 'v.json'), 'utf8')), []);
 
+  // --- segments.json: o zoom por corte depende de precisão de frame ---------
+  // Somar os segundos do EDL acumula erro porque o ffmpeg arredonda cada
+  // segmento para frame inteiro. O helper acumula em frames.
+  const fps = 30;
+  const duracoes = [1.017, 2.049, 0.733, 3.011, 0.517];
+  const edl = {
+    ranges: duracoes.map((d, i) => ({ start: i * 10, end: i * 10 + d })),
+  };
+  const edlPath = path.join(work, 'edl.json');
+  writeFileSync(edlPath, JSON.stringify(edl));
+  const segPath = path.join(work, 'segments.json');
+  run('segments_for_remotion.py', ['--edl', edlPath, '--fps', String(fps), '-o', segPath]);
+  const { segments } = JSON.parse(readFileSync(segPath, 'utf8'));
+
+  assert.equal(segments.length, duracoes.length);
+  assert.equal(segments[0].start, 0);
+  // Cada limite cai exatamente sobre um frame.
+  for (const segment of segments) {
+    for (const value of [segment.start, segment.dur]) {
+      const frames = value * fps;
+      assert.ok(Math.abs(frames - Math.round(frames)) < 1e-6, `${value}s não é múltiplo de frame`);
+    }
+  }
+  // Contíguos: o início de um corte é o fim do anterior.
+  for (let i = 1; i < segments.length; i += 1) {
+    const fim = segments[i - 1].start + segments[i - 1].dur;
+    assert.ok(Math.abs(segments[i].start - fim) < 1e-6, 'há buraco entre os cortes');
+  }
+  // O ponto do teste: o resultado difere da soma ingênua, e para mais.
+  const somaIngenua = duracoes.slice(0, -1).reduce((a, b) => a + b, 0);
+  const desvio = segments.at(-1).start - somaIngenua;
+  assert.ok(desvio > 0.02, `esperava desvio da soma ingênua, obtive ${desvio}s`);
+
+  // Sem --fps o modo EDL precisa falhar, em vez de inventar um valor.
+  assert.throws(
+    () => run('segments_for_remotion.py', ['--edl', edlPath, '-o', path.join(work, 'x.json')]),
+    'deveria exigir --fps',
+  );
+
   console.log(
-    `test:helpers ok — ${resultados.whisperx.caps} legendas e ${resultados.whisperx.cues} cues, iguais nos dois formatos de transcrição.`,
+    `test:helpers ok — ${resultados.whisperx.caps} legendas e ${resultados.whisperx.cues} cues iguais nos dois formatos; ` +
+      `segments.json alinhado a frame (${Math.round(desvio * 1000)} ms à frente da soma ingênua em ${duracoes.length} cortes).`,
   );
 } finally {
   rmSync(work, { recursive: true, force: true });
