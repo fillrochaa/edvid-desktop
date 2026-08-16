@@ -495,7 +495,7 @@ Versão corrente: **0.7.2**.
 
 Artefato local atual:
 
-`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.1-arm64.dmg`
+`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.2-arm64.dmg`
 
 Configuração do DMG:
 
