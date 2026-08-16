@@ -123,6 +123,13 @@ export type ProjectWorkspace = {
   style: ProjectStyleState | null;
 };
 
+export type WhisperModelState = {
+  status: 'unknown' | 'downloading' | 'ready' | 'error';
+  model: string;
+  downloadedBytes?: number;
+  error?: string;
+};
+
 export type CodexAccount = {
   type: 'chatgpt' | 'apiKey' | 'amazonBedrock';
   email: string | null;
@@ -201,6 +208,8 @@ export type EdvidDesktopApi = {
     model: TimelineModel,
     loadStamp: string,
   ) => Promise<void>;
+  ensureWhisperModel: () => Promise<WhisperModelState>;
+  onWhisperModelState: (listener: (state: WhisperModelState) => void) => () => void;
   sendCodexMessage: (input: CodexSendMessageInput) => Promise<CodexSendMessageResult>;
   interruptCodexTurn: (threadId: string, turnId: string) => Promise<void>;
   respondToCodexApproval: (

@@ -6,6 +6,7 @@ import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promi
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CodexAppServer } from './codex-app-server';
+import { mediaKind, mediaTier, pickPreviewMedia } from './media-selection';
 import { resolveRuntime, type RuntimeResolution } from './runtime';
 import type {
   CodexApprovalDecision,
@@ -20,6 +21,7 @@ import type {
   RuntimeCheck,
   RuntimeName,
   TimelineModel,
+  WhisperModelState,
 } from './shared';
 import {
   PREVIEW_SOURCE_ID,
@@ -99,8 +101,9 @@ type MediaCandidate = {
   absolutePath: string;
   relativePath: string;
   modifiedAt: number;
-  score: number;
+  tier: number;
 };
+
 
 type InspectedProjectMedia = {
   media: ProjectMedia;
@@ -130,6 +133,30 @@ function parseFrameRate(value?: string): number {
 
 function projectsFile(): string {
   return path.join(app.getPath('userData'), 'projects.json');
+}
+
+// Caches gravaveis dos runtimes internos. Ficam nos dados do aplicativo (a
+// politica "download-on-demand-to-app-data" do manifesto) e sao declarados
+// como writable_roots do sandbox, para que transcrever nao precise de
+// permissao do usuario nem escreva fora do bundle assinado.
+function cachePaths() {
+  const root = path.join(app.getPath('userData'), 'cache');
+  return {
+    root,
+    huggingface: path.join(root, 'huggingface'),
+    torch: path.join(root, 'torch'),
+    matplotlib: path.join(root, 'matplotlib'),
+    xdg: path.join(root, 'xdg'),
+  };
+}
+
+async function prepareCacheDirectories(): Promise<void> {
+  const paths = cachePaths();
+  await Promise.all(
+    [paths.huggingface, paths.torch, paths.matplotlib, paths.xdg].map((directory) =>
+      mkdir(directory, { recursive: true }),
+    ),
+  );
 }
 
 function qaProject(): ProjectSummary | null {
@@ -191,18 +218,6 @@ async function isDirectory(directory: string): Promise<boolean> {
   }
 }
 
-function scoreMedia(relativePath: string, modifiedAt: number): number {
-  const normalized = relativePath.toLocaleLowerCase('pt-BR').replaceAll('\\', '/');
-  const base = path.basename(normalized, path.extname(normalized));
-  let score = 0;
-  if (/^(final|resultado|render)/u.test(base)) score += 500;
-  if (/corte[_ -]?limpo|clean[_ -]?cut|^cut(?:[_ -]|$)/u.test(base)) score += 400;
-  if (normalized.includes('/edicao/') || normalized.includes('/edit/')) score += 160;
-  if (normalized.includes('/assets/')) score -= 160;
-  if (!normalized.includes('/')) score += 80;
-  if (['.mp4', '.m4v', '.webm'].includes(path.extname(normalized))) score += 40;
-  return score + modifiedAt / 1e12;
-}
 
 async function collectMedia(
   root: string,
@@ -236,7 +251,7 @@ async function collectMedia(
         absolutePath,
         relativePath,
         modifiedAt: fileStat.mtimeMs,
-        score: scoreMedia(relativePath, fileStat.mtimeMs),
+        tier: mediaTier(relativePath),
       });
     }),
   );
@@ -292,7 +307,7 @@ function inspectVideo(executable: string, argsPrefix: string[], filePath: string
 async function inspectProjectMedia(directory: string): Promise<InspectedProjectMedia | null> {
   const candidates: MediaCandidate[] = [];
   await collectMedia(directory, directory, 0, candidates);
-  const candidate = candidates.sort((a, b) => b.score - a.score)[0];
+  const candidate = pickPreviewMedia(candidates);
   if (!candidate) return null;
 
   const ffprobe = resolveRuntime('ffprobe', {
@@ -314,13 +329,7 @@ async function inspectProjectMedia(directory: string): Promise<InspectedProjectM
   const rotated = rotation % 180 === 90;
   const width = rotated ? stream.height : stream.width;
   const height = rotated ? stream.width : stream.height;
-  const normalized = candidate.relativePath.toLocaleLowerCase('pt-BR');
-  const base = path.basename(normalized, path.extname(normalized));
-  const kind: ProjectMedia['kind'] = /^(final|resultado|render)/u.test(base)
-    ? 'final'
-    : /corte[_ -]?limpo|clean[_ -]?cut|^cut(?:[_ -]|$)/u.test(base)
-      ? 'clean-cut'
-      : 'source';
+  const kind = mediaKind(candidate.relativePath, candidate.tier);
   const token = authorizeMediaToken(candidate.absolutePath, `${candidate.modifiedAt}`);
   return {
     absolutePath: candidate.absolutePath,
@@ -708,11 +717,47 @@ async function loadProjectTimeline(
   return { model, synced, sources, timeline: { segments: deriveSegments(model) }, loadStamp };
 }
 
+type BriefingFile = {
+  editing_type?: string;
+  headline?: string;
+  captions?: string;
+  accent_color?: string;
+  elements_included?: unknown;
+  elements_excluded?: unknown;
+  notes?: unknown;
+};
+
+// O agente grava o briefing da Fase 2 em briefing.json com nomes proprios.
+// Converter aqui evita que a interface perca as escolhas ja aplicadas.
+function styleFromBriefing(briefing: BriefingFile): Partial<ProjectStyleState> | null {
+  if (!briefing.editing_type && !briefing.headline && !briefing.captions) return null;
+  const included = new Set(
+    (Array.isArray(briefing.elements_included) ? briefing.elements_included : [])
+      .filter((item): item is string => typeof item === 'string'),
+  );
+  return {
+    edit: briefing.editing_type as ProjectStyleState['edit'],
+    headline: briefing.headline as ProjectStyleState['headline'],
+    captions: briefing.captions as ProjectStyleState['captions'],
+    accent: briefing.accent_color,
+    elements: {
+      tracking: included.has('tracking'),
+      zoomAuto: included.has('zoomAuto'),
+      zoomCuts: included.has('zoomCuts'),
+      flashCut: included.has('flashCut'),
+      musicAI: included.has('musicAI'),
+    },
+    note: typeof briefing.notes === 'string' ? briefing.notes : '',
+  };
+}
+
 async function inspectProjectStyle(directory: string): Promise<ProjectStyleState | null> {
   const candidatePaths = [
     path.join(directory, 'edit', 'state.json'),
     path.join(directory, 'edicao', 'state.json'),
     path.join(directory, 'state.json'),
+    path.join(directory, 'edit', 'fase_2', 'briefing.json'),
+    path.join(directory, 'edicao', 'fase_2', 'briefing.json'),
   ];
   const validEdits = new Set(['limpa', 'split', 'split2']);
   const validHeadlines = new Set(['outline', 'card', 'realce', 'misto', 'none']);
@@ -723,8 +768,8 @@ async function inspectProjectStyle(directory: string): Promise<ProjectStyleState
     try {
       const state = JSON.parse(await readFile(candidatePath, 'utf8')) as {
         style?: Partial<ProjectStyleState>;
-      };
-      const style = state.style;
+      } & BriefingFile;
+      const style = state.style ?? styleFromBriefing(state) ?? undefined;
       if (
         !style ||
         !validEdits.has(String(style.edit)) ||
@@ -791,6 +836,134 @@ function broadcastCodexEvent(event: CodexEvent): void {
   }
 }
 
+// --- Modelo de transcricao -------------------------------------------------
+// O aplicativo baixa o modelo do WhisperX no processo principal, com rede
+// normal e progresso visivel. O agente roda sempre offline sobre esse cache,
+// o que elimina o pedido de permissao a cada transcricao.
+
+const WHISPERX_MODEL_NAME = 'small';
+const WHISPERX_MODEL_REPO = 'Systran/faster-whisper-small';
+
+let modelPrefetch: Promise<WhisperModelState> | null = null;
+let modelState: WhisperModelState = { status: 'unknown', model: WHISPERX_MODEL_NAME };
+
+function broadcastModelState(state: WhisperModelState): void {
+  modelState = state;
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('whisper-model:state', state);
+  }
+}
+
+async function directorySize(directory: string): Promise<number> {
+  let total = 0;
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      total += await directorySize(entryPath);
+    } else if (entry.isFile()) {
+      try {
+        total += (await stat(entryPath)).size;
+      } catch {
+        // Arquivo removido durante a varredura; ignora.
+      }
+    }
+  }
+  return total;
+}
+
+function runModelDownload(python: string, hubCache: string): Promise<void> {
+  const script = [
+    'from huggingface_hub import snapshot_download',
+    `snapshot_download(${JSON.stringify(WHISPERX_MODEL_REPO)})`,
+  ].join('\n');
+  return new Promise((resolve, reject) => {
+    const child = spawn(python, ['-c', script], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        HF_HOME: path.dirname(hubCache),
+        HUGGINGFACE_HUB_CACHE: hubCache,
+        HF_HUB_DISABLE_TELEMETRY: '1',
+        PYTHONDONTWRITEBYTECODE: '1',
+        PYTHONNOUSERSITE: '1',
+      },
+    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      if (stderr.length < 16_384) stderr += chunk;
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim().split(/\r?\n/).at(-1) || 'Falha ao baixar o modelo.'));
+    });
+  });
+}
+
+function ensureWhisperModel(): Promise<WhisperModelState> {
+  if (modelPrefetch) return modelPrefetch;
+  modelPrefetch = (async (): Promise<WhisperModelState> => {
+    const caches = cachePaths();
+    const hubCache = path.join(caches.huggingface, 'hub');
+    const modelDirectory = path.join(
+      hubCache,
+      `models--${WHISPERX_MODEL_REPO.replace('/', '--')}`,
+    );
+    await prepareCacheDirectories();
+    // Um snapshot ja baixado tem os pesos; qualquer coisa menor esta pela metade.
+    if ((await directorySize(modelDirectory)) > 100_000_000) {
+      return { status: 'ready', model: WHISPERX_MODEL_NAME };
+    }
+    const python = resolveRuntime('python', {
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    if (!python.command) {
+      return {
+        status: 'error',
+        model: WHISPERX_MODEL_NAME,
+        error: 'Python interno nao esta disponivel nesta plataforma.',
+      };
+    }
+    broadcastModelState({ status: 'downloading', model: WHISPERX_MODEL_NAME, downloadedBytes: 0 });
+    const ticker = setInterval(() => {
+      void directorySize(modelDirectory).then((downloadedBytes) => {
+        if (modelState.status === 'downloading') {
+          broadcastModelState({ status: 'downloading', model: WHISPERX_MODEL_NAME, downloadedBytes });
+        }
+      });
+    }, 700);
+    try {
+      await runModelDownload(python.command, hubCache);
+      return { status: 'ready', model: WHISPERX_MODEL_NAME };
+    } catch (error) {
+      modelPrefetch = null; // Falha de rede pode ser transitoria; permite repetir.
+      return {
+        status: 'error',
+        model: WHISPERX_MODEL_NAME,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      clearInterval(ticker);
+    }
+  })().then((state) => {
+    broadcastModelState(state);
+    return state;
+  });
+  return modelPrefetch;
+}
+
 function getCodexAppServer(): CodexAppServer {
   if (codexAppServer) return codexAppServer;
   const resolution = resolveRuntime('codex-app-server', {
@@ -819,6 +992,7 @@ function getCodexAppServer(): CodexAppServer {
   const runtimeCommand = (name: RuntimeName) => (
     localRuntimes.find((runtime) => runtime.name === name)?.command ?? ''
   );
+  const caches = cachePaths();
   codexAppServer = new CodexAppServer(
     resolution.command,
     path.join(app.getPath('userData'), 'codex'),
@@ -833,7 +1007,19 @@ function getCodexAppServer(): CodexAppServer {
       EDVID_FFPROBE: runtimeCommand('ffprobe'),
       EDVID_UV: runtimeCommand('uv'),
       EDVID_YTDLP: runtimeCommand('yt-dlp'),
+      // Caches dentro dos dados do aplicativo: o WhisperX encontra o modelo
+      // ja baixado e o matplotlib tem onde escrever, sem sair do sandbox.
+      HF_HOME: caches.huggingface,
+      HUGGINGFACE_HUB_CACHE: path.join(caches.huggingface, 'hub'),
+      TORCH_HOME: caches.torch,
+      XDG_CACHE_HOME: caches.xdg,
+      MPLCONFIGDIR: caches.matplotlib,
+      // O download do modelo e responsabilidade do aplicativo, nunca do
+      // agente: assim o sandbox continua sem rede.
+      HF_HUB_OFFLINE: '1',
+      EDVID_WHISPER_MODEL: WHISPERX_MODEL_NAME,
     },
+    [caches.root],
   );
   return codexAppServer;
 }
@@ -1022,6 +1208,8 @@ function registerIpcHandlers(): void {
     },
   );
 
+  ipcMain.handle('whisper-model:ensure', () => ensureWhisperModel());
+
   ipcMain.handle('codex:account', () => getCodexAppServer().readAccount());
 
   ipcMain.handle('codex:login', async () => {
@@ -1120,7 +1308,12 @@ function createWindow(): void {
 
 registerIpcHandlers();
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  // Os caches precisam existir antes do Codex iniciar: eles entram como
+  // writable_roots do sandbox e como HF_HOME/MPLCONFIGDIR dos runtimes.
+  await prepareCacheDirectories().catch((error: unknown) => {
+    console.warn('Nao foi possivel preparar os caches do Edvid:', error);
+  });
   void protocol.handle('edvid-media', (request) => {
     const url = new URL(request.url);
     const token = url.hostname === 'local' ? url.pathname.slice(1) : '';

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { CodexEvent, EdvidDesktopApi } from './shared';
+import type { CodexEvent, EdvidDesktopApi, WhisperModelState } from './shared';
 
 const api: EdvidDesktopApi = {
   getDesktopInfo: () => ipcRenderer.invoke('desktop:get-info'),
@@ -15,6 +15,12 @@ const api: EdvidDesktopApi = {
   logoutCodex: () => ipcRenderer.invoke('codex:logout'),
   saveTimelineModel: (directory, model, loadStamp) =>
     ipcRenderer.invoke('timeline:save', { directory, model, loadStamp }),
+  ensureWhisperModel: () => ipcRenderer.invoke('whisper-model:ensure'),
+  onWhisperModelState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: WhisperModelState) => listener(state);
+    ipcRenderer.on('whisper-model:state', handler);
+    return () => ipcRenderer.removeListener('whisper-model:state', handler);
+  },
   sendCodexMessage: (input) => ipcRenderer.invoke('codex:message', input),
   interruptCodexTurn: (threadId, turnId) =>
     ipcRenderer.invoke('codex:interrupt', { threadId, turnId }),

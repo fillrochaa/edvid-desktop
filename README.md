@@ -13,7 +13,7 @@ npm run stage:codex
 npm start
 ```
 
-O estagio atual (`0.6.0`) inclui projetos recentes, login gerenciado do ChatGPT,
+O estagio atual (`0.6.1`) inclui projetos recentes, login gerenciado do ChatGPT,
 conversa em streaming, aprovacao visual do corte limpo, um workspace integrado
 de preview, timeline, estilos e correcoes por intervalos In/Out, e a primeira
 versao da timeline nao destrutiva: um modelo persistente de clipes migrado do
@@ -74,10 +74,14 @@ npm run test:codex-protocol
 ```
 
 O modelo da timeline tem um teste proprio de migracao, razor, trim, delete e
-export de ranges:
+export de ranges, e a escolha da midia do preview tambem:
 
 ```bash
 npm run test:timeline
+```
+
+```bash
+npm run test:media
 ```
 
 ## Validacao e empacotamento

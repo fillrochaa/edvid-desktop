@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import type {
   CodexAccount,
   CodexAccountState,
@@ -53,9 +54,11 @@ type TurnStartResponse = { turn: { id: string } };
 const EDVID_INSTRUCTIONS = `Voce e o agente de edicao do Edvid Desktop. Converse em portugues do Brasil e trate a pasta do projeto como a unica area de trabalho do video. Preserve sempre os arquivos originais. Antes de uma edicao completa, faca primeiro o corte limpo guiado pelo audio e obtenha aprovacao do usuario; depois aplique visuais, legendas, trilha e acabamento.
 
 Contrato obrigatorio com a interface do Edvid:
-- O preview reproduz automaticamente a saida mais recente. Nunca inclua no chat caminhos absolutos, URLs file:// ou links Markdown para arquivos locais.
+- O preview reproduz automaticamente o render mais recente que estiver dentro de edit/ ou edicao/. Grave todo resultado nessas pastas e nunca inclua no chat caminhos absolutos, URLs file:// ou links Markdown para arquivos locais.
+- Arquivos intermediarios (sem estilo, temporarios, partes) devem ter no nome uma dessas marcas: tmp, temp, parte, chunk, raw ou sem_estilo. Sem isso o preview pode exibir um rascunho no lugar do resultado.
 - Depois de qualquer render que altere cortes ou duracao, crie ou atualize edit/edl.json antes de responder. Use ranges com um item para cada cena mantida (beat, start e end nos tempos da fonte). Quando houver J-cut, inclua tambem jcut_timeline com as posicoes reais no arquivo de saida. Esse EDL e o que permite a timeline desenhar blocos e cortes reais.
-- Node, npm, FFmpeg, FFprobe, uv, yt-dlp, Python e WhisperX ja estao empacotados e disponiveis no PATH. Nunca crie uma .venv e nunca execute pip install. Para transcrever, use python3 -m whisperx.
+- Node, npm, FFmpeg, FFprobe, uv, yt-dlp, Python e WhisperX ja estao empacotados e disponiveis no PATH. Nunca crie uma .venv e nunca execute pip install.
+- Para transcrever use python3 -m whisperx com o modelo indicado em EDVID_WHISPER_MODEL. Esse modelo ja esta baixado no cache do aplicativo e o ambiente roda offline: nao baixe modelos, nao mude o cache e nao defina HF_HOME, XDG_CACHE_HOME nem MPLCONFIGDIR, que ja vem configurados. Se um modelo diferente for necessario, explique ao usuario em vez de tentar baixar.
 - Explique apenas o resultado da edicao de forma curta; detalhes tecnicos de execucao pertencem a interface de permissao, nao a conversa.`;
 
 export class CodexAppServer {
@@ -75,7 +78,25 @@ export class CodexAppServer {
     private readonly appVersion: string,
     private readonly emit: (event: CodexEvent) => void,
     private readonly runtimeEnvironment: NodeJS.ProcessEnv = {},
+    private readonly sandboxWritableRoots: string[] = [],
   ) {}
+
+  // O sandbox workspace-write so permite escrever no projeto. Os caches dos
+  // runtimes internos ficam fora dele, entao entram como writable_roots — sem
+  // isso o usuario teria de aprovar cada transcricao. A rede continua negada.
+  private async writeSandboxConfig(): Promise<void> {
+    const roots = this.sandboxWritableRoots
+      .map((root) => JSON.stringify(root))
+      .join(', ');
+    const config = [
+      '# Gerado pelo Edvid Desktop. Alteracoes manuais sao sobrescritas.',
+      '[sandbox_workspace_write]',
+      'network_access = false',
+      `writable_roots = [${roots}]`,
+      '',
+    ].join('\n');
+    await writeFile(path.join(this.codexHome, 'config.toml'), config);
+  }
 
   async start(): Promise<void> {
     if (this.startPromise) return this.startPromise;
@@ -90,6 +111,7 @@ export class CodexAppServer {
 
   private async startInternal(): Promise<void> {
     await mkdir(this.codexHome, { recursive: true });
+    await this.writeSandboxConfig();
     const child = spawn(this.executable, ['--listen', 'stdio://', '--session-source', 'appServer'], {
       env: { ...process.env, ...this.runtimeEnvironment, CODEX_HOME: this.codexHome },
       stdio: ['pipe', 'pipe', 'pipe'],

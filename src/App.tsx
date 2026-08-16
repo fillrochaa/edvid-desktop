@@ -21,6 +21,7 @@ import type {
   RuntimeCheck,
   TimelineClip,
   TimelineModel,
+  WhisperModelState,
 } from './shared';
 import {
   VIDEO_TRACK_ID,
@@ -747,7 +748,11 @@ function EditorWorkspace({
     event.currentTarget.focus({ preventScroll: true });
     event.currentTarget.setPointerCapture(event.pointerId);
     timelineSeekPointerRef.current = event.pointerId;
-    setSelectedClipId(null);
+    // Clicar no vazio limpa a selecao; clicar num clipe mantem o que o
+    // proprio clipe acabou de selecionar.
+    if (!(event.target as HTMLElement).closest('.timeline-clip')) {
+      setSelectedClipId(null);
+    }
     seekTimelineAt(event.clientX, event.currentTarget);
   }
 
@@ -1136,7 +1141,8 @@ function EditorWorkspace({
         title={`${clip.label} · ${formatTime(clipDuration(clip))}`}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
-          event.stopPropagation();
+          // Sem stopPropagation: o clique tambem chega a timeline e leva a
+          // agulha ate ele, como em qualquer ponto da régua ou das pistas.
           setSelectedClipId(clip.id);
         }}
       >
@@ -1554,6 +1560,10 @@ export function App() {
   const [handledCutApprovalId, setHandledCutApprovalId] = useState<string | null>(null);
   const [approvingCut, setApprovingCut] = useState(false);
   const [followingOutput, setFollowingOutput] = useState(true);
+  const [whisperModel, setWhisperModel] = useState<WhisperModelState>({
+    status: 'unknown',
+    model: '',
+  });
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const activeProjectDirectoryRef = useRef<string | null>(null);
   const timelineSaveTimerRef = useRef<number | null>(null);
@@ -1908,11 +1918,15 @@ export function App() {
 
   useEffect(() => {
     const unsubscribe = window.edvidDesktop.onCodexEvent(handleCodexEvent);
+    const unsubscribeModel = window.edvidDesktop.onWhisperModelState(setWhisperModel);
     if (!booted.current) {
       booted.current = true;
       void window.edvidDesktop.getDesktopInfo().then(setDesktopInfo);
       void window.edvidDesktop.getCodexAccount().then(setAccount);
       void refreshRuntimes();
+      // O modelo de transcricao e preparado pelo aplicativo, antes de o
+      // usuario pedir o corte: assim a edicao nunca para para baixar nada.
+      void window.edvidDesktop.ensureWhisperModel().then(setWhisperModel);
       void window.edvidDesktop.listRecentProjects().then(async (recent) => {
         setProjects(recent);
         if (recent[0]) {
@@ -1925,7 +1939,10 @@ export function App() {
         }
       });
     }
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      unsubscribeModel();
+    };
   }, []);
 
   useEffect(() => {
@@ -2022,9 +2039,20 @@ export function App() {
                   <h2>O que vamos editar?</h2>
                   <p>O corte limpo vem primeiro. Depois da aprovação, os estilos aparecem visualmente na aba ao lado.</p>
                   <div className="prompt-examples">
-                    <button type="button" onClick={() => void dispatchMessage('Inicie a edição do vídeo e prepare o corte limpo.')} disabled={sending}>Iniciar corte limpo</button>
+                    <button type="button" onClick={() => void dispatchMessage('Inicie a edição do vídeo e prepare o corte limpo.')} disabled={sending || whisperModel.status === 'downloading'}>Iniciar corte limpo</button>
                     <button type="button" onClick={() => void dispatchMessage('Analise os vídeos e imagens da pasta assets.')} disabled={sending}>Analisar assets</button>
                   </div>
+                  {whisperModel.status === 'downloading' && (
+                    <div className="model-status">
+                      <span className="model-status-orb" />
+                      Preparando a transcrição{whisperModel.downloadedBytes ? ` · ${Math.round(whisperModel.downloadedBytes / 1e6)} MB` : ''}
+                    </div>
+                  )}
+                  {whisperModel.status === 'error' && (
+                    <div className="model-status error">
+                      Não foi possível preparar a transcrição. Verifique a conexão e reabra o Edvid.
+                    </div>
+                  )}
                 </div>
               )}
               {messages.map((message) => {

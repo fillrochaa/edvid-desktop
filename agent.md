@@ -122,8 +122,26 @@ Regras importantes:
 - O agente não deve criar `.venv` dentro do projeto nem executar `pip install`.
 - Para transcrição, usar o WhisperX já empacotado, por exemplo
   `python3 -m whisperx`.
-- Modelos podem ser baixados para o cache do usuário quando necessários; não
-  devem alterar o bundle do aplicativo.
+
+### Caches e o modelo de transcrição (0.6.1)
+
+A política `download-on-demand-to-app-data` do manifesto agora está de fato
+implementada. Antes dela o modelo caía em `~/.cache/huggingface`, fora do
+sandbox, e cada transcrição exigia aprovação do usuário.
+
+- O `main.ts` cria `userData/cache/{huggingface,torch,matplotlib,xdg}` e passa
+  `HF_HOME`, `HUGGINGFACE_HUB_CACHE`, `TORCH_HOME`, `XDG_CACHE_HOME` e
+  `MPLCONFIGDIR` ao processo do Codex. Sem `MPLCONFIGDIR` o agente improvisava
+  um diretório em `/tmp`.
+- `HF_HUB_OFFLINE=1`: o agente nunca baixa modelo. Quem baixa é o aplicativo,
+  no processo principal, com progresso visível na interface.
+- O modelo é fixo em `small` (`Systran/faster-whisper-small`, ~464 MB) e é
+  informado ao agente por `EDVID_WHISPER_MODEL`. Trocar o modelo exige mudar
+  `WHISPERX_MODEL_NAME`/`WHISPERX_MODEL_REPO` no `main.ts`, senão o agente
+  falha offline.
+- O modelo de VAD não é baixado: ele acompanha o pacote do WhisperX em
+  `whisperx/assets/pytorch_model.bin`. Verificado rodando a transcrição
+  completa com `HF_HUB_OFFLINE=1`.
 
 ## 5. Login e Codex
 
@@ -142,6 +160,18 @@ Regras importantes:
 ## 6. Modelo de segurança e aprovações
 
 - O Codex usa `approvalPolicy: on-request` e sandbox `workspace-write`.
+- O `thread/start` aceita `sandbox` **apenas como string** (`read-only`,
+  `workspace-write`, `danger-full-access`); não há parâmetros inline. Isso foi
+  verificado sondando o app-server: qualquer objeto é recusado com
+  "expected map with a single key" / "expected unit". A configuração fina vai
+  no `config.toml` do `CODEX_HOME`, que o aplicativo escreve a cada start
+  (`codex-app-server.ts`).
+- Esse `config.toml` mantém `network_access = false` e declara os caches do
+  aplicativo em `writable_roots`. É o que permite transcrever sem aprovação
+  sem abrir rede para o agente.
+- Reduzir atrito nunca é motivo para autoaprovar: a forma correta é remover a
+  causa da escalada (dar caminho gravável e conteúdo já baixado), não aceitar
+  comando automaticamente.
 - Aprovações técnicas são necessárias para segurança, mas não pertencem ao
   histórico da conversa.
 - Desde a versão 0.5.2, aprovações de comandos e alterações de arquivos aparecem
@@ -218,7 +248,11 @@ Não depender do volume externo em builds futuros.
 - Ao finalizar o corte, o chat mostra somente um resumo do que foi feito.
 - Links Markdown, `file://` e caminhos absolutos locais são removidos da
   visualização.
-- O preview exibe automaticamente a mídia mais recente.
+- O preview exibe automaticamente a mídia mais recente. A escolha está em
+  `src/media-selection.ts` (módulo puro, testado): vence o arquivo dentro de
+  `edit/` ou `edicao/` com a data mais nova; fontes na raiz, `assets/` e
+  nomes de rascunho (`tmp`, `parte`, `sem_estilo`…) ficam de fora. Antes da
+  0.6.1 a pontuação era por nome e o corte limpo escondia o render da Fase 2.
 - Um botão **Aprovado** confirma visualmente o corte.
 - Após a aprovação, o aplicativo abre a aba Estilos.
 
@@ -236,6 +270,11 @@ O usuário escolhe visualmente:
 
 O botão **Salvar e aplicar** persiste o briefing e o envia automaticamente para
 o agente. O agente não deve voltar a perguntar as mesmas escolhas no chat.
+
+O agente grava essas escolhas em `edicao/fase_2/briefing.json`, com nomes
+próprios (`editing_type`, `accent_color`, `elements_included`). A interface lê
+tanto esse formato quanto o `state.json` com a chave `style`; sem isso as
+escolhas aplicadas não voltavam para a aba Estilos ao reabrir o projeto.
 
 ## 10. Timeline atual
 
@@ -357,9 +396,9 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.6.0**.
+Versão corrente: **0.6.1**.
 
-Artefato local atual:
+Último artefato local gerado:
 
 `/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.6.0-arm64.dmg`
 
@@ -406,6 +445,9 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.6.1: transcrição sem aprovação (caches em app data, `writable_roots` e
+  modelo baixado pelo aplicativo), agulha volta a seguir o clique sobre um
+  clipe e o preview passa a mostrar o render mais recente da Fase 2.
 
 ## 16. Testes e comandos usuais
 
@@ -415,6 +457,7 @@ Durante o desenvolvimento:
 npm run typecheck
 npm run test:codex-protocol
 npm run test:timeline
+npm run test:media
 git diff --check
 ```
 

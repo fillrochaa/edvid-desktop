@@ -126,6 +126,8 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     saveTimelineModel: async () => {
       // O QA visual não persiste; as edições ficam apenas em memória.
     },
+    ensureWhisperModel: async () => ({ status: 'ready', model: 'small' }),
+    onWhisperModelState: () => () => {},
     sendCodexMessage: async ({ text }) => {
       turnNumber += 1;
       const threadId = 'qa-thread';
