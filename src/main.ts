@@ -1033,6 +1033,21 @@ function runCommand(
   });
 }
 
+// Roda um runtime resolvido respeitando o argsPrefix. O npm empacotado, por
+// exemplo, e "node npm-cli.js": passar so o command executaria o binario do
+// node como script e quebraria na hora.
+function runResolved(
+  resolution: RuntimeResolution,
+  args: string[],
+  cwd: string,
+  extraEnvironment: NodeJS.ProcessEnv = {},
+): Promise<void> {
+  if (!resolution.command) {
+    return Promise.reject(new Error(`${resolution.name} nao esta disponivel nesta plataforma.`));
+  }
+  return runCommand(resolution.command, [...resolution.argsPrefix, ...args], cwd, extraEnvironment);
+}
+
 async function remotionRuntimeIsReady(): Promise<boolean> {
   const runtime = remotionRuntimeDirectory();
   const binary = path.join(
@@ -1064,7 +1079,7 @@ async function remotionRuntimeIsReady(): Promise<boolean> {
 
 function ensureRemotionRuntime(): Promise<RemotionRuntimeState> {
   if (remotionInstall) return remotionInstall;
-  remotionInstall = (async (): Promise<RemotionRuntimeState> => {
+  const pending = (async (): Promise<RemotionRuntimeState> => {
     const runtime = remotionRuntimeDirectory();
     if (await remotionRuntimeIsReady()) return { status: 'ready' };
 
@@ -1117,17 +1132,12 @@ function ensureRemotionRuntime(): Promise<RemotionRuntimeState> {
     }, 900);
     try {
       broadcastRemotionState({ status: 'installing', step: 'dependencias', installedBytes: 0 });
-      await runCommand(
-        node.command,
-        [npm.command, 'install', '--omit=dev', '--no-audit', '--no-fund'],
-        runtime,
-        environment,
-      );
+      await runResolved(npm, ['install', '--omit=dev', '--no-audit', '--no-fund'], runtime, environment);
       broadcastRemotionState({ status: 'installing', step: 'navegador' });
       // Busca o Chrome headless shell agora, com progresso, em vez de deixar
       // o primeiro render travar pedindo rede dentro do sandbox.
-      await runCommand(
-        node.command,
+      await runResolved(
+        node,
         [path.join(runtime, 'node_modules', '@remotion', 'cli', 'remotion-cli.js'), 'browser', 'ensure'],
         runtime,
         environment,
@@ -1136,19 +1146,29 @@ function ensureRemotionRuntime(): Promise<RemotionRuntimeState> {
       await downloadRemotionFonts(path.join(runtime, 'fonts'));
       return { status: 'ready' };
     } catch (error) {
-      remotionInstall = null; // Rede pode falhar; permite tentar de novo.
+      const step = remotionState.status === 'installing' ? remotionState.step : undefined;
+      const prefix = step === 'navegador'
+        ? 'Falha ao baixar o navegador de render'
+        : step === 'fontes'
+          ? 'Falha ao baixar as fontes'
+          : 'Falha ao instalar as dependências';
       return {
         status: 'error',
-        error: error instanceof Error ? error.message : String(error),
+        error: `${prefix}: ${error instanceof Error ? error.message : String(error)}`,
       };
     } finally {
       clearInterval(ticker);
     }
-  })().then((state) => {
+  })();
+  const install = pending.then((state) => {
+    // Qualquer resultado que nao esteja pronto libera nova tentativa; um erro
+    // cacheado obrigaria a reiniciar o aplicativo para tentar de novo.
+    if (state.status !== 'ready' && remotionInstall === install) remotionInstall = null;
     broadcastRemotionState(state);
     return state;
   });
-  return remotionInstall;
+  remotionInstall = install;
+  return install;
 }
 
 // Monta o projeto Remotion dentro do video, ligando o node_modules

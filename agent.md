@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-16 (0.7.4 — Fase 2 pelo Remotion, leitura tolerante do EDL)
+Atualizado em: 2026-08-16 (0.7.5 — instalação do motor Remotion corrigida no app empacotado)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -347,6 +347,14 @@ Como funciona agora:
   178 MB de `node_modules` (`--omit=dev` corta TypeScript e `@types/react`),
   193 MB do Chrome Headless Shell (`remotion browser ensure`) e 748 KB de
   fontes. Todos os projetos compartilham esse runtime.
+  - O npm empacotado é `node npm-cli.js` (command + argsPrefix na resolução de
+    runtimes). Todo spawn de runtime deve passar por `runResolved`, que
+    respeita o argsPrefix — passar só o `command` executa o binário do node
+    como se fosse script e quebra na hora (bug da 0.7.4, invisível em
+    desenvolvimento porque o runtime já estava instalado na máquina).
+  - Mudou o fluxo de instalação? Validar com `userData/runtime/remotion`
+    limpo, não apenas com o runtime pronto: a checagem de prontidão
+    curto-circuita o caminho de instalação inteiro.
 - **Fontes locais**: o `@remotion/google-fonts` (63 MB) não embarca os
   arquivos — ele aponta para `fonts.gstatic.com` e baixa durante o render, o
   que não funciona no sandbox sem rede. A dependência foi removida; o
@@ -501,11 +509,11 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.7.4**.
+Versão corrente: **0.7.5**.
 
 Artefato local atual:
 
-`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.4-arm64.dmg`
+`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.5-arm64.dmg`
 
 Configuração do DMG:
 
@@ -550,6 +558,11 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.7.5: a instalação do motor Remotion falhava em toda máquina limpa — o
+  npm empacotado é `node npm-cli.js` e o comando montado ignorava o
+  argsPrefix, executando o binário do node como script. Spawns de runtime
+  agora passam por `runResolved`; a UI mostra o motivo real da falha e o
+  clique em "Salvar e aplicar" tenta de novo (erro não fica cacheado).
 - 0.7.4: o protocolo edvid-media passou a servir Range (206/Accept-Ranges).
   O net.fetch(file://) ignorava o cabeçalho; em arquivos grandes o clique na
   timeline era ignorado ou reiniciava o vídeo do zero.

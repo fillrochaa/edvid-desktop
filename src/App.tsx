@@ -1593,6 +1593,11 @@ function StyleWorkspace({
                   : `Instalando as dependências${runtime.installedBytes ? ` · ${Math.round(runtime.installedBytes / 1e6)} MB` : ''}. Isso acontece uma única vez.`}
             </span>
           </div>
+        ) : runtime.status === 'error' ? (
+          <div>
+            <strong>Motor de render indisponível</strong>
+            <span>{runtime.error || 'Falha ao preparar o Remotion.'} Clique em “Salvar e aplicar” para tentar de novo.</span>
+          </div>
         ) : (
           <div><strong>Briefing visual pronto</strong><span>O Edvid receberá também tudo o que ficou desmarcado.</span></div>
         )}
@@ -1868,10 +1873,11 @@ export function App() {
     const runtime = await window.edvidDesktop.ensureRemotionRuntime();
     setRemotionRuntime(runtime);
     if (runtime.status !== 'ready') {
+      const reason = runtime.status === 'error' && runtime.error ? ` Motivo: ${runtime.error}` : '';
       setMessages((current) => [...current, {
         id: `error:${Date.now()}`,
         role: 'system',
-        text: 'Não foi possível preparar o motor de render da Fase 2. Verifique a conexão e tente novamente.',
+        text: `Não foi possível preparar o motor de render da Fase 2.${reason} Clique em "Salvar e aplicar" para tentar de novo.`,
       }]);
       return;
     }
