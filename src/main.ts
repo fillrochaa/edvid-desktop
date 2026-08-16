@@ -928,11 +928,16 @@ function remotionRuntimeDirectory(): string {
   return path.join(app.getPath('userData'), 'runtime', 'remotion');
 }
 
+function bundledResourcesRoot(): string {
+  return app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources');
+}
+
 function remotionTemplateDirectory(): string {
-  const resourcesRoot = app.isPackaged
-    ? process.resourcesPath
-    : path.join(app.getAppPath(), 'resources');
-  return path.join(resourcesRoot, 'remotion-template');
+  return path.join(bundledResourcesRoot(), 'remotion-template');
+}
+
+function helpersDirectory(): string {
+  return path.join(bundledResourcesRoot(), 'helpers');
 }
 
 // As familias que o template usa. O @remotion/google-fonts nao embarca os
@@ -1287,6 +1292,9 @@ function getCodexAppServer(): CodexAppServer {
       // agente: assim o sandbox continua sem rede.
       HF_HUB_OFFLINE: '1',
       EDVID_WHISPER_MODEL: WHISPERX_MODEL_NAME,
+      // Helpers oficiais da Fase 2, embutidos no aplicativo. Sem eles o agente
+      // escrevia os JSONs do Remotion na mao, com formato proprio.
+      EDVID_HELPERS: helpersDirectory(),
     },
     [caches.root],
   );

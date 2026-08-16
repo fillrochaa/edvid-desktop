@@ -17,6 +17,7 @@
     "test:codex-protocol": "node scripts/smoke-codex-app-server.mjs",
     "test:timeline": "node scripts/test-timeline-model.mjs",
     "test:media": "node scripts/test-media-selection.mjs",
+    "test:helpers": "node scripts/test-helpers.mjs",
     "stage:python-whisperx": "node scripts/stage-python-whisperx.mjs",
     "prepare:forge-makers": "npx --yes --package=node@22.23.2 -c \"npm rebuild macos-alias\"",
     "typecheck": "tsc --noEmit",

@@ -19,6 +19,7 @@ const config: ForgeConfig = {
       'resources/runtime-manifest.json',
       'resources/runtimes',
       'resources/remotion-template',
+      'resources/helpers',
     ],
     osxSign:
       process.platform === 'darwin'

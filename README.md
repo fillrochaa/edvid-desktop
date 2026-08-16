@@ -13,9 +13,10 @@ npm run stage:codex
 npm start
 ```
 
-O estagio atual (`0.6.1`) inclui projetos recentes, login gerenciado do ChatGPT,
+O estagio atual (`0.7.0`) inclui projetos recentes, login gerenciado do ChatGPT,
 conversa em streaming, aprovacao visual do corte limpo, um workspace integrado
-de preview, timeline, estilos e correcoes por intervalos In/Out, e a primeira
+de preview, timeline, estilos e correcoes por intervalos In/Out, a Fase 2
+renderizada pelo Remotion com o template oficial embutido, e a primeira
 versao da timeline nao destrutiva: um modelo persistente de clipes migrado do
 EDL, com selecao, trim pelas extremidades, razor, ripple delete, undo/redo,
 zoom ancorado na agulha e previa das edicoes sem render completo.
@@ -82,6 +83,13 @@ npm run test:timeline
 
 ```bash
 npm run test:media
+```
+
+Os geradores de legenda da Fase 2 tambem tem teste, cobrindo os dois formatos
+de transcricao que o Edvid aceita:
+
+```bash
+npm run test:helpers
 ```
 
 ## Validacao e empacotamento

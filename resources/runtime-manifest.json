@@ -1,10 +1,22 @@
 {
   "schemaVersion": 1,
   "runtimes": {
-    "node": { "version": "26.7.0", "distribution": "nodejs.org" },
-    "npm": { "version": "11.19.0", "distribution": "included-with-node" },
-    "ffmpeg": { "version": "8.1.2", "distribution": "source-build-gpl-libx264" },
-    "ffprobe": { "version": "8.1.2", "distribution": "source-build-gpl-libx264" },
+    "node": {
+      "version": "26.7.0",
+      "distribution": "nodejs.org"
+    },
+    "npm": {
+      "version": "11.19.0",
+      "distribution": "included-with-node"
+    },
+    "ffmpeg": {
+      "version": "8.1.2",
+      "distribution": "source-build-gpl-libx264"
+    },
+    "ffprobe": {
+      "version": "8.1.2",
+      "distribution": "source-build-gpl-libx264"
+    },
     "uv": {
       "version": "0.12.3",
       "distribution": "astral-github-release-attested",
@@ -23,6 +35,7 @@
     },
     "whisperx": {
       "version": "3.8.6",
+      "opencvVersion": "4.14.0.94",
       "distribution": "uv-locked-pypi-pytorch-cpu",
       "modelPolicy": "download-on-demand-to-app-data",
       "sharedFfmpegVersion": "7.1.5"
@@ -57,5 +70,9 @@
     "yt-dlp",
     "codex-app-server"
   ],
-  "targets": ["darwin-arm64", "darwin-x64", "win32-x64"]
+  "targets": [
+    "darwin-arm64",
+    "darwin-x64",
+    "win32-x64"
+  ]
 }

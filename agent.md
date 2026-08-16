@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-16 (0.6.0 — timeline não destrutiva v1)
+Atualizado em: 2026-08-16 (0.7.0 — Fase 2 renderizada pelo Remotion)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -90,7 +90,11 @@ Arquivos centrais:
 - `src/preload.ts`: API segura exposta ao renderer.
 - `src/App.tsx`: shell, chat, preview, timeline, estilos e correções.
 - `src/styles.css`: design system e layout do aplicativo.
+- `src/media-selection.ts`: escolha da mídia do preview (módulo puro, testado).
 - `src/qa-browser-api.ts`: modo de QA visual sem Electron.
+- `resources/remotion-template/`: template da Fase 2 embutido.
+- `resources/helpers/`: geradores de legenda e tracking, expostos por
+  `EDVID_HELPERS`.
 - `forge.config.ts`: empacotamento para DMG, ZIP e Windows/Squirrel.
 - `resources/runtime-manifest.json`: versões esperadas dos runtimes.
 
@@ -111,13 +115,14 @@ Versões atuais:
 - yt-dlp 2026.07.04
 - Python 3.12.13
 - WhisperX 3.8.6
+- OpenCV (headless) 4.14.0.94 para o tracking de rosto
 - Codex App Server 0.147.0
 
 Regras importantes:
 
 - O processo do Codex recebe os diretórios dos runtimes internos no `PATH`.
-- Também recebe `EDVID_PYTHON`, `EDVID_FFMPEG`, `EDVID_FFPROBE`, `EDVID_UV` e
-  `EDVID_YTDLP`.
+- Também recebe `EDVID_PYTHON`, `EDVID_FFMPEG`, `EDVID_FFPROBE`, `EDVID_UV`,
+  `EDVID_YTDLP`, `EDVID_WHISPER_MODEL` e `EDVID_HELPERS`.
 - `PYTHONDONTWRITEBYTECODE=1` impede alterações dentro do bundle assinado.
 - O agente não deve criar `.venv` dentro do projeto nem executar `pip install`.
 - Para transcrição, usar o WhisperX já empacotado, por exemplo
@@ -375,15 +380,32 @@ Decisões apuradas com teste, não por suposição:
   não chegam sozinhas ao Desktop; ao sincronizar, reaplicar a
   parametrização do accent.
 
+### Helpers da Fase 2 e tracking (0.7.0)
+
+- Os geradores oficiais estão embutidos em `resources/helpers/` (24 KB) e
+  chegam ao agente pela variável `EDVID_HELPERS`, sem cópia dentro do projeto:
+  `captions_for_remotion.py` (captions.json), `caption_style.py`
+  (caption-cues.json, obrigatório para a legenda empilhada) e `face_track.py`
+  (track.json).
+- Eles vieram da skill esperando o formato do `transcribe.py`, com uma lista
+  `words` no topo. O Desktop transcreve com o WhisperX empacotado, que emite
+  `segments[].words[]` com a chave `word`. O resultado eram **zero palavras em
+  silêncio**, e o agente acabava inventando o JSON. `_transcript.py` normaliza
+  os dois formatos; `npm run test:helpers` cobre isso comparando as duas
+  entradas.
+- O tracking de rosto agora funciona: `opencv-python-headless>=4.10,<5` entrou
+  no `python/whisperx/pyproject.toml`. A faixa é obrigatória — o OpenCV 5
+  removeu `CascadeClassifier` e os cascades Haar, que são a base do detector.
+  Verificado num trecho real: 120 frames, 100% de detecção.
+- Trocar o lock exige rodar `npm run stage:python-whisperx` para o `cv2`
+  entrar no runtime empacotado.
+
 Pendências conhecidas deste marco:
 
-- O tracking de rosto usa OpenCV e o Python empacotado **não tem `cv2`**;
-  o elemento não roda. `track.json` precisa existir mesmo assim.
-- Os helpers Python da skill (`captions_for_remotion.py`, `caption_style.py`,
-  `face_track.py`) não foram portados: hoje o agente precisa produzir
-  `captions.json`, `segments.json` e `caption-cues.json` por conta própria.
 - As miniaturas da aba Estilos (`src/styles.css`) ainda são uma impressão
   aproximada; a especificação fiel está em `src/brand/preview-base.css`.
+- O `segments.json` continua por conta do agente (limites reais dos cortes via
+  `ffprobe -count_frames`); não há helper para isso.
 
 ## 11. Timeline como editor real — estado na 0.6.0
 
