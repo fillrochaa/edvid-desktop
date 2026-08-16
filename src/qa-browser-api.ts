@@ -128,6 +128,9 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     },
     ensureWhisperModel: async () => ({ status: 'ready', model: 'small' }),
     onWhisperModelState: () => () => {},
+    ensureRemotionRuntime: async () => ({ status: 'ready' }),
+    onRemotionRuntimeState: () => () => {},
+    scaffoldRemotionProject: async () => {},
     sendCodexMessage: async ({ text }) => {
       turnNumber += 1;
       const threadId = 'qa-thread';

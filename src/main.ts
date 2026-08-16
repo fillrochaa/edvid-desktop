@@ -2,7 +2,17 @@ import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'elect
 import started from 'electron-squirrel-startup';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
+import {
+  cp,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CodexAppServer } from './codex-app-server';
@@ -18,6 +28,7 @@ import type {
   ProjectStyleState,
   ProjectTimeline,
   ProjectWorkspace,
+  RemotionRuntimeState,
   RuntimeCheck,
   RuntimeName,
   TimelineModel,
@@ -908,6 +919,196 @@ function runModelDownload(python: string, hubCache: string): Promise<void> {
   });
 }
 
+// --- Motor de render da Fase 2 ---------------------------------------------
+// O Remotion nao cabe no instalador (node_modules + Chrome passam de 700 MB
+// por plataforma), entao o aplicativo instala uma vez em userData e todos os
+// projetos compartilham. O agente nunca roda npm install.
+
+function remotionRuntimeDirectory(): string {
+  return path.join(app.getPath('userData'), 'runtime', 'remotion');
+}
+
+function remotionTemplateDirectory(): string {
+  const resourcesRoot = app.isPackaged
+    ? process.resourcesPath
+    : path.join(app.getAppPath(), 'resources');
+  return path.join(resourcesRoot, 'remotion-template');
+}
+
+let remotionInstall: Promise<RemotionRuntimeState> | null = null;
+let remotionState: RemotionRuntimeState = { status: 'unknown' };
+
+function broadcastRemotionState(state: RemotionRuntimeState): void {
+  remotionState = state;
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('remotion:state', state);
+  }
+}
+
+function runCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+  extraEnvironment: NodeJS.ProcessEnv = {},
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: { ...process.env, ...extraEnvironment },
+    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      if (stderr.length < 32_768) stderr += chunk;
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim().split(/\r?\n/).at(-1) || `Comando falhou (${code}).`));
+    });
+  });
+}
+
+async function remotionRuntimeIsReady(): Promise<boolean> {
+  const runtime = remotionRuntimeDirectory();
+  const binary = path.join(
+    runtime,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'remotion.cmd' : 'remotion',
+  );
+  try {
+    await stat(binary);
+  } catch {
+    return false;
+  }
+  // O Chrome nao vem do npm: sem ele o primeiro render tentaria a rede.
+  try {
+    await stat(path.join(runtime, 'node_modules', '.remotion', 'chrome-headless-shell'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ensureRemotionRuntime(): Promise<RemotionRuntimeState> {
+  if (remotionInstall) return remotionInstall;
+  remotionInstall = (async (): Promise<RemotionRuntimeState> => {
+    const runtime = remotionRuntimeDirectory();
+    if (await remotionRuntimeIsReady()) return { status: 'ready' };
+
+    const runtimeContext = {
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged,
+      platform: process.platform,
+      arch: process.arch,
+    };
+    const node = resolveRuntime('node', runtimeContext);
+    const npm = resolveRuntime('npm', runtimeContext);
+    if (!node.command || !npm.command) {
+      return { status: 'error', error: 'Node interno nao esta disponivel nesta plataforma.' };
+    }
+
+    await mkdir(runtime, { recursive: true });
+    // Somente as dependencias de producao: typescript e @types/react so
+    // servem ao editor, e o Remotion compila o TSX com o proprio bundler.
+    const template = JSON.parse(
+      await readFile(path.join(remotionTemplateDirectory(), 'package.json'), 'utf8'),
+    ) as { dependencies?: Record<string, string> };
+    await writeFile(
+      path.join(runtime, 'package.json'),
+      `${JSON.stringify(
+        {
+          name: 'edvid-remotion-runtime',
+          version: '1.0.0',
+          private: true,
+          dependencies: template.dependencies ?? {},
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const nodeDirectory = path.dirname(node.command);
+    const environment = {
+      PATH: [nodeDirectory, process.env.PATH].filter(Boolean).join(path.delimiter),
+      npm_config_audit: 'false',
+      npm_config_fund: 'false',
+      npm_config_update_notifier: 'false',
+    };
+    const ticker = setInterval(() => {
+      void directorySize(path.join(runtime, 'node_modules')).then((installedBytes) => {
+        if (remotionState.status === 'installing') {
+          broadcastRemotionState({ ...remotionState, installedBytes });
+        }
+      });
+    }, 900);
+    try {
+      broadcastRemotionState({ status: 'installing', step: 'dependencias', installedBytes: 0 });
+      await runCommand(
+        node.command,
+        [npm.command, 'install', '--omit=dev', '--no-audit', '--no-fund'],
+        runtime,
+        environment,
+      );
+      broadcastRemotionState({ status: 'installing', step: 'navegador' });
+      // Busca o Chrome headless shell agora, com progresso, em vez de deixar
+      // o primeiro render travar pedindo rede dentro do sandbox.
+      await runCommand(
+        node.command,
+        [path.join(runtime, 'node_modules', '@remotion', 'cli', 'remotion-cli.js'), 'browser', 'ensure'],
+        runtime,
+        environment,
+      );
+      return { status: 'ready' };
+    } catch (error) {
+      remotionInstall = null; // Rede pode falhar; permite tentar de novo.
+      return {
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      clearInterval(ticker);
+    }
+  })().then((state) => {
+    broadcastRemotionState(state);
+    return state;
+  });
+  return remotionInstall;
+}
+
+// Monta o projeto Remotion dentro do video, ligando o node_modules
+// compartilhado. O agente so preenche public/ e roda o render.
+async function scaffoldRemotionProject(projectDirectory: string): Promise<void> {
+  const template = remotionTemplateDirectory();
+  const destination = path.join(projectDirectory, 'edit', 'remotion');
+  await mkdir(destination, { recursive: true });
+  for (const entry of ['src', 'remotion.config.ts', 'tsconfig.json', 'package.json']) {
+    await cp(path.join(template, entry), path.join(destination, entry), {
+      recursive: true,
+      force: true,
+    });
+  }
+  // public/ guarda os dados da edicao: nunca sobrescrever o que ja existe.
+  await cp(path.join(template, 'public'), path.join(destination, 'public'), {
+    recursive: true,
+    force: false,
+    errorOnExist: false,
+  });
+  const link = path.join(destination, 'node_modules');
+  const target = path.join(remotionRuntimeDirectory(), 'node_modules');
+  // lstat, nao stat: um link apontando para um runtime removido precisa ser
+  // refeito, e stat seguiria o link e falharia de um jeito que mascara isso.
+  try {
+    await lstat(link);
+  } catch {
+    await symlink(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+  }
+}
+
 function ensureWhisperModel(): Promise<WhisperModelState> {
   if (modelPrefetch) return modelPrefetch;
   modelPrefetch = (async (): Promise<WhisperModelState> => {
@@ -1209,6 +1410,16 @@ function registerIpcHandlers(): void {
   );
 
   ipcMain.handle('whisper-model:ensure', () => ensureWhisperModel());
+
+  ipcMain.handle('remotion:ensure', () => ensureRemotionRuntime());
+
+  ipcMain.handle('remotion:scaffold', async (_event, input: { directory?: string }) => {
+    const requestedDirectory = path.resolve(input.directory?.trim() ?? '');
+    if (!selectedProjectDirectories.has(requestedDirectory)) {
+      throw new Error('Abra o projeto antes de preparar a Fase 2.');
+    }
+    await scaffoldRemotionProject(requestedDirectory);
+  });
 
   ipcMain.handle('codex:account', () => getCodexAppServer().readAccount());
 

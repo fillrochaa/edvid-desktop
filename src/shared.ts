@@ -130,6 +130,13 @@ export type WhisperModelState = {
   error?: string;
 };
 
+export type RemotionRuntimeState = {
+  status: 'unknown' | 'installing' | 'ready' | 'error';
+  step?: 'dependencias' | 'navegador';
+  installedBytes?: number;
+  error?: string;
+};
+
 export type CodexAccount = {
   type: 'chatgpt' | 'apiKey' | 'amazonBedrock';
   email: string | null;
@@ -210,6 +217,11 @@ export type EdvidDesktopApi = {
   ) => Promise<void>;
   ensureWhisperModel: () => Promise<WhisperModelState>;
   onWhisperModelState: (listener: (state: WhisperModelState) => void) => () => void;
+  ensureRemotionRuntime: () => Promise<RemotionRuntimeState>;
+  onRemotionRuntimeState: (
+    listener: (state: RemotionRuntimeState) => void,
+  ) => () => void;
+  scaffoldRemotionProject: (directory: string) => Promise<void>;
   sendCodexMessage: (input: CodexSendMessageInput) => Promise<CodexSendMessageResult>;
   interruptCodexTurn: (threadId: string, turnId: string) => Promise<void>;
   respondToCodexApproval: (

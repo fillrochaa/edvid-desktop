@@ -1,5 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { CodexEvent, EdvidDesktopApi, WhisperModelState } from './shared';
+import type {
+  CodexEvent,
+  EdvidDesktopApi,
+  RemotionRuntimeState,
+  WhisperModelState,
+} from './shared';
 
 const api: EdvidDesktopApi = {
   getDesktopInfo: () => ipcRenderer.invoke('desktop:get-info'),
@@ -21,6 +26,15 @@ const api: EdvidDesktopApi = {
     ipcRenderer.on('whisper-model:state', handler);
     return () => ipcRenderer.removeListener('whisper-model:state', handler);
   },
+  ensureRemotionRuntime: () => ipcRenderer.invoke('remotion:ensure'),
+  onRemotionRuntimeState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: RemotionRuntimeState) =>
+      listener(state);
+    ipcRenderer.on('remotion:state', handler);
+    return () => ipcRenderer.removeListener('remotion:state', handler);
+  },
+  scaffoldRemotionProject: (directory) =>
+    ipcRenderer.invoke('remotion:scaffold', { directory }),
   sendCodexMessage: (input) => ipcRenderer.invoke('codex:message', input),
   interruptCodexTurn: (threadId, turnId) =>
     ipcRenderer.invoke('codex:interrupt', { threadId, turnId }),

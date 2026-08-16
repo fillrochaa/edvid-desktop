@@ -318,6 +318,62 @@ Marcações de correção:
 - O botão **Aplicar** envia todas as correções em uma única passagem.
 - O agente deve atualizar o EDL e o preview depois de aplicar as correções.
 
+## 10b. Renderizador da Fase 2 (Remotion) — 0.7.0
+
+Até a 0.6.1 o Desktop não tinha renderizador de Fase 2 nem a especificação dos
+estilos. O agente, sem a skill e sem rede, improvisava: legendas `.ass` em
+Arial queimadas pelo FFmpeg e "placas" PNG geradas com PIL. O resultado não
+tinha relação com as escolhas da aba Estilos, e estilos animados (karaokê,
+empilhada, dispersa) eram impossíveis por construção.
+
+Como funciona agora:
+
+- **Template embutido** em `resources/remotion-template/` (304 KB): é o
+  `assets/shortform` da skill sem `node_modules`. Vai no pacote por
+  `extraResource`. O código do template é a especificação dos estilos —
+  fontes, tamanhos, easings e durações.
+- **Runtime instalado pelo aplicativo**, uma vez, em
+  `userData/runtime/remotion/`, com o Node/npm empacotados. São ~434 MB:
+  241 MB de `node_modules` (`--omit=dev` corta TypeScript e `@types/react`)
+  e 193 MB do Chrome Headless Shell, buscado por `remotion browser ensure`.
+  Todos os projetos compartilham esse runtime.
+- **Scaffold por projeto**: `scaffoldRemotionProject` copia o template para
+  `edit/remotion/` e cria um symlink `node_modules` para o runtime
+  compartilhado (junction no Windows). `public/` nunca é sobrescrito.
+- O agente só preenche `public/*.json` e roda
+  `node_modules/.bin/remotion render Reels`. As instruções proíbem
+  explicitamente npm install, legenda queimada e imagem gerada em Python.
+
+Decisões apuradas com teste, não por suposição:
+
+- O `thread/start` não aceita sandbox parametrizado, e **o Electron não serve
+  como navegador de render**: ele não expõe CDP com `--headless`, e o
+  Remotion morre em timeout de 25 s. Um Chrome instalado do usuário funciona
+  via `--browser-executable` (render visualmente idêntico, difere só no
+  antialiasing dos glifos), mas depender disso tira o determinismo.
+- Empacotar tudo levaria o instalador de 739 MB para ~1,2 GB por plataforma,
+  com compositor e Chrome próprios em cada uma — inviável antes de validar o
+  Windows. Daí a instalação sob demanda, no mesmo padrão do modelo do
+  WhisperX.
+- **Bug herdado da skill, corrigido aqui**: a cor de destaque estava literal
+  (`#ff5200`) em três pontos do template e a escolha do usuário era ignorada
+  no render. Agora `hook.accent` alimenta realce e misto, e
+  `captions.accent` alimenta a linha serifada da empilhada. Verificado
+  renderizando com `#0b72b1`.
+- O template embutido é uma **cópia** da skill. Mudanças de estilo na skill
+  não chegam sozinhas ao Desktop; ao sincronizar, reaplicar a
+  parametrização do accent.
+
+Pendências conhecidas deste marco:
+
+- O tracking de rosto usa OpenCV e o Python empacotado **não tem `cv2`**;
+  o elemento não roda. `track.json` precisa existir mesmo assim.
+- Os helpers Python da skill (`captions_for_remotion.py`, `caption_style.py`,
+  `face_track.py`) não foram portados: hoje o agente precisa produzir
+  `captions.json`, `segments.json` e `caption-cues.json` por conta própria.
+- As miniaturas da aba Estilos (`src/styles.css`) ainda são uma impressão
+  aproximada; a especificação fiel está em `src/brand/preview-base.css`.
+
 ## 11. Timeline como editor real — estado na 0.6.0
 
 A primeira versão do editor não destrutivo está **implementada** na 0.6.0.
@@ -396,7 +452,7 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.6.1**.
+Versão corrente: **0.7.0**.
 
 Artefato local atual:
 
@@ -445,6 +501,8 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.7.0: Fase 2 renderizada pelo Remotion — template embutido com accent real,
+  runtime instalado pelo aplicativo e agente proibido de improvisar pipeline.
 - 0.6.1: transcrição sem aprovação (caches em app data, `writable_roots` e
   modelo baixado pelo aplicativo), agulha volta a seguir o clique sobre um
   clipe e o preview passa a mostrar o render mais recente da Fase 2.

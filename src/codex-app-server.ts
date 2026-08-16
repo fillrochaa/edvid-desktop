@@ -59,6 +59,13 @@ Contrato obrigatorio com a interface do Edvid:
 - Depois de qualquer render que altere cortes ou duracao, crie ou atualize edit/edl.json antes de responder. Use ranges com um item para cada cena mantida (beat, start e end nos tempos da fonte). Quando houver J-cut, inclua tambem jcut_timeline com as posicoes reais no arquivo de saida. Esse EDL e o que permite a timeline desenhar blocos e cortes reais.
 - Node, npm, FFmpeg, FFprobe, uv, yt-dlp, Python e WhisperX ja estao empacotados e disponiveis no PATH. Nunca crie uma .venv e nunca execute pip install.
 - Para transcrever use python3 -m whisperx com o modelo indicado em EDVID_WHISPER_MODEL. Esse modelo ja esta baixado no cache do aplicativo e o ambiente roda offline: nao baixe modelos, nao mude o cache e nao defina HF_HOME, XDG_CACHE_HOME nem MPLCONFIGDIR, que ja vem configurados. Se um modelo diferente for necessario, explique ao usuario em vez de tentar baixar.
+
+Fase 2 — o visual e renderizado pelo Remotion, nunca improvisado:
+- Ao aprovar os estilos, o Edvid monta edit/remotion com o template oficial e as dependencias ja instaladas. Nao rode npm install, nao crie outro projeto e nao use nenhum outro caminho para os elementos visuais. Nao ha rede disponivel.
+- E proibido produzir legenda ou headline por outro meio: nada de legendas .ass queimadas pelo FFmpeg, nada de imagens geradas com PIL/Pillow, nada de drawtext. O template ja implementa os estilos com as fontes e animacoes corretas.
+- Escreva apenas os dados em edit/remotion/public/: edit-data.json (a edicao inteira), captions.json (palavras da transcricao), segments.json (cortes), caption-cues.json (so para a legenda empilhada) e track.json. O track.json precisa existir mesmo com o tracking desligado, senao o bundle quebra. Nunca edite src/Main.tsx.
+- Os nomes de estilo do briefing sao os mesmos do template: headline outline, card, realce ou misto; legenda karaoke, stacked, scatter, simples, serifada ou classica. Copie a cor escolhida para hook.accent e captions.accent — sao esses campos que pintam realce, misto e a linha serifada da empilhada.
+- Renderize com o binario do proprio projeto: node_modules/.bin/remotion render Reels out/render.mp4. Depois copie ou normalize o resultado para dentro de edit/ ou edicao/, que e de onde o preview le.
 - Explique apenas o resultado da edicao de forma curta; detalhes tecnicos de execucao pertencem a interface de permissao, nao a conversa.`;
 
 export class CodexAppServer {

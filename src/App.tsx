@@ -18,6 +18,7 @@ import type {
   DesktopInfo,
   ProjectSummary,
   ProjectWorkspace,
+  RemotionRuntimeState,
   RuntimeCheck,
   TimelineClip,
   TimelineModel,
@@ -1436,12 +1437,14 @@ function StyleWorkspace({
   onApply,
   canApply,
   applying,
+  runtime,
 }: {
   style: StyleSetup;
   onChange: (style: StyleSetup) => void;
   onApply: () => void;
   canApply: boolean;
   applying: boolean;
+  runtime: RemotionRuntimeState;
 }) {
   const accentUsed = style.headline === 'realce' || style.headline === 'misto' || style.captions === 'stacked';
   const updateElements = (key: keyof StyleSetup['elements']) => {
@@ -1528,9 +1531,20 @@ function StyleWorkspace({
         </section>
       </div>
       <div className="style-footer">
-        <div><strong>Briefing visual pronto</strong><span>O Edvid receberá também tudo o que ficou desmarcado.</span></div>
-        <button type="button" className="btn primary apply-style" onClick={onApply} disabled={!canApply || applying}>
-          <Icon name="sparkles" /> {applying ? 'Enviando...' : 'Salvar e aplicar'}
+        {runtime.status === 'installing' ? (
+          <div>
+            <strong>Preparando o motor de render</strong>
+            <span>
+              {runtime.step === 'navegador'
+                ? 'Baixando o navegador de render. Isso acontece uma única vez.'
+                : `Instalando as dependências${runtime.installedBytes ? ` · ${Math.round(runtime.installedBytes / 1e6)} MB` : ''}. Isso acontece uma única vez.`}
+            </span>
+          </div>
+        ) : (
+          <div><strong>Briefing visual pronto</strong><span>O Edvid receberá também tudo o que ficou desmarcado.</span></div>
+        )}
+        <button type="button" className="btn primary apply-style" onClick={onApply} disabled={!canApply || applying || runtime.status === 'installing'}>
+          <Icon name="sparkles" /> {runtime.status === 'installing' ? 'Preparando...' : applying ? 'Enviando...' : 'Salvar e aplicar'}
         </button>
       </div>
     </div>
@@ -1563,6 +1577,9 @@ export function App() {
   const [whisperModel, setWhisperModel] = useState<WhisperModelState>({
     status: 'unknown',
     model: '',
+  });
+  const [remotionRuntime, setRemotionRuntime] = useState<RemotionRuntimeState>({
+    status: 'unknown',
   });
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const activeProjectDirectoryRef = useRef<string | null>(null);
@@ -1792,6 +1809,25 @@ export function App() {
 
   async function applyStyleSelection() {
     if (!projectDirectory) return;
+    // A Fase 2 renderiza no Remotion. O aplicativo prepara o motor e monta o
+    // projeto antes de falar com o agente, para ele nunca precisar de rede
+    // nem inventar um pipeline proprio.
+    const runtime = await window.edvidDesktop.ensureRemotionRuntime();
+    setRemotionRuntime(runtime);
+    if (runtime.status !== 'ready') {
+      setMessages((current) => [...current, {
+        id: `error:${Date.now()}`,
+        role: 'system',
+        text: 'Não foi possível preparar o motor de render da Fase 2. Verifique a conexão e tente novamente.',
+      }]);
+      return;
+    }
+    try {
+      await window.edvidDesktop.scaffoldRemotionProject(projectDirectory);
+    } catch (error) {
+      setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: errorMessage(error) }]);
+      return;
+    }
     localStorage.setItem(styleStorageKey(projectDirectory), JSON.stringify(style));
     setStyleApplied(true);
     const enabled = Object.entries(style.elements).filter(([, value]) => value).map(([key]) => key).join(', ') || 'nenhum';
@@ -1805,6 +1841,10 @@ export function App() {
       `- Elementos incluídos: ${enabled}`,
       `- Elementos fora: ${disabled}`,
       `- Observação: ${style.note.trim() || 'nenhuma'}`,
+      '',
+      'O Edvid já montou o projeto Remotion em edit/remotion, com as dependências instaladas.',
+      'Renderize a Fase 2 por ele, nunca com legendas queimadas por FFmpeg nem imagens geradas em Python.',
+      `Escreva as escolhas acima em edit/remotion/public/edit-data.json, incluindo hook.accent e captions.accent com ${style.accent}.`,
       'Use essas seleções como briefing definitivo e não peça para eu escolher os estilos novamente no chat.',
     ].join('\n');
     if (await dispatchMessage(prompt)) setWorkTab('edit');
@@ -1919,6 +1959,7 @@ export function App() {
   useEffect(() => {
     const unsubscribe = window.edvidDesktop.onCodexEvent(handleCodexEvent);
     const unsubscribeModel = window.edvidDesktop.onWhisperModelState(setWhisperModel);
+    const unsubscribeRemotion = window.edvidDesktop.onRemotionRuntimeState(setRemotionRuntime);
     if (!booted.current) {
       booted.current = true;
       void window.edvidDesktop.getDesktopInfo().then(setDesktopInfo);
@@ -1942,6 +1983,7 @@ export function App() {
     return () => {
       unsubscribe();
       unsubscribeModel();
+      unsubscribeRemotion();
     };
   }, []);
 
@@ -2100,7 +2142,7 @@ export function App() {
                   onTimelineModelChange={handleTimelineModelChange}
                   onApplyTimelineEdits={applyTimelineEdits}
                 />
-              ) : <StyleWorkspace style={style} onChange={setStyle} onApply={applyStyleSelection} canApply={canChat} applying={sending} />}
+              ) : <StyleWorkspace style={style} onChange={setStyle} onApply={applyStyleSelection} canApply={canChat} applying={sending} runtime={remotionRuntime} />}
             </div>
           </section>
         </div>
