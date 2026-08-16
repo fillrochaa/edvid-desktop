@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-16 (0.7.1 — Fase 2 pelo Remotion, leitura tolerante do EDL)
+Atualizado em: 2026-08-16 (0.7.2 — Fase 2 pelo Remotion, leitura tolerante do EDL)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -491,7 +491,7 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.7.1**.
+Versão corrente: **0.7.2**.
 
 Artefato local atual:
 
@@ -540,6 +540,9 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.7.2: a fonte do EDL deixa de cair na mídia do preview — os ranges estão
+  no tempo do arquivo original e a prévia buscava esses tempos no render já
+  cortado. Marcadores de corte removidos da timeline.
 - 0.7.1: leitura tolerante do EDL — um "beat" numérico escrito pelo agente
   derrubava o refresh do workspace a cada turno.
 - 0.7.0: Fase 2 renderizada pelo Remotion — template embutido com accent real,

@@ -602,7 +602,9 @@ async function buildProjectSources(
       });
       continue;
     }
-    const mappedPath = typeof edlSources[sourceId] === 'string' ? edlSources[sourceId].trim() : '';
+    // O id pode ser uma chave do mapa "sources" ou o proprio nome do arquivo,
+    // quando o EDL usa a forma abreviada "source": "IMG_6164.MOV".
+    const mappedPath = asText(edlSources[sourceId]) || asText(sourceId);
     const absolutePath = mappedPath
       ? path.isAbsolute(mappedPath)
         ? path.resolve(mappedPath)

@@ -11,6 +11,8 @@ import type {
 export const VIDEO_TRACK_ID = 'video';
 export const VOICE_TRACK_ID = 'voice';
 export const PREVIEW_SOURCE_ID = 'preview';
+// Fonte de um EDL que nao declara arquivo. Nao resolve para nada, de proposito.
+export const UNKNOWN_SOURCE_ID = 'fonte-desconhecida';
 export const MIN_CLIP_DURATION = 0.04;
 const TIME_EPSILON = 0.001;
 const MAX_CLIPS = 1000;
@@ -35,6 +37,9 @@ export type EdlJcutEntry = {
 
 export type EdlDocument = {
   sources?: Record<string, string>;
+  // Forma abreviada, usada quando o corte vem de um arquivo so: "source":
+  // "IMG_6164.MOV". Ignorar isso fazia os clipes cairem na midia do preview.
+  source?: string;
   ranges?: EdlRange[];
   jcut_timeline?: EdlJcutEntry[];
 };
@@ -159,8 +164,12 @@ export function migrateEdlToModel(edl: EdlDocument, fps: number): TimelineModel 
     );
   if (paired.length === 0 || paired.length > MAX_CLIPS / 2) return null;
 
+  // Nunca cair em PREVIEW_SOURCE_ID aqui: os ranges do EDL estao no tempo do
+  // ARQUIVO-FONTE, enquanto o preview e o render ja cortado. Apontar um para o
+  // outro faz a previa buscar 348s num arquivo de 154s. Sem fonte declarada e
+  // melhor a fonte ficar indisponivel do que exibir conteudo errado.
   const sourceIds = Object.keys(edl.sources ?? {});
-  const fallbackSourceId = sourceIds[0] ?? PREVIEW_SOURCE_ID;
+  const fallbackSourceId = sourceIds[0] || asText(edl.source) || UNKNOWN_SOURCE_ID;
 
   const clips: TimelineClip[] = [];
   let outputCursor = 0;

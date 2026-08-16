@@ -151,6 +151,33 @@ try {
     assert.equal(sortedTrackClips(modelo, VIDEO_TRACK_ID)[0].label, 'Take 01');
   }
 
+  // --- A fonte do EDL nunca pode virar a mídia do preview -------------------
+  // Regressão real: o EDL usava a forma abreviada "source": "IMG_6164.MOV" e
+  // nós só líamos o mapa "sources". Os clipes caíam em PREVIEW_SOURCE_ID, que
+  // resolve para o render já cortado — e como os ranges estão no tempo do
+  // arquivo ORIGINAL (até 348s num render de 154s), a prévia buscava tempos
+  // inexistentes e a reprodução ficava sem sentido.
+  const edlAbreviado = {
+    source: 'IMG_6164.MOV',
+    ranges: [
+      { beat: 1, start: 0.769, end: 4.758 },
+      { beat: 32, start: 345.215, end: 348.507 },
+    ],
+  };
+  const migradoAbreviado = migrateEdlToModel(edlAbreviado, 30);
+  const fontesUsadas = new Set(migradoAbreviado.clips.map((clip) => clip.sourceId));
+  assert.deepEqual([...fontesUsadas], ['IMG_6164.MOV']);
+  assert.ok(!fontesUsadas.has('preview'), 'o EDL nunca pode apontar para o render');
+
+  // Sem fonte declarada, a fonte fica desconhecida em vez de virar o render.
+  const semFonte = migrateEdlToModel({ ranges: [{ start: 0, end: 2 }] }, 30);
+  assert.equal(sortedTrackClips(semFonte, VIDEO_TRACK_ID)[0].sourceId, 'fonte-desconhecida');
+
+  // O modelo derivado de segmentos continua usando o render, e deve: esses
+  // tempos já estão na timeline de saída.
+  const porSegmentos = modelFromSegments([{ label: 'Cena', start: 0, duration: 2 }], 30);
+  assert.equal(sortedTrackClips(porSegmentos, VIDEO_TRACK_ID)[0].sourceId, 'preview');
+
   // O mesmo vale para source, que vira o id da fonte.
   const fonteNumerica = migrateEdlToModel(
     { sources: { '7': '/tmp/a.mov' }, ranges: [{ source: 7, start: 0, end: 2 }] },

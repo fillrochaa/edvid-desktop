@@ -1092,14 +1092,8 @@ function EditorWorkspace({
     return () => window.removeEventListener('keydown', handleEditorShortcut);
   }, [corrections, draftRange, markIn, media?.fps, media?.url, model, selectedClipId, dirty, zoom, mapped, effectiveDuration, fps]);
 
-  const visibleTrackCount = 2
-    + (phase === 2 && style.headline !== 'none' ? 1 : 0)
-    + (phase === 2 && style.captions !== 'none' ? 1 : 0)
-    + (phase === 2 && style.edit !== 'limpa' ? 1 : 0)
-    + (phase === 2 && style.elements.musicAI ? 1 : 0);
   const trackStyle = {
     '--timeline-playhead-left': timelinePoint(progress),
-    '--timeline-track-count': visibleTrackCount,
   } as CSSProperties;
   const orientation = media?.orientation ?? 'horizontal';
   const displayedSegments = model
@@ -1353,14 +1347,6 @@ function EditorWorkspace({
                   <Icon name="trash" />
                 </button>
               </div>
-            ))}
-            {displayedSegments.slice(1).map((segment, index) => (
-              <div
-                className="timeline-cut-marker"
-                key={`cut:${segment.start}:${index}`}
-                style={{ '--cut-left': timelinePoint(effectiveDuration > 0 ? segment.start / effectiveDuration : 0) } as CSSProperties}
-                title={`Corte em ${formatTime(segment.start)}`}
-              />
             ))}
             {markIn !== null && (
               <div

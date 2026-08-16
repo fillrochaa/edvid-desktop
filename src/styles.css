@@ -232,8 +232,6 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .timeline-correction-range:hover .delete-correction, .delete-correction:focus-visible { opacity: 1; transform: none; }
 .delete-correction:hover { color: #fff; background: rgba(151,34,53,.95); }
 .delete-correction .icon { width: 10px; height: 10px; }
-.timeline-cut-marker { position: absolute; top: 27px; left: var(--cut-left); z-index: 7; width: 1px; height: calc(var(--timeline-track-count) * 44px - 6px); border-left: 1px dashed rgba(255,151,72,.62); pointer-events: none; }
-.timeline-cut-marker::before { content: ''; position: absolute; top: 1px; left: -3px; width: 6px; height: 6px; border: 1px solid rgba(255,151,72,.8); background: #17100b; transform: rotate(45deg); }
 .timeline-in-marker { position: absolute; top: 27px; bottom: 6px; left: var(--marker-left); z-index: 9; width: 1px; background: #61e3e5; box-shadow: 0 0 9px rgba(9,181,183,.5); pointer-events: none; }
 .timeline-in-marker > span { position: absolute; top: 1px; left: 4px; padding: 2px 4px; border-radius: 4px; color: #b8ffff; background: rgba(7,55,58,.94); font-size: 5.8px; font-weight: 900; }
 .timeline-transport { min-height: 50px; flex: 0 0 50px; display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: center; gap: 9px; padding: 7px 10px; border-top: 1px solid var(--stroke); background: linear-gradient(180deg, rgba(255,255,255,.018), rgba(4,7,10,.58)); }
