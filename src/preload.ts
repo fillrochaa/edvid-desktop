@@ -13,6 +13,8 @@ const api: EdvidDesktopApi = {
   loginWithChatGPT: () => ipcRenderer.invoke('codex:login'),
   cancelChatGPTLogin: () => ipcRenderer.invoke('codex:login-cancel'),
   logoutCodex: () => ipcRenderer.invoke('codex:logout'),
+  saveTimelineModel: (directory, model, loadStamp) =>
+    ipcRenderer.invoke('timeline:save', { directory, model, loadStamp }),
   sendCodexMessage: (input) => ipcRenderer.invoke('codex:message', input),
   interruptCodexTurn: (threadId, turnId) =>
     ipcRenderer.invoke('codex:interrupt', { threadId, turnId }),

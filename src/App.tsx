@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -18,7 +19,33 @@ import type {
   ProjectSummary,
   ProjectWorkspace,
   RuntimeCheck,
+  TimelineClip,
+  TimelineModel,
 } from './shared';
+import {
+  VIDEO_TRACK_ID,
+  VOICE_TRACK_ID,
+  applyTrim,
+  clipDuration,
+  clipEnd,
+  deleteClipLeaveGap,
+  deriveSegments,
+  edlRangesFromModel,
+  modelsEqual,
+  nextProgrammeIndexAfter,
+  playbackProgramme,
+  programmeIndexAt,
+  razorAtTime,
+  rippleDeleteClip,
+  round3,
+  snapCandidateTimes,
+  snapTime,
+  sortedTrackClips,
+  timelineModelDuration,
+  trimAllowedDelta,
+  type PlaybackSegment,
+  type TrimEdge,
+} from './timeline-model';
 
 const labels: Record<RuntimeCheck['name'], string> = {
   node: 'Node.js',
@@ -88,6 +115,7 @@ type IconName =
   | 'pause'
   | 'pin'
   | 'play'
+  | 'scissors'
   | 'settings'
   | 'skipBack'
   | 'skipForward'
@@ -158,6 +186,7 @@ function Icon({ name }: { name: IconName }) {
     pause: <><path d="M5.2 3v10M10.8 3v10" /></>,
     pin: <path d="m5 2 6 1-1.4 3 2.1 2.1-3 1.1-2.5 4.5-.5-4.9-3-1.4 2.4-1.8z" />,
     play: <path d="m5 2.5 8 5.5-8 5.5z" />,
+    scissors: <><circle cx="4.2" cy="4.4" r="1.9" /><circle cx="4.2" cy="11.6" r="1.9" /><path d="m5.7 5.6 8 6.6M5.7 10.4l8-6.6" /></>,
     settings: <><circle cx="8" cy="8" r="2.2" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" /></>,
     skipBack: <><path d="M4 3v10M12.8 3.2 5.4 8l7.4 4.8z" /></>,
     skipForward: <><path d="M12 3v10M3.2 3.2 10.6 8l-7.4 4.8z" /></>,
@@ -323,6 +352,8 @@ function EditorWorkspace({
   onCorrectionsChange,
   onApplyCorrections,
   applyingCorrections,
+  onTimelineModelChange,
+  onApplyTimelineEdits,
 }: {
   workspace: ProjectWorkspace | null;
   style: StyleSetup;
@@ -331,6 +362,8 @@ function EditorWorkspace({
   onCorrectionsChange: (corrections: CorrectionRange[]) => void;
   onApplyCorrections: (corrections: CorrectionRange[]) => Promise<boolean>;
   applyingCorrections: boolean;
+  onTimelineModelChange: (model: TimelineModel, commit: boolean) => void;
+  onApplyTimelineEdits: () => Promise<boolean>;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const currentTimeRef = useRef(0);
@@ -340,17 +373,98 @@ function EditorWorkspace({
   const [markIn, setMarkIn] = useState<number | null>(null);
   const [draftRange, setDraftRange] = useState<{ start: number; end: number } | null>(null);
   const [draftNote, setDraftNote] = useState('');
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
+  const [inGap, setInGap] = useState(false);
   const correctionHistoryRef = useRef<CorrectionRange[][]>([]);
+  const modelHistoryRef = useRef<TimelineModel[]>([]);
+  const modelFutureRef = useRef<TimelineModel[]>([]);
+  const actionOrderRef = useRef<Array<'model' | 'corrections'>>([]);
+  const baselineModelRef = useRef<TimelineModel | null>(null);
+  const baselineKeyRef = useRef<string | null>(null);
+  const modelRef = useRef<TimelineModel | null>(null);
+  const mappedRef = useRef(false);
+  const playingRef = useRef(false);
+  const inGapRef = useRef(false);
+  const programmeRef = useRef<PlaybackSegment[]>([]);
+  const mappedIndexRef = useRef(-1);
+  const gapClockRef = useRef<number | null>(null);
+  const pendingVideoSeekRef = useRef<{ sourceTime: number; resume: boolean } | null>(null);
+  const trimDragRef = useRef<{
+    clipId: string;
+    edge: TrimEdge;
+    baseModel: TimelineModel;
+    originX: number;
+    secondsPerPixel: number;
+    appliedDelta: number;
+  } | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const zoomAnchorRef = useRef<{ progress: number; viewportX: number } | null>(null);
+  const activeSourceIdRef = useRef<string | null>(null);
+  const timelineSeekPointerRef = useRef<number | null>(null);
+  const seekRef = useRef<(value: number) => void>(() => {});
+  const setVideoToProgrammeRef = useRef<(index: number, sourceTime: number, resume: boolean) => void>(() => {});
+
   const media = workspace?.media ?? null;
+  const model = workspace?.timelineModel ?? null;
+  const synced = workspace?.timelineModelSynced ?? true;
+  const sources = workspace?.sources ?? [];
+  const sourceById = useMemo(
+    () => new Map(sources.map((source) => [source.id, source])),
+    [sources],
+  );
+  const sourceDurations = useMemo(
+    () => Object.fromEntries(sources.map((source) => [source.id, source.duration])),
+    [sources],
+  );
+  modelRef.current = model;
+
+  // A referência de comparação para "há edições pendentes" é o modelo recebido
+  // ao abrir/atualizar o projeto. O token da mídia muda a cada carga.
+  const loadKey = `${workspace?.project.directory ?? ''}:${media?.url ?? ''}`;
+  if (baselineKeyRef.current !== loadKey) {
+    baselineKeyRef.current = loadKey;
+    baselineModelRef.current = model;
+  }
+
   const timelineSegments = workspace?.timeline?.segments ?? [];
   const timelineDuration = timelineSegments.reduce(
     (maximum, segment) => Math.max(maximum, segment.start + segment.duration),
     0,
   );
   const [duration, setDuration] = useState(workspace?.media?.duration ?? timelineDuration);
-  const effectiveDuration = duration || timelineDuration;
+  const modelDuration = model ? timelineModelDuration(model) : 0;
+  const dirty = useMemo(
+    () => (model ? !synced || !modelsEqual(model, baselineModelRef.current) : false),
+    [model, synced],
+  );
+  const programme = useMemo(() => (model ? playbackProgramme(model) : []), [model]);
+  // Com edições pendentes o render deixa de corresponder ao modelo; o preview
+  // passa a mapear a timeline para os arquivos-fonte, sem render completo.
+  const mapped = dirty && programme.length > 0;
+  mappedRef.current = mapped;
+  programmeRef.current = programme;
+  const effectiveDuration = mapped ? modelDuration : duration || timelineDuration || modelDuration;
+  const fps = model?.fps ?? media?.fps ?? 30;
   const phase = media?.kind === 'final' || styleApplied ? 2 : 1;
   const progress = effectiveDuration > 0 ? Math.min(1, currentTime / effectiveDuration) : 0;
+  const activeSource = activeSourceId ? sourceById.get(activeSourceId) ?? null : null;
+  const videoSrc = mapped ? activeSource?.url ?? undefined : media?.url;
+  const selectedClip = selectedClipId
+    ? model?.clips.find((clip) => clip.id === selectedClipId) ?? null
+    : null;
+  const selectedLinkId = selectedClip?.linkId ?? null;
+  const videoClips = model ? sortedTrackClips(model, VIDEO_TRACK_ID) : [];
+  const voiceClips = model ? sortedTrackClips(model, VOICE_TRACK_ID) : [];
+  const canDiscard = Boolean(
+    model && baselineModelRef.current && !modelsEqual(model, baselineModelRef.current),
+  );
+
+  useEffect(() => {
+    playingRef.current = playing;
+  }, [playing]);
 
   useEffect(() => {
     currentTimeRef.current = 0;
@@ -359,40 +473,138 @@ function EditorWorkspace({
     setMarkIn(null);
     setDraftRange(null);
     setDraftNote('');
+    setSelectedClipId(null);
+    setZoom(1);
+    setActiveSourceId(null);
+    setInGap(false);
+    inGapRef.current = false;
+    activeSourceIdRef.current = null;
     correctionHistoryRef.current = [];
+    modelHistoryRef.current = [];
+    modelFutureRef.current = [];
+    actionOrderRef.current = [];
+    trimDragRef.current = null;
+    mappedIndexRef.current = -1;
+    gapClockRef.current = null;
+    pendingVideoSeekRef.current = null;
     setDuration(media?.duration ?? timelineDuration);
-  }, [media?.url, media?.duration, timelineDuration]);
-
-  useEffect(() => {
-    if (!playing) return;
-    let frame = 0;
-    const updatePlayhead = () => {
-      const video = videoRef.current;
-      if (video) syncCurrentTime(video.currentTime);
-      frame = window.requestAnimationFrame(updatePlayhead);
-    };
-    frame = window.requestAnimationFrame(updatePlayhead);
-    return () => window.cancelAnimationFrame(frame);
-  }, [playing]);
+    // Reset apenas na troca de projeto/mídia (o token muda a cada carga);
+    // edições do modelo alteram a duração e não podem limpar o histórico.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadKey]);
 
   function syncCurrentTime(value: number) {
     currentTimeRef.current = value;
     setCurrentTime(value);
   }
 
+  function setGap(value: boolean) {
+    inGapRef.current = value;
+    setInGap(value);
+  }
+
+  function sourceUrlOf(sourceId: string | null): string | null {
+    if (!sourceId) return null;
+    return sourceById.get(sourceId)?.url ?? null;
+  }
+
+  function setVideoToProgramme(index: number, sourceTime: number, resume: boolean) {
+    const segment = programmeRef.current[index];
+    if (!segment) return;
+    mappedIndexRef.current = index;
+    setGap(false);
+    const nextUrl = sourceUrlOf(segment.sourceId);
+    const currentUrl = activeSourceIdRef.current
+      ? sourceUrlOf(activeSourceIdRef.current)
+      : media?.url ?? null;
+    activeSourceIdRef.current = segment.sourceId;
+    setActiveSourceId(segment.sourceId);
+    const video = videoRef.current;
+    if (video) video.playbackRate = segment.speed || 1;
+    if (nextUrl && nextUrl !== currentUrl) {
+      // O src muda; o seek acontece quando os novos metadados carregarem.
+      pendingVideoSeekRef.current = { sourceTime, resume };
+      return;
+    }
+    if (!video) return;
+    try {
+      video.currentTime = sourceTime;
+    } catch {
+      // A agulha continua responsiva enquanto os metadados carregam.
+    }
+    if (resume) void video.play().catch(() => setPlaying(false));
+  }
+  setVideoToProgrammeRef.current = setVideoToProgramme;
+
   function seek(value: number) {
     const nextTime = Math.max(0, Math.min(value, effectiveDuration || 0));
     syncCurrentTime(nextTime);
-    if (videoRef.current) {
-      try {
-        videoRef.current.currentTime = nextTime;
-      } catch {
-        // O estado da agulha continua responsivo enquanto os metadados carregam.
+    if (!mapped) {
+      if (videoRef.current) {
+        try {
+          videoRef.current.currentTime = nextTime;
+        } catch {
+          // O estado da agulha continua responsivo enquanto os metadados carregam.
+        }
       }
+      return;
     }
+    const currentProgramme = programmeRef.current;
+    const index = programmeIndexAt(currentProgramme, nextTime);
+    if (index >= 0) {
+      const segment = currentProgramme[index];
+      setVideoToProgramme(
+        index,
+        segment.sourceIn + (nextTime - segment.timelineStart) * segment.speed,
+        playingRef.current,
+      );
+      return;
+    }
+    mappedIndexRef.current = nextProgrammeIndexAfter(currentProgramme, nextTime);
+    gapClockRef.current = null;
+    setGap(mappedIndexRef.current >= 0);
+    videoRef.current?.pause();
   }
+  seekRef.current = seek;
 
   async function togglePlayback() {
+    if (mappedRef.current) {
+      if (playingRef.current) {
+        setPlaying(false);
+        playingRef.current = false;
+        // Uma troca de fonte em andamento não pode retomar contra esta pausa.
+        if (pendingVideoSeekRef.current) {
+          pendingVideoSeekRef.current = { ...pendingVideoSeekRef.current, resume: false };
+        }
+        videoRef.current?.pause();
+        return;
+      }
+      const currentProgramme = programmeRef.current;
+      if (currentProgramme.length === 0) return;
+      const atEnd = currentTimeRef.current >= (effectiveDuration || 0) - 0.05;
+      const target = atEnd ? 0 : currentTimeRef.current;
+      syncCurrentTime(target);
+      const index = programmeIndexAt(currentProgramme, target);
+      if (index >= 0) {
+        setPlaying(true);
+        playingRef.current = true;
+        const segment = currentProgramme[index];
+        setVideoToProgramme(
+          index,
+          segment.sourceIn + (target - segment.timelineStart) * segment.speed,
+          true,
+        );
+      } else {
+        const nextIndex = nextProgrammeIndexAfter(currentProgramme, target);
+        if (nextIndex < 0) return; // depois do último take não há o que tocar
+        setPlaying(true);
+        playingRef.current = true;
+        mappedIndexRef.current = nextIndex;
+        gapClockRef.current = null;
+        setGap(true);
+      }
+      return;
+    }
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
@@ -411,8 +623,12 @@ function EditorWorkspace({
   }
 
   function stepByFrames(frames: number) {
+    // O ref é atualizado na hora: o seek abaixo não pode "retomar" a
+    // reprodução por ler um playingRef ainda não sincronizado pelo efeito.
+    setPlaying(false);
+    playingRef.current = false;
     videoRef.current?.pause();
-    seek(currentTimeRef.current + frames / Math.max(media?.fps ?? 30, 1));
+    seek(currentTimeRef.current + frames / Math.max(fps, 1));
   }
 
   function toggleMute() {
@@ -422,8 +638,102 @@ function EditorWorkspace({
     setMuted(video.muted);
   }
 
+  // Motor de reprodução: no modo normal a agulha segue o vídeo; no modo
+  // mapeado o vídeo pula entre segmentos e um relógio próprio cobre os vazios.
+  useEffect(() => {
+    if (!playing) return;
+    let frame = 0;
+    gapClockRef.current = null;
+    const updatePlayhead = (timestamp: number) => {
+      const video = videoRef.current;
+      if (!mappedRef.current) {
+        if (video) syncCurrentTime(video.currentTime);
+      } else {
+        const currentProgramme = programmeRef.current;
+        const index = mappedIndexRef.current;
+        if (inGapRef.current) {
+          const previous = gapClockRef.current ?? timestamp;
+          gapClockRef.current = timestamp;
+          const nextTime = currentTimeRef.current + (timestamp - previous) / 1000;
+          const segment = index >= 0 ? currentProgramme[index] : undefined;
+          if (segment && nextTime >= segment.timelineStart) {
+            syncCurrentTime(segment.timelineStart);
+            setVideoToProgrammeRef.current(index, segment.sourceIn, true);
+          } else if (!segment) {
+            inGapRef.current = false;
+            setInGap(false);
+            setPlaying(false);
+          } else {
+            syncCurrentTime(nextTime);
+          }
+        } else if (video && index >= 0) {
+          const segment = currentProgramme[index];
+          const speed = segment.speed || 1;
+          const sourceEnd = segment.sourceIn + (segment.timelineEnd - segment.timelineStart) * speed;
+          if (video.currentTime >= sourceEnd - 0.03 || video.ended) {
+            const nextSegment = currentProgramme[index + 1];
+            if (!nextSegment) {
+              video.pause();
+              syncCurrentTime(segment.timelineEnd);
+              setPlaying(false);
+            } else if (nextSegment.timelineStart - segment.timelineEnd > 0.02) {
+              inGapRef.current = true;
+              setInGap(true);
+              gapClockRef.current = null;
+              mappedIndexRef.current = index + 1;
+              video.pause();
+              syncCurrentTime(segment.timelineEnd);
+            } else {
+              syncCurrentTime(nextSegment.timelineStart);
+              setVideoToProgrammeRef.current(index + 1, nextSegment.sourceIn, true);
+            }
+          } else {
+            const mappedTime = segment.timelineStart + (video.currentTime - segment.sourceIn) / speed;
+            syncCurrentTime(Math.min(Math.max(mappedTime, segment.timelineStart), segment.timelineEnd));
+          }
+        } else if (index < 0) {
+          // Sem segmento ativo nem gap: nada a reproduzir — para o transporte.
+          setPlaying(false);
+        }
+      }
+      frame = window.requestAnimationFrame(updatePlayhead);
+    };
+    frame = window.requestAnimationFrame(updatePlayhead);
+    return () => window.cancelAnimationFrame(frame);
+  }, [playing]);
+
+  // Ao entrar/sair do modo mapeado, realinha o vídeo com a agulha.
+  useEffect(() => {
+    if (mapped) {
+      // Entrada (inclusive durante reprodução, ex.: razor com o vídeo
+      // tocando): configura fonte e índice imediatamente; o seek retoma a
+      // reprodução quando playingRef indicar.
+      seekRef.current(currentTimeRef.current);
+      return;
+    }
+    inGapRef.current = false;
+    setInGap(false);
+    setActiveSourceId(null);
+    activeSourceIdRef.current = null;
+    pendingVideoSeekRef.current = { sourceTime: currentTimeRef.current, resume: false };
+    const video = videoRef.current;
+    if (video) {
+      try {
+        video.currentTime = currentTimeRef.current;
+      } catch {
+        // O seek pendente cobre o caso de metadados ainda carregando.
+      }
+    }
+  }, [mapped]);
+
+  useEffect(() => {
+    if (mapped && !playingRef.current && !trimDragRef.current) {
+      seekRef.current(currentTimeRef.current);
+    }
+  }, [programme, mapped]);
+
   function seekTimelineAt(clientX: number, timeline: HTMLDivElement) {
-    if (!media || effectiveDuration <= 0) return;
+    if (effectiveDuration <= 0) return;
     const rect = timeline.getBoundingClientRect();
     const laneStart = TIMELINE_LANE_START;
     const laneEndPadding = 0;
@@ -433,25 +743,33 @@ function EditorWorkspace({
   }
 
   function beginTimelineSeek(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || trimDragRef.current) return;
     event.currentTarget.focus({ preventScroll: true });
     event.currentTarget.setPointerCapture(event.pointerId);
+    timelineSeekPointerRef.current = event.pointerId;
+    setSelectedClipId(null);
     seekTimelineAt(event.clientX, event.currentTarget);
   }
 
   function continueTimelineSeek(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId) && (event.buttons & 1) === 0) return;
+    if (trimDragRef.current) return;
+    // Só faz scrubbing de um gesto iniciado na própria timeline; sem isso um
+    // clique num clipe (que não captura) viraria seek ao mover o ponteiro.
+    if (timelineSeekPointerRef.current !== event.pointerId) return;
     seekTimelineAt(event.clientX, event.currentTarget);
   }
 
   function endTimelineSeek(event: ReactPointerEvent<HTMLDivElement>) {
+    if (timelineSeekPointerRef.current === event.pointerId) {
+      timelineSeekPointerRef.current = null;
+    }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
   }
 
   function setInPoint() {
-    if (!media) return;
+    if (!media || dirty) return;
     setMarkIn(currentTimeRef.current);
   }
 
@@ -482,11 +800,40 @@ function EditorWorkspace({
 
   function commitCorrections(next: CorrectionRange[]) {
     correctionHistoryRef.current.push(corrections);
+    actionOrderRef.current.push('corrections');
     onCorrectionsChange(next);
   }
 
   function deleteCorrection(id: string) {
     commitCorrections(corrections.filter((correction) => correction.id !== id));
+  }
+
+  function commitModel(next: TimelineModel, before: TimelineModel | null = modelRef.current) {
+    if (!before || modelsEqual(before, next)) {
+      onTimelineModelChange(next, true);
+      return;
+    }
+    modelHistoryRef.current.push(before);
+    modelFutureRef.current = [];
+    actionOrderRef.current.push('model');
+    onTimelineModelChange(next, true);
+  }
+
+  function undoModelEdit() {
+    const previous = modelHistoryRef.current.pop();
+    const current = modelRef.current;
+    if (!previous || !current) return;
+    modelFutureRef.current.push(current);
+    onTimelineModelChange(previous, true);
+  }
+
+  function redoModelEdit() {
+    const next = modelFutureRef.current.pop();
+    const current = modelRef.current;
+    if (!next || !current) return;
+    modelHistoryRef.current.push(current);
+    actionOrderRef.current.push('model');
+    onTimelineModelChange(next, true);
   }
 
   function undoTimelineAction() {
@@ -500,9 +847,152 @@ function EditorWorkspace({
       setMarkIn(null);
       return;
     }
-    const previous = correctionHistoryRef.current.pop();
-    if (previous) onCorrectionsChange(previous);
+    const lastAction = actionOrderRef.current.pop();
+    if (lastAction === 'model') {
+      undoModelEdit();
+      return;
+    }
+    if (lastAction === 'corrections') {
+      const previous = correctionHistoryRef.current.pop();
+      if (previous) onCorrectionsChange(previous);
+    }
   }
+
+  function razorAtPlayhead() {
+    const current = modelRef.current;
+    if (!current) return;
+    const next = razorAtTime(current, currentTimeRef.current);
+    if (next) commitModel(next);
+  }
+
+  function deleteSelectedClip(leaveGap: boolean) {
+    const current = modelRef.current;
+    if (!current || !selectedClipId) return;
+    const next = leaveGap
+      ? deleteClipLeaveGap(current, selectedClipId)
+      : rippleDeleteClip(current, selectedClipId);
+    if (next) {
+      setSelectedClipId(null);
+      commitModel(next);
+    }
+  }
+
+  function discardTimelineEdits() {
+    const baseline = baselineModelRef.current;
+    if (!baseline) return;
+    setSelectedClipId(null);
+    commitModel(baseline);
+  }
+
+  function beginTrim(event: ReactPointerEvent<HTMLElement>, clip: TimelineClip, edge: TrimEdge) {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    event.preventDefault();
+    const current = modelRef.current;
+    if (!current) return;
+    setPlaying(false);
+    playingRef.current = false;
+    videoRef.current?.pause();
+    const lane = (event.currentTarget as HTMLElement).closest('.studio-lane');
+    const laneWidth = Math.max(1, lane?.getBoundingClientRect().width ?? 1);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    trimDragRef.current = {
+      clipId: clip.id,
+      edge,
+      baseModel: current,
+      originX: event.clientX,
+      secondsPerPixel: (effectiveDuration || 1) / laneWidth,
+      appliedDelta: 0,
+    };
+  }
+
+  function moveTrim(event: ReactPointerEvent<HTMLElement>) {
+    const drag = trimDragRef.current;
+    if (!drag) return;
+    event.stopPropagation();
+    const allowed = trimAllowedDelta(drag.baseModel, drag.clipId, drag.edge, sourceDurations);
+    const baseClip = drag.baseModel.clips.find((clip) => clip.id === drag.clipId);
+    if (!allowed || !baseClip) return;
+    const rawDelta = (event.clientX - drag.originX) * drag.secondsPerPixel;
+    let delta = Math.max(allowed.min, Math.min(rawDelta, allowed.max));
+    const excludeIds = new Set([baseClip.id]);
+    if (baseClip.linkId) {
+      for (const clip of drag.baseModel.clips) {
+        if (clip.linkId === baseClip.linkId) excludeIds.add(clip.id);
+      }
+    }
+    const edgeTime = drag.edge === 'start'
+      ? baseClip.timelineStart + delta
+      : clipEnd(baseClip) + delta;
+    const snapped = snapTime(
+      edgeTime,
+      [...snapCandidateTimes(drag.baseModel, excludeIds), currentTimeRef.current],
+      8 * drag.secondsPerPixel,
+    );
+    delta = Math.max(
+      allowed.min,
+      Math.min(
+        drag.edge === 'start' ? snapped - baseClip.timelineStart : snapped - clipEnd(baseClip),
+        allowed.max,
+      ),
+    );
+    // Na borda inicial a prévia acompanha o ponteiro (abre espaço); o ripple
+    // fecha o espaço ao soltar. Na borda final o ripple já acontece ao vivo.
+    const preview = applyTrim(drag.baseModel, drag.clipId, drag.edge, delta, sourceDurations, {
+      ripple: drag.edge === 'end',
+    });
+    drag.appliedDelta = preview.applied;
+    onTimelineModelChange(preview.model, false);
+  }
+
+  function endTrim(event: ReactPointerEvent<HTMLElement>) {
+    const drag = trimDragRef.current;
+    if (!drag) return;
+    event.stopPropagation();
+    trimDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (Math.abs(drag.appliedDelta) < 0.001) {
+      onTimelineModelChange(drag.baseModel, false);
+      return;
+    }
+    const final = applyTrim(
+      drag.baseModel,
+      drag.clipId,
+      drag.edge,
+      drag.appliedDelta,
+      sourceDurations,
+      { ripple: true },
+    );
+    commitModel(final.model, drag.baseModel);
+  }
+
+  function changeZoom(nextZoom: number) {
+    const clamped = Math.max(1, Math.min(8, Math.round(nextZoom)));
+    if (clamped === zoom) return;
+    const scroller = scrollRef.current;
+    const content = contentRef.current;
+    if (scroller && content) {
+      const width = content.getBoundingClientRect().width;
+      const playheadX = TIMELINE_LANE_START + progress * Math.max(0, width - TIMELINE_LANE_START);
+      zoomAnchorRef.current = { progress, viewportX: playheadX - scroller.scrollLeft };
+    }
+    setZoom(clamped);
+  }
+
+  // Zoom ancorado na agulha: mantém a agulha no mesmo ponto do viewport.
+  useLayoutEffect(() => {
+    const anchor = zoomAnchorRef.current;
+    zoomAnchorRef.current = null;
+    if (!anchor) return;
+    const scroller = scrollRef.current;
+    const content = contentRef.current;
+    if (!scroller || !content) return;
+    const width = content.getBoundingClientRect().width;
+    const playheadX = TIMELINE_LANE_START + anchor.progress * Math.max(0, width - TIMELINE_LANE_START);
+    scroller.scrollLeft = Math.max(0, playheadX - anchor.viewportX);
+  }, [zoom]);
 
   async function applyCorrections() {
     if (corrections.length === 0) return;
@@ -517,10 +1007,21 @@ function EditorWorkspace({
     const handleEditorShortcut = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest('textarea, input, [contenteditable="true"]')) return;
+      // Durante um trim, teclas que desmontariam o handle capturado (Escape,
+      // Delete...) deixariam o drag órfão. Escape cancela o trim; o resto espera.
+      if (trimDragRef.current) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          onTimelineModelChange(trimDragRef.current.baseModel, false);
+          trimDragRef.current = null;
+        }
+        return;
+      }
       const key = event.key.toLowerCase();
       if ((event.metaKey || event.ctrlKey) && key === 'z' && !event.altKey) {
         event.preventDefault();
-        undoTimelineAction();
+        if (event.shiftKey) redoModelEdit();
+        else undoTimelineAction();
         return;
       }
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -532,6 +1033,41 @@ function EditorWorkspace({
       if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
         event.preventDefault();
         stepByFrames(event.key === 'ArrowLeft' ? -1 : 1);
+        return;
+      }
+      if (event.key === 'Backspace' || event.key === 'Delete') {
+        if (!selectedClipId) return;
+        event.preventDefault();
+        deleteSelectedClip(event.shiftKey);
+        return;
+      }
+      if (event.key === 'Escape') {
+        if (draftRange) {
+          setDraftRange(null);
+          setDraftNote('');
+        } else {
+          setSelectedClipId(null);
+        }
+        return;
+      }
+      if (key === 'c') {
+        event.preventDefault();
+        razorAtPlayhead();
+        return;
+      }
+      if (key === '=' || key === '+') {
+        event.preventDefault();
+        changeZoom(zoom + 1);
+        return;
+      }
+      if (key === '-') {
+        event.preventDefault();
+        changeZoom(zoom - 1);
+        return;
+      }
+      if (key === '0') {
+        event.preventDefault();
+        changeZoom(1);
         return;
       }
       if (key === 'm') {
@@ -548,7 +1084,7 @@ function EditorWorkspace({
     };
     window.addEventListener('keydown', handleEditorShortcut);
     return () => window.removeEventListener('keydown', handleEditorShortcut);
-  }, [corrections, draftRange, markIn, media?.fps, media?.url]);
+  }, [corrections, draftRange, markIn, media?.fps, media?.url, model, selectedClipId, dirty, zoom, mapped, effectiveDuration, fps]);
 
   const visibleTrackCount = 2
     + (phase === 2 && style.headline !== 'none' ? 1 : 0)
@@ -560,36 +1096,124 @@ function EditorWorkspace({
     '--timeline-track-count': visibleTrackCount,
   } as CSSProperties;
   const orientation = media?.orientation ?? 'horizontal';
-  const displayedSegments = timelineSegments.length > 0
-    ? timelineSegments
-    : [{
-        label: media?.name ?? 'Vídeo',
-        start: 0,
-        duration: effectiveDuration || 1,
-        audioStart: 0,
-        audioDuration: effectiveDuration || 1,
-      }];
+  const displayedSegments = model
+    ? deriveSegments(model)
+    : timelineSegments.length > 0
+      ? timelineSegments
+      : [{
+          label: media?.name ?? 'Vídeo',
+          start: 0,
+          duration: effectiveDuration || 1,
+          audioStart: 0,
+          audioDuration: effectiveDuration || 1,
+        }];
+  const rulerTicks = useMemo(() => {
+    if (!(effectiveDuration > 0)) return [0];
+    // Passo mínimo de 1s: formatTime não tem precisão sub-segundo.
+    const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+    const ideal = effectiveDuration / (4 * zoom);
+    const step = steps.find((candidate) => candidate >= ideal) ?? 900;
+    const ticks: number[] = [];
+    for (let tick = 0; tick <= effectiveDuration - step * 0.35; tick += step) {
+      ticks.push(round3(tick));
+    }
+    ticks.push(round3(effectiveDuration));
+    return ticks;
+  }, [effectiveDuration, zoom]);
+
+  function renderModelClip(clip: TimelineClip, index: number, kindClass: string) {
+    const left = effectiveDuration > 0 ? (clip.timelineStart / effectiveDuration) * 100 : 0;
+    const widthPct = effectiveDuration > 0
+      ? (clipDuration(clip) / effectiveDuration) * 100
+      : 100;
+    const isSelected = clip.id === selectedClipId;
+    const isLinkedSelected = !isSelected && selectedLinkId !== null && clip.linkId === selectedLinkId;
+    return (
+      <div
+        className={`timeline-clip ${kindClass} ${index % 2 ? 'alt' : ''} ${isSelected ? 'selected' : ''} ${isLinkedSelected ? 'linked-selected' : ''} ${clip.enabled ? '' : 'disabled'}`}
+        key={clip.id}
+        style={{ left: `${left}%`, width: `calc(${Math.max(widthPct, 0.4)}% - 2px)` }}
+        title={`${clip.label} · ${formatTime(clipDuration(clip))}`}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          event.stopPropagation();
+          setSelectedClipId(clip.id);
+        }}
+      >
+        <span>{clip.label}</span>
+        {isSelected && (
+          <>
+            <span
+              className="clip-handle left"
+              title="Ajustar início do take (arraste)"
+              onPointerDown={(event) => beginTrim(event, clip, 'start')}
+              onPointerMove={moveTrim}
+              onPointerUp={endTrim}
+              onPointerCancel={endTrim}
+            />
+            <span
+              className="clip-handle right"
+              title="Ajustar fim do take (arraste)"
+              onPointerDown={(event) => beginTrim(event, clip, 'end')}
+              onPointerMove={moveTrim}
+              onPointerUp={endTrim}
+              onPointerCancel={endTrim}
+            />
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className={`editor-workspace ${orientation}`}>
       <section className="preview-section">
         <div className={`video-stage ${orientation}`}>
           {media ? (
-            <video
-              key={media.url}
-              ref={videoRef}
-              src={media.url}
-              preload="metadata"
-              playsInline
-              style={{ aspectRatio: `${media.width} / ${media.height}` }}
-              onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
-              onTimeUpdate={(event) => syncCurrentTime(event.currentTarget.currentTime)}
-              onSeeking={(event) => syncCurrentTime(event.currentTarget.currentTime)}
-              onClick={() => void togglePlayback()}
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onEnded={() => setPlaying(false)}
-            />
+            <>
+              <video
+                key={media.url}
+                ref={videoRef}
+                src={videoSrc}
+                preload="metadata"
+                playsInline
+                style={{
+                  aspectRatio: `${media.width} / ${media.height}`,
+                  ...(mapped && (inGap || !activeSource?.url) ? { opacity: 0 } : null),
+                }}
+                onLoadedMetadata={(event) => {
+                  const pending = pendingVideoSeekRef.current;
+                  if (pending) {
+                    pendingVideoSeekRef.current = null;
+                    try {
+                      event.currentTarget.currentTime = pending.sourceTime;
+                    } catch {
+                      // A agulha continua responsiva enquanto os metadados carregam.
+                    }
+                    if (pending.resume) void event.currentTarget.play().catch(() => setPlaying(false));
+                  }
+                  if (!mappedRef.current) setDuration(event.currentTarget.duration);
+                }}
+                onTimeUpdate={(event) => {
+                  if (!mappedRef.current) syncCurrentTime(event.currentTarget.currentTime);
+                }}
+                onSeeking={(event) => {
+                  if (!mappedRef.current) syncCurrentTime(event.currentTarget.currentTime);
+                }}
+                onClick={() => void togglePlayback()}
+                onPlay={() => setPlaying(true)}
+                onPause={() => {
+                  if (!mappedRef.current || !inGapRef.current) setPlaying(false);
+                }}
+                onEnded={() => {
+                  if (!mappedRef.current) setPlaying(false);
+                }}
+              />
+              {mapped && inGap && <div className="video-stage-note">Espaço vazio na timeline</div>}
+              {mapped && activeSourceId && !activeSource?.url && (
+                <div className="video-stage-note">Arquivo-fonte indisponível para a prévia</div>
+              )}
+            </>
           ) : (
             <div className="video-placeholder">
               <span><Icon name="video" /></span>
@@ -609,13 +1233,22 @@ function EditorWorkspace({
               <small>{phase === 1 ? 'Aprovação do corte limpo' : 'Novas camadas na mesma timeline'}</small>
             </div>
           </div>
-          <div className="timeline-time">{formatTimecode(currentTime, media?.fps ?? 30)} <span>/ {formatTimecode(effectiveDuration, media?.fps ?? 30)}</span></div>
+          <div className="timeline-toolbar-right">
+            {mapped && <span className="mapped-badge" title="O preview mostra as edições ainda não renderizadas">Prévia das edições</span>}
+            <div className="timeline-zoom" aria-label="Zoom da timeline">
+              <button type="button" onClick={() => changeZoom(zoom - 1)} disabled={zoom <= 1} title="Reduzir zoom (-)">−</button>
+              <span>{zoom}×</span>
+              <button type="button" onClick={() => changeZoom(zoom + 1)} disabled={zoom >= 8} title="Aumentar zoom (+)">+</button>
+            </div>
+            <div className="timeline-time">{formatTimecode(currentTime, fps)} <span>/ {formatTimecode(effectiveDuration, fps)}</span></div>
+          </div>
         </div>
-        <div className="timeline-scroll">
+        <div className="timeline-scroll" ref={scrollRef}>
           <div
             className="timeline-content"
-            style={trackStyle}
-            tabIndex={media ? 0 : -1}
+            ref={contentRef}
+            style={{ ...trackStyle, width: `${zoom * 100}%` }}
+            tabIndex={media || model ? 0 : -1}
             aria-label="Timeline de edição. Use as setas para mover um frame."
             onPointerDown={beginTimelineSeek}
             onPointerMove={continueTimelineSeek}
@@ -623,7 +1256,14 @@ function EditorWorkspace({
             onPointerCancel={endTimelineSeek}
           >
             <div className="timeline-ruler">
-              <span>00:00</span><span>{formatTime(effectiveDuration * 0.25)}</span><span>{formatTime(effectiveDuration * 0.5)}</span><span>{formatTime(effectiveDuration * 0.75)}</span><span>{formatTime(effectiveDuration)}</span>
+              {rulerTicks.map((tick) => (
+                <span
+                  key={tick}
+                  style={{ left: timelinePoint(effectiveDuration > 0 ? tick / effectiveDuration : 0) }}
+                >
+                  {formatTime(tick)}
+                </span>
+              ))}
             </div>
             {phase === 2 && style.headline !== 'none' && (
               <TimelineTrack icon="sparkles" label="Headline" tone="orange">
@@ -642,38 +1282,42 @@ function EditorWorkspace({
               </TimelineTrack>
             )}
             <TimelineTrack icon="video" label="Vídeo" tone="orange">
-              {displayedSegments.map((segment, index) => (
-                <div
-                  className={`timeline-clip video-clip ${index % 2 ? 'alt' : ''}`}
-                  key={`${segment.start}:${segment.label}`}
-                  style={{
-                    left: `${effectiveDuration > 0 ? (segment.start / effectiveDuration) * 100 : 0}%`,
-                    width: `calc(${effectiveDuration > 0 ? (segment.duration / effectiveDuration) * 100 : 100}% - ${index < displayedSegments.length - 1 ? 2 : 0}px)`,
-                  }}
-                  title={`${segment.label} · ${formatTime(segment.duration)}`}
-                >
-                  <span>{segment.label}</span>
-                </div>
-              ))}
+              {model
+                ? videoClips.map((clip, index) => renderModelClip(clip, index, 'video-clip'))
+                : displayedSegments.map((segment, index) => (
+                    <div
+                      className={`timeline-clip video-clip ${index % 2 ? 'alt' : ''}`}
+                      key={`${segment.start}:${segment.label}`}
+                      style={{
+                        left: `${effectiveDuration > 0 ? (segment.start / effectiveDuration) * 100 : 0}%`,
+                        width: `calc(${effectiveDuration > 0 ? (segment.duration / effectiveDuration) * 100 : 100}% - ${index < displayedSegments.length - 1 ? 2 : 0}px)`,
+                      }}
+                      title={`${segment.label} · ${formatTime(segment.duration)}`}
+                    >
+                      <span>{segment.label}</span>
+                    </div>
+                  ))}
             </TimelineTrack>
             <TimelineTrack icon="waveform" label="Voz" tone="teal">
-              {displayedSegments.map((segment, index) => {
-                const start = segment.audioStart ?? segment.start;
-                const segmentDuration = segment.audioDuration ?? segment.duration;
-                return (
-                  <div
-                    className={`timeline-clip audio-clip ${index % 2 ? 'alt' : ''}`}
-                    key={`audio:${segment.start}:${segment.label}`}
-                    style={{
-                      left: `${effectiveDuration > 0 ? (start / effectiveDuration) * 100 : 0}%`,
-                      width: `calc(${effectiveDuration > 0 ? (segmentDuration / effectiveDuration) * 100 : 100}% - 2px)`,
-                    }}
-                    title={`${segment.label} · ${formatTime(segmentDuration)}`}
-                  >
-                    <span>{segment.label}</span>
-                  </div>
-                );
-              })}
+              {model
+                ? voiceClips.map((clip, index) => renderModelClip(clip, index, 'audio-clip'))
+                : displayedSegments.map((segment, index) => {
+                    const start = segment.audioStart ?? segment.start;
+                    const segmentDuration = segment.audioDuration ?? segment.duration;
+                    return (
+                      <div
+                        className={`timeline-clip audio-clip ${index % 2 ? 'alt' : ''}`}
+                        key={`audio:${segment.start}:${segment.label}`}
+                        style={{
+                          left: `${effectiveDuration > 0 ? (start / effectiveDuration) * 100 : 0}%`,
+                          width: `calc(${effectiveDuration > 0 ? (segmentDuration / effectiveDuration) * 100 : 100}% - 2px)`,
+                        }}
+                        title={`${segment.label} · ${formatTime(segmentDuration)}`}
+                      >
+                        <span>{segment.label}</span>
+                      </div>
+                    );
+                  })}
             </TimelineTrack>
             {phase === 2 && style.elements.musicAI && (
               <TimelineTrack icon="music" label="Trilha" tone="olive">
@@ -724,9 +1368,10 @@ function EditorWorkspace({
         </div>
         <div className="timeline-transport" aria-label="Controles de reprodução">
           <div className="marker-controls">
-            <button type="button" className={`marker-button ${markIn !== null ? 'active' : ''}`} onClick={setInPoint} disabled={!media} title="Marcar início da correção (I ou M)">IN</button>
-            <button type="button" className="marker-button" onClick={setOutPoint} disabled={!media || markIn === null || currentTime <= markIn} title="Marcar fim da correção (O ou M)">OUT</button>
-            {corrections.length > 0 && <span className="correction-count">{corrections.length} {corrections.length === 1 ? 'marcação' : 'marcações'}</span>}
+            <button type="button" className={`marker-button ${markIn !== null ? 'active' : ''}`} onClick={setInPoint} disabled={!media || dirty} title={dirty ? 'Aplique ou descarte as edições antes de marcar correções' : 'Marcar início da correção (I ou M)'}>IN</button>
+            <button type="button" className="marker-button" onClick={setOutPoint} disabled={!media || dirty || markIn === null || currentTime <= markIn} title={dirty ? 'Aplique ou descarte as edições antes de marcar correções' : 'Marcar fim da correção (O ou M)'}>OUT</button>
+            <button type="button" className="marker-button razor" onClick={razorAtPlayhead} disabled={!model} title="Dividir o take na agulha (C)"><Icon name="scissors" /></button>
+            {corrections.length > 0 && !dirty && <span className="correction-count">{corrections.length} {corrections.length === 1 ? 'marcação' : 'marcações'}</span>}
           </div>
           <div className="transport-center">
             <button type="button" className="transport-button" onClick={() => jumpBy(-5)} disabled={!media} title="Voltar 5 segundos">
@@ -743,10 +1388,23 @@ function EditorWorkspace({
             <button type="button" className="transport-button" onClick={toggleMute} disabled={!media} title={muted ? 'Ativar áudio' : 'Silenciar'}>
               <Icon name={muted ? 'volumeOff' : 'volume'} />
             </button>
-            {corrections.length > 0 && (
-              <button type="button" className="apply-corrections" onClick={() => void applyCorrections()} disabled={applyingCorrections}>
-                {applyingCorrections ? 'Aplicando...' : 'Aplicar'}
-              </button>
+            {dirty ? (
+              <>
+                {canDiscard && (
+                  <button type="button" className="discard-edits" onClick={discardTimelineEdits} title="Voltar ao corte atual sem aplicar">
+                    Descartar
+                  </button>
+                )}
+                <button type="button" className="apply-corrections" onClick={() => void onApplyTimelineEdits()} disabled={applyingCorrections} title="Enviar os novos cortes para gerar o render atualizado">
+                  {applyingCorrections ? 'Aplicando...' : 'Aplicar edições'}
+                </button>
+              </>
+            ) : (
+              corrections.length > 0 && (
+                <button type="button" className="apply-corrections" onClick={() => void applyCorrections()} disabled={applyingCorrections}>
+                  {applyingCorrections ? 'Aplicando...' : 'Aplicar'}
+                </button>
+              )
             )}
           </div>
         </div>
@@ -898,6 +1556,12 @@ export function App() {
   const [followingOutput, setFollowingOutput] = useState(true);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const activeProjectDirectoryRef = useRef<string | null>(null);
+  const timelineSaveTimerRef = useRef<number | null>(null);
+  const pendingTimelineSaveRef = useRef<{
+    directory: string;
+    model: TimelineModel;
+    loadStamp: string;
+  } | null>(null);
   const booted = useRef(false);
 
   const projectDirectory = workspace?.project.directory ?? null;
@@ -975,10 +1639,28 @@ export function App() {
     }
   }
 
+  async function flushPendingTimelineSave() {
+    const pending = pendingTimelineSaveRef.current;
+    if (!pending) return;
+    pendingTimelineSaveRef.current = null;
+    if (timelineSaveTimerRef.current !== null) {
+      window.clearTimeout(timelineSaveTimerRef.current);
+      timelineSaveTimerRef.current = null;
+    }
+    try {
+      await window.edvidDesktop.saveTimelineModel(pending.directory, pending.model, pending.loadStamp);
+    } catch (error) {
+      setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: errorMessage(error) }]);
+    }
+  }
+
   async function refreshWorkspace() {
     const directory = activeProjectDirectoryRef.current;
     if (!directory) return;
     try {
+      // Garante que a última edição da timeline está no disco antes de reler
+      // o projeto; sem isso o refresh reverteria a edição na interface.
+      await flushPendingTimelineSave();
       const refreshed = await window.edvidDesktop.refreshProjectWorkspace(directory);
       setWorkspace(refreshed);
       if (refreshed.style) {
@@ -1137,6 +1819,49 @@ export function App() {
       }]);
     }
     setApprovingCut(false);
+  }
+
+  function handleTimelineModelChange(model: TimelineModel, commit: boolean) {
+    const directory = activeProjectDirectoryRef.current;
+    const loadStamp = workspace?.timelineLoadStamp ?? '';
+    setWorkspace((current) => (
+      current
+        ? { ...current, timelineModel: model, timeline: { segments: deriveSegments(model) } }
+        : current
+    ));
+    if (!commit || !directory) return;
+    pendingTimelineSaveRef.current = { directory, model, loadStamp };
+    if (timelineSaveTimerRef.current !== null) window.clearTimeout(timelineSaveTimerRef.current);
+    timelineSaveTimerRef.current = window.setTimeout(() => {
+      timelineSaveTimerRef.current = null;
+      const pending = pendingTimelineSaveRef.current;
+      if (!pending) return;
+      pendingTimelineSaveRef.current = null;
+      void window.edvidDesktop.saveTimelineModel(pending.directory, pending.model, pending.loadStamp).catch((error) => {
+        setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: errorMessage(error) }]);
+      });
+    }, 400);
+  }
+
+  async function applyTimelineEdits() {
+    const model = workspace?.timelineModel;
+    if (!model) return false;
+    const ranges = edlRangesFromModel(model);
+    if (ranges.length === 0) return false;
+    const sourceName = (id: string) => workspace?.sources.find((source) => source.id === id)?.name ?? id;
+    const prompt = [
+      'Editei a timeline diretamente no Edvid Desktop (trims, cortes e exclusões de takes).',
+      'Atualize o edit/edl.json para conter exatamente estes ranges, nesta ordem. Os tempos são em segundos no arquivo-fonte indicado:',
+      ...ranges.map((range, index) => (
+        `${index + 1}. [${range.label}] fonte "${range.sourceId}" (${sourceName(range.sourceId)}): IN ${range.start.toFixed(3)}s | OUT ${range.end.toFixed(3)}s${range.gainDb ? ` | ganho ${range.gainDb} dB` : ''}`
+      )),
+      'Mantenha os demais campos do EDL (sources, grade, voice_master), recalcule total_duration_s e regenere o jcut_timeline ao re-renderizar.',
+      'Depois re-renderize o corte com esses ranges e atualize o preview. Não peça para eu reenviar estes tempos.',
+    ].join('\n');
+    return dispatchMessage(
+      prompt,
+      `Aplicar edições da timeline (${ranges.length} ${ranges.length === 1 ? 'trecho' : 'trechos'})`,
+    );
   }
 
   async function applyTimelineCorrections(items: CorrectionRange[]) {
@@ -1344,6 +2069,8 @@ export function App() {
                   onCorrectionsChange={setCorrections}
                   onApplyCorrections={applyTimelineCorrections}
                   applyingCorrections={sending}
+                  onTimelineModelChange={handleTimelineModelChange}
+                  onApplyTimelineEdits={applyTimelineEdits}
                 />
               ) : <StyleWorkspace style={style} onChange={setStyle} onApply={applyStyleSelection} canApply={canChat} applying={sending} />}
             </div>

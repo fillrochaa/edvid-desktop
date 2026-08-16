@@ -55,6 +55,48 @@ export type ProjectTimeline = {
   segments: ProjectTimelineSegment[];
 };
 
+export type TimelineTrackKind = 'video' | 'audio';
+
+export type TimelineTrack = {
+  id: string;
+  kind: TimelineTrackKind;
+  name: string;
+};
+
+export type TimelineClip = {
+  id: string;
+  trackId: string;
+  linkId: string | null;
+  label: string;
+  sourceId: string;
+  sourceIn: number;
+  sourceOut: number;
+  timelineStart: number;
+  enabled: boolean;
+  speed: number;
+  gainDb: number;
+  fadeInSec: number;
+  fadeOutSec: number;
+};
+
+export type TimelineModel = {
+  version: 1;
+  fps: number;
+  tracks: TimelineTrack[];
+  clips: TimelineClip[];
+};
+
+export type ProjectSource = {
+  id: string;
+  name: string;
+  url: string | null;
+  duration: number;
+  fps: number;
+  width: number;
+  height: number;
+  available: boolean;
+};
+
 export type ProjectStyleState = {
   edit: 'limpa' | 'split' | 'split2';
   headline: 'outline' | 'card' | 'realce' | 'misto' | 'none';
@@ -74,6 +116,10 @@ export type ProjectWorkspace = {
   project: ProjectSummary;
   media: ProjectMedia | null;
   timeline: ProjectTimeline | null;
+  timelineModel: TimelineModel | null;
+  timelineModelSynced: boolean;
+  timelineLoadStamp: string;
+  sources: ProjectSource[];
   style: ProjectStyleState | null;
 };
 
@@ -150,6 +196,11 @@ export type EdvidDesktopApi = {
   loginWithChatGPT: () => Promise<CodexAccountState>;
   cancelChatGPTLogin: () => Promise<CodexAccountState>;
   logoutCodex: () => Promise<CodexAccountState>;
+  saveTimelineModel: (
+    directory: string,
+    model: TimelineModel,
+    loadStamp: string,
+  ) => Promise<void>;
   sendCodexMessage: (input: CodexSendMessageInput) => Promise<CodexSendMessageResult>;
   interruptCodexTurn: (threadId: string, turnId: string) => Promise<void>;
   respondToCodexApproval: (

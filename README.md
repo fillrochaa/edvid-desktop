@@ -13,9 +13,12 @@ npm run stage:codex
 npm start
 ```
 
-O estagio atual (`0.5.3`) inclui projetos recentes, login gerenciado do ChatGPT,
-conversa em streaming, aprovacao visual do corte limpo e um workspace integrado
-de preview, timeline, estilos e correcoes por intervalos In/Out.
+O estagio atual (`0.6.0`) inclui projetos recentes, login gerenciado do ChatGPT,
+conversa em streaming, aprovacao visual do corte limpo, um workspace integrado
+de preview, timeline, estilos e correcoes por intervalos In/Out, e a primeira
+versao da timeline nao destrutiva: um modelo persistente de clipes migrado do
+EDL, com selecao, trim pelas extremidades, razor, ripple delete, undo/redo,
+zoom ancorado na agulha e previa das edicoes sem render completo.
 
 ## Interface de edicao
 
@@ -28,8 +31,18 @@ de preview, timeline, estilos e correcoes por intervalos In/Out.
   correcoes na timeline e aplica-las ao agente em uma unica acao.
 - A timeline representa os cortes reais do EDL/J-cut nas tracks de video e voz;
   marcacoes podem ser excluidas no hover e restauradas com `Cmd/Ctrl+Z`.
+- A timeline e um editor nao destrutivo: clique seleciona um take (video e voz
+  vinculados), as extremidades fazem trim com ripple e snap, `C` divide na
+  agulha, `Delete` faz ripple delete (`Shift+Delete` deixa espaco) e
+  `Cmd/Ctrl+Z`/`Cmd/Ctrl+Shift+Z` desfazem e refazem.
+- Estender um take so recupera conteudo que existe no arquivo-fonte original; o
+  modelo fica em `edit/timeline.json` e o EDL/render so sao regenerados ao
+  clicar em "Aplicar edicoes".
+- Com edicoes pendentes o preview entra em "Previa das edicoes": reproduz os
+  arquivos-fonte pulando entre os segmentos do modelo, sem render completo.
 - `Espaco` controla play/pause e as setas esquerda/direita percorrem um frame por
-  vez de acordo com o FPS medido do video.
+  vez de acordo com o FPS medido do video. `+`, `-` e `0` controlam o zoom
+  horizontal ancorado na agulha.
 - Videos verticais colocam o preview a direita da timeline; horizontais mantem o
   preview acima dela.
 - A aba Estilos usa o catalogo oficial do Edvid e envia as escolhas ao agente como
@@ -58,6 +71,13 @@ sem abrir o navegador nem concluir um login:
 
 ```bash
 npm run test:codex-protocol
+```
+
+O modelo da timeline tem um teste proprio de migracao, razor, trim, delete e
+export de ranges:
+
+```bash
+npm run test:timeline
 ```
 
 ## Validacao e empacotamento

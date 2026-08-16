@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'elect
 import started from 'electron-squirrel-startup';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CodexAppServer } from './codex-app-server';
@@ -12,13 +12,24 @@ import type {
   CodexEvent,
   CodexSendMessageInput,
   ProjectMedia,
+  ProjectSource,
   ProjectSummary,
   ProjectStyleState,
   ProjectTimeline,
   ProjectWorkspace,
   RuntimeCheck,
   RuntimeName,
+  TimelineModel,
 } from './shared';
+import {
+  PREVIEW_SOURCE_ID,
+  deriveSegments,
+  migrateEdlToModel,
+  modelFromSegments,
+  modelsEqual,
+  sanitizeTimelineModel,
+  type EdlDocument,
+} from './timeline-model';
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -61,6 +72,20 @@ const runtimeCommands: Array<{
 let codexAppServer: CodexAppServer | null = null;
 const selectedProjectDirectories = new Set<string>();
 const authorizedMedia = new Map<string, string>();
+const mediaTokenByFile = new Map<string, string>();
+
+// Token estável por arquivo+versão: recargas do mesmo arquivo reutilizam a
+// URL, o que evita remontar o <video> e resetar o editor a cada turno.
+function authorizeMediaToken(absolutePath: string, fingerprint: string | null): string {
+  const key = `${absolutePath}:${fingerprint ?? 'sem-fingerprint'}`;
+  let token = mediaTokenByFile.get(key);
+  if (!token) {
+    token = randomUUID();
+    mediaTokenByFile.set(key, token);
+    authorizedMedia.set(token, absolutePath);
+  }
+  return token;
+}
 const videoExtensions = new Set(['.mp4', '.m4v', '.mov', '.webm', '.mkv']);
 const ignoredMediaDirectories = new Set([
   '.git',
@@ -296,8 +321,7 @@ async function inspectProjectMedia(directory: string): Promise<InspectedProjectM
     : /corte[_ -]?limpo|clean[_ -]?cut|^cut(?:[_ -]|$)/u.test(base)
       ? 'clean-cut'
       : 'source';
-  const token = randomUUID();
-  authorizedMedia.set(token, candidate.absolutePath);
+  const token = authorizeMediaToken(candidate.absolutePath, `${candidate.modifiedAt}`);
   return {
     absolutePath: candidate.absolutePath,
     media: {
@@ -403,70 +427,285 @@ async function inferProjectTimeline(
   }
 }
 
-async function inspectProjectTimeline(
-  directory: string,
-  inspectedMedia: InspectedProjectMedia | null,
-): Promise<ProjectTimeline | null> {
-  const candidatePaths = [
+type EdlFileInfo = {
+  path: string;
+  document: EdlDocument;
+  fingerprint: string;
+};
+
+type StoredTimelineFile = {
+  path: string;
+  edlFingerprint: string | null;
+  mediaFingerprint: string | null;
+  model: TimelineModel;
+};
+
+type ProjectTimelineMeta = {
+  timelinePath: string;
+  edlFingerprint: string | null;
+  mediaFingerprint: string | null;
+};
+
+const projectTimelineMeta = new Map<string, ProjectTimelineMeta>();
+const sourceProbeCache = new Map<string, Promise<FfprobeOutput | null>>();
+
+async function fingerprintOf(filePath: string): Promise<string | null> {
+  try {
+    const fileStat = await stat(filePath);
+    return `${fileStat.size}:${Math.round(fileStat.mtimeMs)}`;
+  } catch {
+    return null;
+  }
+}
+
+function edlCandidatePaths(directory: string): string[] {
+  return [
     path.join(directory, 'edit', 'edl.json'),
     path.join(directory, 'edit', 'corte_limpo', 'edl.json'),
     path.join(directory, 'edicao', 'edl.json'),
     path.join(directory, 'edicao', 'corte_limpo', 'edl.json'),
     path.join(directory, 'edl.json'),
   ];
-  for (const candidatePath of candidatePaths) {
+}
+
+async function readEdlDocument(directory: string): Promise<EdlFileInfo | null> {
+  for (const candidatePath of edlCandidatePaths(directory)) {
     try {
-      const edl = JSON.parse(await readFile(candidatePath, 'utf8')) as {
-        ranges?: Array<{ beat?: string; start?: number; end?: number }>;
-        jcut_timeline?: Array<{
-          beat?: string;
-          video_start_in_output?: number;
-          video_duration?: number;
-          audio_start_in_output?: number;
-          audio_duration?: number;
-        }>;
-      };
-      const jcut = Array.isArray(edl.jcut_timeline) ? edl.jcut_timeline : [];
-      if (jcut.length > 0) {
-        const segments = jcut
-          .map((segment, index) => ({
-            label: segment.beat?.trim() || `Take ${String(index + 1).padStart(2, '0')}`,
-            start: Number(segment.video_start_in_output),
-            duration: Number(segment.video_duration),
-            audioStart: Number(segment.audio_start_in_output),
-            audioDuration: Number(segment.audio_duration),
-          }))
-          .filter((segment) => Number.isFinite(segment.start) && segment.duration > 0)
-          .map((segment) => ({
-            ...segment,
-            audioStart: Number.isFinite(segment.audioStart) ? segment.audioStart : segment.start,
-            audioDuration: Number.isFinite(segment.audioDuration) && segment.audioDuration > 0
-              ? segment.audioDuration
-              : segment.duration,
-          }));
-        if (segments.length > 0) return { segments };
-      }
-      const ranges = Array.isArray(edl.ranges) ? edl.ranges : [];
-      let outputStart = 0;
-      const segments = ranges.flatMap((range, index) => {
-        const duration = Number(range.end) - Number(range.start);
-        if (!Number.isFinite(duration) || duration <= 0) return [];
-        const segment = {
-          label: range.beat?.trim() || `Take ${String(index + 1).padStart(2, '0')}`,
-          start: outputStart,
-          duration,
-          audioStart: outputStart,
-          audioDuration: duration,
-        };
-        outputStart += duration;
-        return [segment];
-      });
-      if (segments.length > 0) return { segments };
+      const document = JSON.parse(await readFile(candidatePath, 'utf8')) as EdlDocument;
+      const fingerprint = await fingerprintOf(candidatePath);
+      if (!document || typeof document !== 'object' || !fingerprint) continue;
+      return { path: candidatePath, document, fingerprint };
     } catch {
       // Tenta a proxima localizacao conhecida do EDL.
     }
   }
-  return inferProjectTimeline(inspectedMedia);
+  return null;
+}
+
+async function readStoredTimeline(candidatePaths: string[]): Promise<StoredTimelineFile | null> {
+  for (const candidatePath of candidatePaths) {
+    try {
+      const parsed = JSON.parse(await readFile(candidatePath, 'utf8')) as {
+        version?: number;
+        edlFingerprint?: unknown;
+        mediaFingerprint?: unknown;
+        model?: unknown;
+      };
+      if (parsed.version !== 1) continue;
+      const model = sanitizeTimelineModel(parsed.model);
+      if (!model) continue;
+      return {
+        path: candidatePath,
+        edlFingerprint: typeof parsed.edlFingerprint === 'string' ? parsed.edlFingerprint : null,
+        mediaFingerprint:
+          typeof parsed.mediaFingerprint === 'string' ? parsed.mediaFingerprint : null,
+        model,
+      };
+    } catch {
+      // Tenta a proxima localizacao conhecida do modelo salvo.
+    }
+  }
+  return null;
+}
+
+function segmentsFromJcut(edl: EdlDocument | null): ProjectTimeline['segments'] | null {
+  const jcut = Array.isArray(edl?.jcut_timeline) ? edl.jcut_timeline : [];
+  if (jcut.length === 0) return null;
+  const segments = jcut
+    .map((segment, index) => ({
+      label: segment.beat?.trim() || `Take ${String(index + 1).padStart(2, '0')}`,
+      start: Number(segment.video_start_in_output),
+      duration: Number(segment.video_duration),
+      audioStart: Number(segment.audio_start_in_output),
+      audioDuration: Number(segment.audio_duration),
+    }))
+    .filter((segment) => Number.isFinite(segment.start) && segment.duration > 0)
+    .map((segment) => ({
+      ...segment,
+      audioStart: Number.isFinite(segment.audioStart) ? segment.audioStart : segment.start,
+      audioDuration: Number.isFinite(segment.audioDuration) && segment.audioDuration > 0
+        ? segment.audioDuration
+        : segment.duration,
+    }));
+  return segments.length > 0 ? segments : null;
+}
+
+async function probeSourceFile(absolutePath: string): Promise<FfprobeOutput | null> {
+  const fingerprint = await fingerprintOf(absolutePath);
+  if (!fingerprint) return null;
+  const cacheKey = `${absolutePath}:${fingerprint}`;
+  let pending = sourceProbeCache.get(cacheKey);
+  if (!pending) {
+    const ffprobe = resolveRuntime('ffprobe', {
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    pending = ffprobe.command
+      ? inspectVideo(ffprobe.command, ffprobe.argsPrefix, absolutePath).catch(() => null)
+      : Promise.resolve(null);
+    sourceProbeCache.set(cacheKey, pending);
+    // Falhas do FFprobe podem ser transitórias; não ficam no cache.
+    void pending.then((result) => {
+      if (!result) sourceProbeCache.delete(cacheKey);
+    });
+  }
+  return pending;
+}
+
+async function buildProjectSources(
+  directory: string,
+  model: TimelineModel,
+  edl: EdlFileInfo | null,
+  inspectedMedia: InspectedProjectMedia | null,
+): Promise<ProjectSource[]> {
+  const referencedIds = [...new Set(model.clips.map((clip) => clip.sourceId))];
+  const edlSources = edl?.document.sources ?? {};
+  const sources: ProjectSource[] = [];
+  for (const sourceId of referencedIds) {
+    const usedDuration = model.clips
+      .filter((clip) => clip.sourceId === sourceId)
+      .reduce((maximum, clip) => Math.max(maximum, clip.sourceOut), 0);
+    if (sourceId === PREVIEW_SOURCE_ID && inspectedMedia) {
+      sources.push({
+        id: sourceId,
+        name: inspectedMedia.media.name,
+        url: inspectedMedia.media.url,
+        duration: inspectedMedia.media.duration || usedDuration,
+        fps: inspectedMedia.media.fps,
+        width: inspectedMedia.media.width,
+        height: inspectedMedia.media.height,
+        available: true,
+      });
+      continue;
+    }
+    const mappedPath = typeof edlSources[sourceId] === 'string' ? edlSources[sourceId].trim() : '';
+    const absolutePath = mappedPath
+      ? path.isAbsolute(mappedPath)
+        ? path.resolve(mappedPath)
+        : path.resolve(directory, mappedPath)
+      : null;
+    // Só arquivos de vídeo dentro da pasta do projeto ganham token de mídia.
+    const relativeToProject = absolutePath ? path.relative(directory, absolutePath) : null;
+    const isContained = Boolean(
+      relativeToProject !== null &&
+      relativeToProject !== '' &&
+      !relativeToProject.startsWith('..') &&
+      !path.isAbsolute(relativeToProject) &&
+      absolutePath &&
+      videoExtensions.has(path.extname(absolutePath).toLowerCase()),
+    );
+    let probe: FfprobeOutput | null = null;
+    let isFile = false;
+    if (absolutePath && isContained) {
+      try {
+        isFile = (await stat(absolutePath)).isFile();
+      } catch {
+        isFile = false;
+      }
+      if (isFile) probe = await probeSourceFile(absolutePath);
+    }
+    const stream = probe?.streams?.[0];
+    if (absolutePath && isFile && stream?.width && stream.height) {
+      const token = authorizeMediaToken(absolutePath, await fingerprintOf(absolutePath));
+      sources.push({
+        id: sourceId,
+        name: path.basename(absolutePath),
+        url: `edvid-media://local/${token}`,
+        duration: Number(probe?.format?.duration) || usedDuration,
+        fps: parseFrameRate(stream.avg_frame_rate || stream.r_frame_rate),
+        width: stream.width,
+        height: stream.height,
+        available: true,
+      });
+      continue;
+    }
+    sources.push({
+      id: sourceId,
+      name: absolutePath ? path.basename(absolutePath) : sourceId,
+      url: null,
+      // Sem o arquivo, o limite de trim é o trecho já usado pelos clipes.
+      duration: usedDuration,
+      fps: model.fps,
+      width: 0,
+      height: 0,
+      available: false,
+    });
+  }
+  return sources;
+}
+
+type LoadedTimeline = {
+  model: TimelineModel | null;
+  synced: boolean;
+  sources: ProjectSource[];
+  timeline: ProjectTimeline | null;
+  loadStamp: string;
+};
+
+function timelineLoadStampOf(meta: ProjectTimelineMeta | undefined): string {
+  return `${meta?.edlFingerprint ?? 'sem-edl'}|${meta?.mediaFingerprint ?? 'sem-midia'}`;
+}
+
+async function loadProjectTimeline(
+  directory: string,
+  inspectedMedia: InspectedProjectMedia | null,
+): Promise<LoadedTimeline> {
+  const edl = await readEdlDocument(directory);
+  const mediaFingerprint = inspectedMedia
+    ? await fingerprintOf(inspectedMedia.absolutePath)
+    : null;
+  const fps = inspectedMedia?.media.fps ?? 30;
+
+  // O modelo derivado do estado atual do projeto (EDL, jcut, detecção visual
+  // ou clipe único). É a referência de "sincronizado com o render".
+  let derived = edl ? migrateEdlToModel(edl.document, fps) : null;
+  if (!derived) {
+    const jcutSegments = segmentsFromJcut(edl?.document ?? null);
+    const segments = jcutSegments
+      ?? (await inferProjectTimeline(inspectedMedia))?.segments
+      ?? null;
+    if (segments) {
+      derived = modelFromSegments(segments, fps);
+    } else if (inspectedMedia && inspectedMedia.media.duration > 0.1) {
+      derived = modelFromSegments(
+        [{ label: inspectedMedia.media.name, start: 0, duration: inspectedMedia.media.duration }],
+        fps,
+      );
+    }
+  }
+
+  const storedCandidates = [
+    ...(edl ? [path.join(path.dirname(edl.path), 'timeline.json')] : []),
+    path.join(directory, 'edit', 'timeline.json'),
+    path.join(directory, 'edicao', 'timeline.json'),
+  ];
+  const stored = await readStoredTimeline([...new Set(storedCandidates)]);
+  const storedIsCurrent =
+    stored !== null &&
+    stored.edlFingerprint === (edl?.fingerprint ?? null) &&
+    stored.mediaFingerprint === mediaFingerprint;
+
+  const model = storedIsCurrent ? stored.model : derived;
+  const synced = storedIsCurrent ? modelsEqual(stored.model, derived) : true;
+  const timelinePath = storedIsCurrent && stored
+    ? stored.path
+    : edl
+      ? path.join(path.dirname(edl.path), 'timeline.json')
+      : path.join(directory, 'edit', 'timeline.json');
+  const meta: ProjectTimelineMeta = {
+    timelinePath,
+    edlFingerprint: edl?.fingerprint ?? null,
+    mediaFingerprint,
+  };
+  projectTimelineMeta.set(directory, meta);
+  const loadStamp = timelineLoadStampOf(meta);
+
+  if (!model) return { model: null, synced: true, sources: [], timeline: null, loadStamp };
+  const sources = await buildProjectSources(directory, model, edl, inspectedMedia);
+  return { model, synced, sources, timeline: { segments: deriveSegments(model) }, loadStamp };
 }
 
 async function inspectProjectStyle(directory: string): Promise<ProjectStyleState | null> {
@@ -530,11 +769,20 @@ async function openProject(directory: string, remember = true): Promise<ProjectW
       };
   selectedProjectDirectories.add(resolvedDirectory);
   const inspectedMedia = await inspectProjectMedia(resolvedDirectory);
-  const [timeline, style] = await Promise.all([
-    inspectProjectTimeline(resolvedDirectory, inspectedMedia),
+  const [loaded, style] = await Promise.all([
+    loadProjectTimeline(resolvedDirectory, inspectedMedia),
     inspectProjectStyle(resolvedDirectory),
   ]);
-  return { project, media: inspectedMedia?.media ?? null, timeline, style };
+  return {
+    project,
+    media: inspectedMedia?.media ?? null,
+    timeline: loaded.timeline,
+    timelineModel: loaded.model,
+    timelineModelSynced: loaded.synced,
+    timelineLoadStamp: loaded.loadStamp,
+    sources: loaded.sources,
+    style,
+  };
 }
 
 function broadcastCodexEvent(event: CodexEvent): void {
@@ -738,6 +986,39 @@ function registerIpcHandlers(): void {
         throw new Error('Abra o projeto antes de atualizar a edicao.');
       }
       return openProject(requestedDirectory, false);
+    },
+  );
+
+  ipcMain.handle(
+    'timeline:save',
+    async (_event, input: { directory?: string; model?: unknown; loadStamp?: unknown }) => {
+      const requestedDirectory = path.resolve(input.directory?.trim() ?? '');
+      if (!selectedProjectDirectories.has(requestedDirectory)) {
+        throw new Error('Abra o projeto antes de salvar a timeline.');
+      }
+      const model = sanitizeTimelineModel(input.model);
+      if (!model) throw new Error('O modelo de timeline recebido e invalido.');
+      const meta = projectTimelineMeta.get(requestedDirectory);
+      // O carimbo viaja com o workspace que originou o modelo. Se o projeto
+      // foi recarregado com outro EDL/mídia, este modelo é obsoleto: ignorar
+      // é seguro (o EDL novo é a verdade) e evita gravar com carimbo errado.
+      if (typeof input.loadStamp === 'string' && input.loadStamp !== timelineLoadStampOf(meta)) {
+        return;
+      }
+      const timelinePath = meta?.timelinePath
+        ?? path.join(requestedDirectory, 'edit', 'timeline.json');
+      await mkdir(path.dirname(timelinePath), { recursive: true });
+      const payload = {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        edlFingerprint: meta?.edlFingerprint ?? null,
+        mediaFingerprint: meta?.mediaFingerprint ?? null,
+        model,
+      };
+      // Escrita atômica: um crash no meio nunca deixa timeline.json truncado.
+      const temporaryPath = `${timelinePath}.tmp-${process.pid}`;
+      await writeFile(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`);
+      await rename(temporaryPath, timelinePath);
     },
   );
 

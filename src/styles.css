@@ -204,7 +204,11 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .timeline-scroll { position: relative; flex: 1 1 0; min-height: 0; overflow: auto; padding: 0 8px 10px; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.15) transparent; }
 .timeline-content { position: relative; width: 100%; min-width: 480px; min-height: 100%; outline: none; cursor: default; touch-action: none; }
 .timeline-content:focus-visible { box-shadow: inset 0 0 0 1px rgba(9,181,183,.25); }
-.timeline-ruler { height: 27px; display: flex; align-items: center; justify-content: space-between; padding-left: 47px; color: #555e69; font-family: ui-monospace, monospace; font-size: 6.5px; }
+.timeline-ruler { position: relative; height: 27px; color: #555e69; font-family: ui-monospace, monospace; font-size: 6.5px; }
+.timeline-ruler span { position: absolute; top: 50%; transform: translate(4px, -50%); white-space: nowrap; }
+.timeline-ruler span::before { content: ''; position: absolute; top: 50%; left: -4px; width: 1px; height: 8px; transform: translateY(-50%); background: rgba(255,255,255,.14); }
+.timeline-ruler span:last-child { transform: translate(calc(-100% - 4px), -50%); }
+.timeline-ruler span:last-child::before { left: auto; right: -4px; }
 .studio-track { min-width: 480px; display: grid; grid-template-columns: 38px minmax(390px,1fr); align-items: stretch; gap: 8px; margin-bottom: 6px; }
 .studio-track-label { display: grid; place-items: center; padding: 0; border: 1px solid var(--stroke); border-radius: 8px; color: #7b8591; background: rgba(255,255,255,.025); white-space: nowrap; }
 .studio-track-label .icon { width: 12px; height: 12px; }
@@ -357,3 +361,33 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
   .edit-choice-grid { grid-template-columns: 1fr; }
   .correction-count { display: none; }
 }
+
+/* Editor não destrutivo: seleção de clipes, trim, razor e prévia mapeada. */
+.timeline-toolbar-right { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.mapped-badge { padding: 3px 6px; border: 1px solid rgba(255,119,19,.32); border-radius: 6px; color: #ffb680; background: rgba(255,119,19,.09); font-size: 6.5px; font-weight: 800; text-transform: uppercase; white-space: nowrap; }
+.timeline-zoom { display: flex; align-items: center; gap: 3px; }
+.timeline-zoom button { width: 20px; height: 20px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.09); border-radius: 6px; color: #7e8995; background: rgba(255,255,255,.025); font-size: 9px; cursor: pointer; }
+.timeline-zoom button:hover:not(:disabled) { color: #72dadd; border-color: rgba(9,181,183,.3); }
+.timeline-zoom button:disabled { opacity: .34; cursor: default; }
+.timeline-zoom span { min-width: 18px; color: #5f6875; font-family: ui-monospace, monospace; font-size: 6.5px; text-align: center; }
+.timeline-clip.selected { z-index: 6; outline: 1.5px solid rgba(255,209,174,.85); outline-offset: -1px; box-shadow: 0 0 0 3px rgba(255,119,19,.14); }
+.timeline-clip.linked-selected { outline: 1px dashed rgba(255,209,174,.5); outline-offset: -1px; }
+.timeline-clip.disabled { opacity: .3; }
+.clip-handle { position: absolute; top: 0; bottom: 0; z-index: 7; width: 8px; cursor: ew-resize; touch-action: none; }
+.clip-handle.left { left: 0; border-radius: 6px 0 0 6px; }
+.clip-handle.right { right: 0; border-radius: 0 6px 6px 0; }
+.clip-handle::after { content: ''; position: absolute; top: 20%; bottom: 20%; width: 2px; border-radius: 2px; background: rgba(255,209,174,.9); }
+.clip-handle.left::after { left: 2px; }
+.clip-handle.right::after { right: 2px; }
+.clip-handle:hover { background: rgba(255,119,19,.28); }
+.marker-button.razor .icon { width: 11px; height: 11px; }
+.marker-button:disabled { opacity: .34; cursor: default; }
+.discard-edits { height: 28px; padding: 0 9px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; color: #8b95a1; background: rgba(255,255,255,.03); font-size: 7px; font-weight: 700; cursor: pointer; }
+.discard-edits:hover { color: #c7ced6; border-color: rgba(255,255,255,.22); }
+.video-stage { position: relative; }
+.video-stage-note { position: absolute; inset: 0; display: grid; place-items: center; color: #77818d; background: rgba(4,6,9,.72); font-size: 8.5px; pointer-events: none; }
+/* Correções não bloqueiam seleção/trim dos clipes por baixo; o selo numerado
+   continua interativo e revela o botão de excluir. */
+.timeline-correction-range { pointer-events: none; }
+.timeline-correction-range > span, .timeline-correction-range .delete-correction { pointer-events: auto; }
+.timeline-correction-range > span:hover ~ .delete-correction, .delete-correction:hover, .delete-correction:focus-visible { opacity: 1; transform: none; }

@@ -6,12 +6,22 @@ import type {
   RuntimeCheck,
   RuntimeName,
 } from './shared';
+import { PREVIEW_SOURCE_ID, deriveSegments, modelFromSegments } from './timeline-model';
 
 const qaProject: ProjectSummary = {
   directory: '/tmp/edvid-interface-qa',
   name: 'Projeto de interface',
   lastOpenedAt: new Date().toISOString(),
 };
+
+const qaTimelineModel = modelFromSegments(
+  [
+    { label: 'HOOK', start: 0, duration: 3.2, audioStart: 0, audioDuration: 3.2 },
+    { label: 'PROBLEMA', start: 3.2, duration: 4.1, audioStart: 3.03, audioDuration: 4.27 },
+    { label: 'SOLUÇÃO', start: 7.3, duration: 3.4, audioStart: 7.13, audioDuration: 3.57 },
+  ],
+  30,
+);
 
 const qaWorkspace: ProjectWorkspace = {
   project: qaProject,
@@ -25,13 +35,22 @@ const qaWorkspace: ProjectWorkspace = {
     orientation: 'vertical',
     kind: 'clean-cut',
   },
-  timeline: {
-    segments: [
-      { label: 'HOOK', start: 0, duration: 3.2, audioStart: 0, audioDuration: 3.2 },
-      { label: 'PROBLEMA', start: 3.2, duration: 4.1, audioStart: 3.03, audioDuration: 4.27 },
-      { label: 'SOLUÇÃO', start: 7.3, duration: 3.4, audioStart: 7.13, audioDuration: 3.57 },
-    ],
-  },
+  timeline: qaTimelineModel ? { segments: deriveSegments(qaTimelineModel) } : null,
+  timelineModel: qaTimelineModel,
+  timelineModelSynced: true,
+  timelineLoadStamp: 'qa',
+  sources: [
+    {
+      id: PREVIEW_SOURCE_ID,
+      name: 'corte_limpo_qa.mp4',
+      url: 'data:video/mp4;base64,',
+      duration: 10.7,
+      fps: 30,
+      width: 1080,
+      height: 1920,
+      available: true,
+    },
+  ],
   style: null,
 };
 const listeners = new Set<(event: CodexEvent) => void>();
@@ -104,6 +123,9 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     }),
     cancelChatGPTLogin: async () => ({ status: 'signed-out', account: null, requiresOpenaiAuth: true }),
     logoutCodex: async () => ({ status: 'signed-out', account: null, requiresOpenaiAuth: true }),
+    saveTimelineModel: async () => {
+      // O QA visual não persiste; as edições ficam apenas em memória.
+    },
     sendCodexMessage: async ({ text }) => {
       turnNumber += 1;
       const threadId = 'qa-thread';

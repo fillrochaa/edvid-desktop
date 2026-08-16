@@ -1,7 +1,7 @@
 {
   "name": "@edvid/desktop",
   "productName": "Edvid",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "description": "Aplicativo desktop do editor de video por conversa Edvid",
   "main": ".vite/build/main.js",
   "private": true,
@@ -15,6 +15,7 @@
     "stage:yt-dlp": "node scripts/stage-yt-dlp.mjs",
     "stage:codex": "node scripts/stage-codex-app-server.mjs",
     "test:codex-protocol": "node scripts/smoke-codex-app-server.mjs",
+    "test:timeline": "node scripts/test-timeline-model.mjs",
     "stage:python-whisperx": "node scripts/stage-python-whisperx.mjs",
     "prepare:forge-makers": "npx --yes --package=node@22.23.2 -c \"npm rebuild macos-alias\"",
     "typecheck": "tsc --noEmit",
