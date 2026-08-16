@@ -443,6 +443,7 @@ function EditorWorkspace({
     [model, synced],
   );
   const programme = useMemo(() => (model ? playbackProgramme(model) : []), [model]);
+
   // Com edições pendentes o render deixa de corresponder ao modelo; o preview
   // passa a mapear a timeline para os arquivos-fonte, sem render completo.
   const mapped = dirty && programme.length > 0;
@@ -537,6 +538,46 @@ function EditorWorkspace({
     if (resume) void video.play().catch(() => setPlaying(false));
   }
   setVideoToProgrammeRef.current = setVideoToProgramme;
+
+  // Rede de segurança do modo mapeado. O motor de rAF só roda enquanto o
+  // React acha que está tocando; se o elemento voltar a tocar por fora desse
+  // estado (retomada do navegador, promessa de play resolvendo tarde), o
+  // motor não existe para segurar o corte e o arquivo-fonte corre inteiro.
+  // O timeupdate vem do próprio elemento, então o limite vale sempre.
+  function enforceMappedBoundary(video: HTMLVideoElement): void {
+    if (!mappedRef.current || inGapRef.current) return;
+    const currentProgramme = programmeRef.current;
+    const index = mappedIndexRef.current;
+    const segment = index >= 0 ? currentProgramme[index] : undefined;
+    if (!segment) {
+      video.pause();
+      return;
+    }
+    const speed = segment.speed || 1;
+    const sourceEnd = segment.sourceIn + (segment.timelineEnd - segment.timelineStart) * speed;
+    // Tolerância maior que a do rAF: o timeupdate chega a cada ~250 ms.
+    if (video.currentTime < sourceEnd - 0.01 && video.currentTime >= segment.sourceIn - 0.5) {
+      return;
+    }
+    const nextSegment = currentProgramme[index + 1];
+    if (!nextSegment) {
+      video.pause();
+      syncCurrentTime(segment.timelineEnd);
+      setPlaying(false);
+      return;
+    }
+    if (nextSegment.timelineStart - segment.timelineEnd > 0.02) {
+      inGapRef.current = true;
+      setInGap(true);
+      gapClockRef.current = null;
+      mappedIndexRef.current = index + 1;
+      video.pause();
+      syncCurrentTime(segment.timelineEnd);
+      return;
+    }
+    syncCurrentTime(nextSegment.timelineStart);
+    setVideoToProgrammeRef.current(index + 1, nextSegment.sourceIn, !video.paused);
+  }
 
   function seek(value: number) {
     const nextTime = Math.max(0, Math.min(value, effectiveDuration || 0));
@@ -694,7 +735,10 @@ function EditorWorkspace({
             syncCurrentTime(Math.min(Math.max(mappedTime, segment.timelineStart), segment.timelineEnd));
           }
         } else if (index < 0) {
-          // Sem segmento ativo nem gap: nada a reproduzir — para o transporte.
+          // Sem segmento ativo nem gap: nada a reproduzir. Pausar o elemento
+          // aqui e essencial — parar so o motor deixava o <video> correndo
+          // sozinho pelo arquivo-fonte, exibindo o material bruto sem cortes.
+          video?.pause();
           setPlaying(false);
         }
       }
@@ -702,6 +746,13 @@ function EditorWorkspace({
     };
     frame = window.requestAnimationFrame(updatePlayhead);
     return () => window.cancelAnimationFrame(frame);
+  }, [playing]);
+
+  // Invariante do transporte: parado significa vídeo parado. No modo mapeado
+  // quem manda no <video> é o motor; sem isto, qualquer caminho que encerre o
+  // motor sem pausar deixa o arquivo-fonte tocando inteiro por conta própria.
+  useEffect(() => {
+    if (!playing) videoRef.current?.pause();
   }, [playing]);
 
   // Ao entrar/sair do modo mapeado, realinha o vídeo com a agulha.
@@ -1191,12 +1242,21 @@ function EditorWorkspace({
                     } catch {
                       // A agulha continua responsiva enquanto os metadados carregam.
                     }
-                    if (pending.resume) void event.currentTarget.play().catch(() => setPlaying(false));
+                    // A retomada só vale se o transporte ainda estiver rodando
+                    // e houver segmento ativo: uma troca de fonte lenta podia
+                    // dar play depois de o motor já ter parado.
+                    if (pending.resume && playingRef.current && !inGapRef.current) {
+                      void event.currentTarget.play().catch(() => setPlaying(false));
+                    }
                   }
                   if (!mappedRef.current) setDuration(event.currentTarget.duration);
                 }}
                 onTimeUpdate={(event) => {
-                  if (!mappedRef.current) syncCurrentTime(event.currentTarget.currentTime);
+                  if (!mappedRef.current) {
+                    syncCurrentTime(event.currentTarget.currentTime);
+                    return;
+                  }
+                  enforceMappedBoundary(event.currentTarget);
                 }}
                 onSeeking={(event) => {
                   if (!mappedRef.current) syncCurrentTime(event.currentTarget.currentTime);

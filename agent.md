@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-16 (0.7.2 — Fase 2 pelo Remotion, leitura tolerante do EDL)
+Atualizado em: 2026-08-16 (0.7.3 — Fase 2 pelo Remotion, leitura tolerante do EDL)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -455,7 +455,12 @@ Ferramentas implementadas no editor:
 6. Zoom horizontal 1×–8× ancorado na agulha (`+`, `-`, `0` e botões).
 7. Prévia mapeada: com edições pendentes o preview reproduz os arquivos-fonte
    pulando entre segmentos (relógio próprio em espaços vazios), sem render.
-8. "Aplicar edições" envia os novos ranges (tempo de fonte) ao agente para
+8. A prévia mapeada tem duas camadas: o rAF move a agulha e troca de segmento
+   enquanto o transporte está ativo, e um `timeupdate` no próprio `<video>`
+   impõe o fim de cada segmento mesmo que o motor tenha parado. Sem essa
+   segunda camada, qualquer retomada do elemento por fora do estado do React
+   fazia o arquivo-fonte tocar inteiro, ignorando os cortes.
+9. "Aplicar edições" envia os novos ranges (tempo de fonte) ao agente para
    regravar o EDL e re-renderizar; "Descartar" volta ao corte atual.
    Enquanto houver edições pendentes, as marcações In/Out ficam bloqueadas.
 
@@ -491,7 +496,7 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.7.2**.
+Versão corrente: **0.7.3**.
 
 Artefato local atual:
 
@@ -540,6 +545,10 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.7.3: o limite do corte na prévia mapeada passou a ser imposto pelo próprio
+  <video> (timeupdate). O motor de rAF só roda enquanto o React acha que está
+  tocando; quando o elemento voltava a tocar fora desse estado, nada segurava
+  o corte e o arquivo-fonte corria inteiro.
 - 0.7.2: a fonte do EDL deixa de cair na mídia do preview — os ranges estão
   no tempo do arquivo original e a prévia buscava esses tempos no render já
   cortado. Marcadores de corte removidos da timeline.
