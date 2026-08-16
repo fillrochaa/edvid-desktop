@@ -24,18 +24,12 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import {loadFont as loadPoppins} from '@remotion/google-fonts/Poppins';
-import {loadFont as loadPlayfair} from '@remotion/google-fonts/PlayfairDisplay';
+import {PLAYFAIR, POPPINS, loadEdvidFonts} from './fonts';
 import cues from '../public/caption-cues.json';
 import editData from '../public/edit-data.json';
 import {PencilOutline} from './PencilOutline';
 
-const poppins = loadPoppins('normal', {weights: ['400', '700', '800', '900']});
-loadPoppins('italic', {weights: ['700', '900']});
-const POPPINS = poppins.fontFamily;
-const playfair = loadPlayfair('italic', {weights: ['700', '900']});
-loadPlayfair('normal', {weights: ['700', '900']});
-const PLAYFAIR = playfair.fontFamily;
+loadEdvidFonts();
 
 // A linha serifada carrega a cor de destaque escolhida na aba Estilos; antes
 // ela era laranja fixo e ignorava a escolha do usuario.

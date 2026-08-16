@@ -1537,7 +1537,9 @@ function StyleWorkspace({
             <span>
               {runtime.step === 'navegador'
                 ? 'Baixando o navegador de render. Isso acontece uma única vez.'
-                : `Instalando as dependências${runtime.installedBytes ? ` · ${Math.round(runtime.installedBytes / 1e6)} MB` : ''}. Isso acontece uma única vez.`}
+                : runtime.step === 'fontes'
+                  ? 'Baixando as fontes da edição. Isso acontece uma única vez.'
+                  : `Instalando as dependências${runtime.installedBytes ? ` · ${Math.round(runtime.installedBytes / 1e6)} MB` : ''}. Isso acontece uma única vez.`}
             </span>
           </div>
         ) : (

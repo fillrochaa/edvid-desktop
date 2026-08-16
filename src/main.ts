@@ -935,6 +935,59 @@ function remotionTemplateDirectory(): string {
   return path.join(resourcesRoot, 'remotion-template');
 }
 
+// As familias que o template usa. O @remotion/google-fonts nao embarca os
+// arquivos: ele aponta para fonts.gstatic.com e baixa durante o render, o que
+// nao funciona no sandbox sem rede. O aplicativo baixa uma vez aqui e o
+// template carrega de public/fonts.
+const REMOTION_FONTS = [
+  { family: 'Poppins', axis: 'ital,wght@0,400;0,600;0,700;0,800;0,900;1,700;1,900' },
+  { family: 'Playfair Display', axis: 'ital,wght@0,700;0,900;1,700;1,900' },
+  { family: 'Lora', axis: 'ital,wght@0,400;0,600;1,400;1,600' },
+  { family: 'Libre Baskerville', axis: 'wght@700' },
+  { family: 'Inter', axis: 'wght@500' },
+];
+// Um Chrome recente na requisicao garante woff2; sem isso o Google devolve ttf.
+const FONT_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
+
+async function downloadRemotionFonts(fontsDirectory: string): Promise<void> {
+  await mkdir(fontsDirectory, { recursive: true });
+  const blocks: string[] = [];
+  for (const font of REMOTION_FONTS) {
+    const url = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(
+      font.family,
+    ).replace(/%20/g, '+')}:${font.axis}&display=block`;
+    const response = await net.fetch(url, { headers: { 'User-Agent': FONT_USER_AGENT } });
+    if (!response.ok) throw new Error(`Falha ao consultar a fonte ${font.family}.`);
+    const css = await response.text();
+    // O css2 devolve um bloco por subset, precedido de um comentario com o
+    // nome dele. Latino basico e estendido cobrem portugues.
+    const pattern = /\/\*\s*([a-z-]+)\s*\*\/\s*(@font-face\s*\{[^}]*\})/gu;
+    let index = 0;
+    for (const match of css.matchAll(pattern)) {
+      const [, subset, block] = match;
+      if (subset !== 'latin' && subset !== 'latin-ext') continue;
+      const source = /src:\s*url\((https:\/\/[^)]+)\)/u.exec(block)?.[1];
+      if (!source) continue;
+      const slug = font.family.toLowerCase().replace(/[^a-z0-9]+/gu, '-');
+      const fileName = `${slug}-${index}-${subset}.woff2`;
+      index += 1;
+      const file = await net.fetch(source);
+      if (!file.ok) throw new Error(`Falha ao baixar a fonte ${font.family}.`);
+      await writeFile(
+        path.join(fontsDirectory, fileName),
+        Buffer.from(await file.arrayBuffer()),
+      );
+      blocks.push(block.replace(/src:\s*url\([^)]+\)/u, `src: url(${fileName})`));
+    }
+  }
+  if (blocks.length === 0) throw new Error('Nenhuma fonte foi baixada.');
+  await writeFile(
+    path.join(fontsDirectory, 'fonts.css'),
+    `/* Gerado pelo Edvid Desktop. Fontes locais para render offline. */\n${blocks.join('\n')}\n`,
+  );
+}
+
 let remotionInstall: Promise<RemotionRuntimeState> | null = null;
 let remotionState: RemotionRuntimeState = { status: 'unknown' };
 
@@ -987,6 +1040,13 @@ async function remotionRuntimeIsReady(): Promise<boolean> {
   // O Chrome nao vem do npm: sem ele o primeiro render tentaria a rede.
   try {
     await stat(path.join(runtime, 'node_modules', '.remotion', 'chrome-headless-shell'));
+  } catch {
+    return false;
+  }
+  // As fontes tambem sao baixadas por fora; sem elas o render sai com a fonte
+  // padrao do sistema e todos os estilos ficam errados.
+  try {
+    await stat(path.join(runtime, 'fonts', 'fonts.css'));
     return true;
   } catch {
     return false;
@@ -1063,6 +1123,8 @@ function ensureRemotionRuntime(): Promise<RemotionRuntimeState> {
         runtime,
         environment,
       );
+      broadcastRemotionState({ status: 'installing', step: 'fontes' });
+      await downloadRemotionFonts(path.join(runtime, 'fonts'));
       return { status: 'ready' };
     } catch (error) {
       remotionInstall = null; // Rede pode falhar; permite tentar de novo.
@@ -1098,6 +1160,12 @@ async function scaffoldRemotionProject(projectDirectory: string): Promise<void> 
     force: false,
     errorOnExist: false,
   });
+  // As fontes vivem no runtime compartilhado; o template le de public/fonts.
+  await cp(
+    path.join(remotionRuntimeDirectory(), 'fonts'),
+    path.join(destination, 'public', 'fonts'),
+    { recursive: true, force: true },
+  );
   const link = path.join(destination, 'node_modules');
   const target = path.join(remotionRuntimeDirectory(), 'node_modules');
   // lstat, nao stat: um link apontando para um runtime removido precisa ser

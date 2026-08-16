@@ -132,7 +132,7 @@ export type WhisperModelState = {
 
 export type RemotionRuntimeState = {
   status: 'unknown' | 'installing' | 'ready' | 'error';
-  step?: 'dependencias' | 'navegador';
+  step?: 'dependencias' | 'navegador' | 'fontes';
   installedBytes?: number;
   error?: string;
 };

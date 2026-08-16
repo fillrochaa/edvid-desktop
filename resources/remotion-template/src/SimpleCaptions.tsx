@@ -16,16 +16,12 @@
  * Data: public/captions.json (word level) — no extra generation step.
  */
 import {AbsoluteFill, useCurrentFrame, useVideoConfig} from 'remotion';
-import {loadFont as loadPoppins} from '@remotion/google-fonts/Poppins';
-import {loadFont as loadBaskerville} from '@remotion/google-fonts/LibreBaskerville';
-import {loadFont as loadInter} from '@remotion/google-fonts/Inter';
+import {BASKERVILLE, INTER, POPPINS, loadEdvidFonts} from './fonts';
 import {measureText} from '@remotion/layout-utils';
 import captions from '../public/captions.json';
 import editData from '../public/edit-data.json';
 
-const POPPINS = loadPoppins('normal', {weights: ['600']}).fontFamily;
-const BASKERVILLE = loadBaskerville('normal', {weights: ['700']}).fontFamily;
-const INTER = loadInter('normal', {weights: ['500']}).fontFamily;
+loadEdvidFonts();
 
 const OFFWHITE = '#f4f1e9';
 

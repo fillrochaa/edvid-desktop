@@ -23,11 +23,12 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import {loadFont} from '@remotion/google-fonts/Poppins';
+import {POPPINS, loadEdvidFonts} from './fonts';
 import {Sfx} from './Main';
 import editData from '../public/edit-data.json';
 
-const {fontFamily} = loadFont('normal', {weights: ['400', '600', '900']});
+loadEdvidFonts();
+const fontFamily = POPPINS;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 // ============ MOUNT POINT (edit this) ==========================================

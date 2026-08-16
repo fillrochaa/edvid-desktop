@@ -24,7 +24,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import {loadFont} from '@remotion/google-fonts/Poppins';
+import {POPPINS, loadEdvidFonts} from './fonts';
 import {measureText} from '@remotion/layout-utils';
 import captions from '../public/captions.json';
 import track from '../public/track.json';
@@ -35,7 +35,8 @@ import {StackedCaptions} from './StackedCaptions';
 import {ScatterCaptions} from './ScatterCaptions';
 import {SimpleCaptions, SIMPLE_VARIANTS} from './SimpleCaptions';
 
-const {fontFamily} = loadFont('normal', {weights: ['400', '600', '900']});
+loadEdvidFonts();
+const fontFamily = POPPINS;
 
 // ============ TYPES + DATA ====================================================
 type Caption = {text: string; startMs: number; endMs: number};

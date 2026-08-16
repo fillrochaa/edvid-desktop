@@ -333,10 +333,17 @@ Como funciona agora:
   `extraResource`. O código do template é a especificação dos estilos —
   fontes, tamanhos, easings e durações.
 - **Runtime instalado pelo aplicativo**, uma vez, em
-  `userData/runtime/remotion/`, com o Node/npm empacotados. São ~434 MB:
-  241 MB de `node_modules` (`--omit=dev` corta TypeScript e `@types/react`)
-  e 193 MB do Chrome Headless Shell, buscado por `remotion browser ensure`.
-  Todos os projetos compartilham esse runtime.
+  `userData/runtime/remotion/`, com o Node/npm empacotados. São ~372 MB:
+  178 MB de `node_modules` (`--omit=dev` corta TypeScript e `@types/react`),
+  193 MB do Chrome Headless Shell (`remotion browser ensure`) e 748 KB de
+  fontes. Todos os projetos compartilham esse runtime.
+- **Fontes locais**: o `@remotion/google-fonts` (63 MB) não embarca os
+  arquivos — ele aponta para `fonts.gstatic.com` e baixa durante o render, o
+  que não funciona no sandbox sem rede. A dependência foi removida; o
+  aplicativo baixa as cinco famílias (Poppins, Playfair Display, Lora, Libre
+  Baskerville, Inter) no install, gera `fonts/fonts.css` com os `@font-face`
+  apontando para arquivos locais, e `src/fonts.ts` do template injeta essa
+  folha com `delayRender` até `document.fonts.ready`.
 - **Scaffold por projeto**: `scaffoldRemotionProject` copia o template para
   `edit/remotion/` e cria um symlink `node_modules` para o runtime
   compartilhado (junction no Windows). `public/` nunca é sobrescrito.
@@ -360,6 +367,10 @@ Decisões apuradas com teste, não por suposição:
   no render. Agora `hook.accent` alimenta realce e misto, e
   `captions.accent` alimenta a linha serifada da empilhada. Verificado
   renderizando com `#0b72b1`.
+- A verificação das fontes precisou de um controle: nesta máquina há Poppins
+  instalada no sistema, então remover a folha local ainda renderizava certo e
+  mascarava a falha. O teste decisivo usou Libre Baskerville, ausente do
+  sistema — sem `fonts.css` ela cai para um serif genérico.
 - O template embutido é uma **cópia** da skill. Mudanças de estilo na skill
   não chegam sozinhas ao Desktop; ao sincronizar, reaplicar a
   parametrização do accent.

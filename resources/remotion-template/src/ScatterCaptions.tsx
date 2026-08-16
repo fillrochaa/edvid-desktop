@@ -23,13 +23,13 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import {loadFont} from '@remotion/google-fonts/Lora';
+import {LORA, loadEdvidFonts} from './fonts';
 import {measureText} from '@remotion/layout-utils';
 import captions from '../public/captions.json';
 import editData from '../public/edit-data.json';
 
-const {fontFamily} = loadFont('normal', {weights: ['400', '600']});
-loadFont('italic', {weights: ['400', '600']});
+loadEdvidFonts();
+const fontFamily = LORA;
 
 type Word = {text: string; startMs: number; endMs: number};
 type Placed = Word & {size: number; hi: boolean};
