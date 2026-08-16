@@ -398,9 +398,9 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 Versão corrente: **0.6.1**.
 
-Último artefato local gerado:
+Artefato local atual:
 
-`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.6.0-arm64.dmg`
+`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.6.1-arm64.dmg`
 
 Configuração do DMG:
 
