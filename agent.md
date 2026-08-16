@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-16 (0.7.0 — Fase 2 renderizada pelo Remotion)
+Atualizado em: 2026-08-16 (0.7.1 — Fase 2 pelo Remotion, leitura tolerante do EDL)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -495,7 +495,7 @@ Versão corrente: **0.7.1**.
 
 Artefato local atual:
 
-`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.0-arm64.dmg`
+`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.1-arm64.dmg`
 
 Configuração do DMG:
 
