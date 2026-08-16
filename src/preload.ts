@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
   CodexEvent,
   EdvidDesktopApi,
+  Phase2RenderState,
   RemotionRuntimeState,
   WhisperModelState,
 } from './shared';
@@ -35,6 +36,13 @@ const api: EdvidDesktopApi = {
   },
   scaffoldRemotionProject: (directory) =>
     ipcRenderer.invoke('remotion:scaffold', { directory }),
+  renderPhase2: (directory) => ipcRenderer.invoke('phase2:render', { directory }),
+  onPhase2RenderState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: Phase2RenderState) =>
+      listener(state);
+    ipcRenderer.on('phase2:state', handler);
+    return () => ipcRenderer.removeListener('phase2:state', handler);
+  },
   sendCodexMessage: (input) => ipcRenderer.invoke('codex:message', input),
   interruptCodexTurn: (threadId, turnId) =>
     ipcRenderer.invoke('codex:interrupt', { threadId, turnId }),

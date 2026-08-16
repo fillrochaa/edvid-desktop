@@ -10,6 +10,7 @@ import {
   readFile,
   readdir,
   rename,
+  rm,
   stat,
   symlink,
   writeFile,
@@ -23,6 +24,7 @@ import type {
   CodexApprovalDecision,
   CodexEvent,
   CodexSendMessageInput,
+  Phase2RenderState,
   ProjectMedia,
   ProjectSource,
   ProjectSummary,
@@ -959,6 +961,13 @@ const REMOTION_FONTS = [
 const FONT_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 
+// Marca de versao do fonts.css. A v2 embute os woff2 como data URIs: durante
+// o render, o servidor estatico do Remotion tambem atende a extracao de
+// frames do OffthreadVideo, e uma requisicao de fonte que entra nessa fila
+// pode nunca ser atendida — o delayRender das fontes estoura e derruba o
+// render inteiro depois de minutos. Com data URI nao existe requisicao.
+const FONTS_CSS_VERSION = 'Edvid fonts v2 (woff2 embutido)';
+
 async function downloadRemotionFonts(fontsDirectory: string): Promise<void> {
   await mkdir(fontsDirectory, { recursive: true });
   const blocks: string[] = [];
@@ -972,28 +981,26 @@ async function downloadRemotionFonts(fontsDirectory: string): Promise<void> {
     // O css2 devolve um bloco por subset, precedido de um comentario com o
     // nome dele. Latino basico e estendido cobrem portugues.
     const pattern = /\/\*\s*([a-z-]+)\s*\*\/\s*(@font-face\s*\{[^}]*\})/gu;
-    let index = 0;
     for (const match of css.matchAll(pattern)) {
       const [, subset, block] = match;
       if (subset !== 'latin' && subset !== 'latin-ext') continue;
       const source = /src:\s*url\((https:\/\/[^)]+)\)/u.exec(block)?.[1];
       if (!source) continue;
-      const slug = font.family.toLowerCase().replace(/[^a-z0-9]+/gu, '-');
-      const fileName = `${slug}-${index}-${subset}.woff2`;
-      index += 1;
       const file = await net.fetch(source);
       if (!file.ok) throw new Error(`Falha ao baixar a fonte ${font.family}.`);
-      await writeFile(
-        path.join(fontsDirectory, fileName),
-        Buffer.from(await file.arrayBuffer()),
+      const encoded = Buffer.from(await file.arrayBuffer()).toString('base64');
+      blocks.push(
+        block.replace(
+          /src:\s*url\([^)]+\)/u,
+          `src: url(data:font/woff2;base64,${encoded})`,
+        ),
       );
-      blocks.push(block.replace(/src:\s*url\([^)]+\)/u, `src: url(${fileName})`));
     }
   }
   if (blocks.length === 0) throw new Error('Nenhuma fonte foi baixada.');
   await writeFile(
     path.join(fontsDirectory, 'fonts.css'),
-    `/* Gerado pelo Edvid Desktop. Fontes locais para render offline. */\n${blocks.join('\n')}\n`,
+    `/* ${FONTS_CSS_VERSION} — gerado pelo Edvid Desktop para render offline. */\n${blocks.join('\n')}\n`,
   );
 }
 
@@ -1068,10 +1075,11 @@ async function remotionRuntimeIsReady(): Promise<boolean> {
     return false;
   }
   // As fontes tambem sao baixadas por fora; sem elas o render sai com a fonte
-  // padrao do sistema e todos os estilos ficam errados.
+  // padrao do sistema e todos os estilos ficam errados. A versao no proprio
+  // arquivo forca a regeneracao quando o formato muda (v2 = data URIs).
   try {
-    await stat(path.join(runtime, 'fonts', 'fonts.css'));
-    return true;
+    const css = await readFile(path.join(runtime, 'fonts', 'fonts.css'), 'utf8');
+    return css.startsWith(`/* ${FONTS_CSS_VERSION}`);
   } catch {
     return false;
   }
@@ -1204,6 +1212,217 @@ async function scaffoldRemotionProject(projectDirectory: string): Promise<void> 
   } catch {
     await symlink(target, link, process.platform === 'win32' ? 'junction' : 'dir');
   }
+}
+
+// --- Render da Fase 2 pelo aplicativo -------------------------------------
+// O Chromium do Remotion nao inicia dentro do sandbox do agente
+// (MachPortRendezvousServer: Permission denied), entao cada render pelo
+// agente exigia escalacao e aprovacao do usuario — e o limite de tempo dos
+// comandos ainda o forcava a fatiar em partes. O aplicativo renderiza fora do
+// sandbox, numa passada, com progresso; o agente apenas preenche public/.
+
+// Entradas que definem o render. Mudou qualquer uma depois de um turno, o
+// aplicativo re-renderiza; nada mudou, o resultado gravado continua valendo.
+const PHASE2_INPUTS = [
+  'edit-data.json',
+  'captions.json',
+  'caption-cues.json',
+  'segments.json',
+  'track.json',
+  'cut.mp4',
+];
+
+let phase2Job: { directory: string; promise: Promise<Phase2RenderState> } | null = null;
+let phase2State: Phase2RenderState = { status: 'idle' };
+
+function broadcastPhase2State(state: Phase2RenderState): void {
+  phase2State = state;
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('phase2:state', state);
+  }
+}
+
+async function phase2Fingerprint(publicDirectory: string): Promise<string | null> {
+  // Sem o briefing e o video de entrada nao existe edicao para renderizar.
+  try {
+    await stat(path.join(publicDirectory, 'edit-data.json'));
+    await stat(path.join(publicDirectory, 'cut.mp4'));
+  } catch {
+    return null;
+  }
+  const parts: string[] = [];
+  for (const name of PHASE2_INPUTS) {
+    try {
+      const info = await stat(path.join(publicDirectory, name));
+      parts.push(`${name}:${info.size}:${Math.floor(info.mtimeMs)}`);
+    } catch {
+      parts.push(`${name}:ausente`);
+    }
+  }
+  return parts.join('|');
+}
+
+function renderPhase2(projectDirectory: string): Promise<Phase2RenderState> {
+  if (phase2Job) {
+    // Um render por vez. Para outro projeto, devolve o andamento atual sem
+    // enfileirar; o proximo turno concluido tenta de novo.
+    return phase2Job.directory === projectDirectory
+      ? phase2Job.promise
+      : Promise.resolve(phase2State);
+  }
+  const promise = (async (): Promise<Phase2RenderState> => {
+    const remotionDirectory = path.join(projectDirectory, 'edit', 'remotion');
+    const publicDirectory = path.join(remotionDirectory, 'public');
+    const fingerprint = await phase2Fingerprint(publicDirectory);
+    if (!fingerprint) return { status: 'idle' };
+
+    const stampFile = path.join(remotionDirectory, 'out', 'render-stamp.json');
+    let stamp: { fingerprint?: unknown; output?: unknown } = {};
+    try {
+      stamp = JSON.parse(await readFile(stampFile, 'utf8')) as typeof stamp;
+    } catch {
+      // Sem carimbo: primeiro render deste projeto.
+    }
+    const stampOutput = asText(stamp.output);
+    if (stamp.fingerprint === fingerprint && stampOutput) {
+      try {
+        await stat(path.join(projectDirectory, stampOutput));
+        return { status: 'ready', output: path.basename(stampOutput) };
+      } catch {
+        // Resultado sumiu; renderiza de novo.
+      }
+    }
+
+    const runtime = await ensureRemotionRuntime();
+    if (runtime.status !== 'ready') {
+      return {
+        status: 'error',
+        error: runtime.status === 'error' && runtime.error
+          ? runtime.error
+          : 'Motor de render indisponivel.',
+      };
+    }
+    // Reaplica o template antes de renderizar: correcoes no codigo (src/)
+    // chegam aos projetos ja montados, e public/ nunca e sobrescrito.
+    await scaffoldRemotionProject(projectDirectory);
+    // O cache do webpack e compartilhado pelo runtime e ja serviu um modulo
+    // velho mesmo com o arquivo mudado no disco — duas rodadas de depuracao
+    // perdidas. Renderizar sempre do zero custa ~30 s e e deterministico.
+    await rm(path.join(remotionRuntimeDirectory(), 'node_modules', '.cache', 'webpack'), {
+      recursive: true,
+      force: true,
+    });
+    const node = resolveRuntime('node', {
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    if (!node.command) {
+      return { status: 'error', error: 'Node interno nao esta disponivel nesta plataforma.' };
+    }
+
+    await mkdir(path.join(remotionDirectory, 'out'), { recursive: true });
+    // "tmp" no nome mantem o arquivo parcial fora do preview se algo falhar.
+    const temporaryOutput = path.join(remotionDirectory, 'out', 'render_tmp_fase2.mp4');
+    broadcastPhase2State({ status: 'rendering', progress: 0 });
+    await new Promise<void>((resolveRender, rejectRender) => {
+      const child = spawn(
+        node.command as string,
+        [
+          ...node.argsPrefix,
+          path.join(remotionDirectory, 'node_modules', '@remotion', 'cli', 'remotion-cli.js'),
+          'render',
+          'Reels',
+          temporaryOutput,
+          '--timeout=120000',
+        ],
+        {
+          cwd: remotionDirectory,
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: {
+            ...process.env,
+            PATH: [path.dirname(node.command as string), process.env.PATH]
+              .filter(Boolean)
+              .join(path.delimiter),
+          },
+        },
+      );
+      let stderrTail = '';
+      const readProgress = (chunk: string) => {
+        // O CLI imprime "Rendered 674/4340, time remaining: 1m 54s".
+        const latest = [...chunk.matchAll(/Rendered (\d+)\/(\d+)/gu)].at(-1);
+        if (!latest) return;
+        const renderedFrames = Number(latest[1]);
+        const totalFrames = Number(latest[2]);
+        if (totalFrames > 0 && renderedFrames <= totalFrames) {
+          broadcastPhase2State({
+            status: 'rendering',
+            progress: renderedFrames / totalFrames,
+            renderedFrames,
+            totalFrames,
+          });
+        }
+      };
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', readProgress);
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk: string) => {
+        if (stderrTail.length < 32_768) stderrTail += chunk;
+        readProgress(chunk);
+      });
+      child.on('error', rejectRender);
+      child.on('close', (code) => {
+        if (code === 0) resolveRender();
+        else {
+          const lastLine = stderrTail
+            .trim()
+            .split(/\r?\n/)
+            .filter((line) => line.trim())
+            .at(-1);
+          rejectRender(new Error(lastLine || `Render falhou (${code}).`));
+        }
+      });
+    });
+
+    // Versao nova a cada render: artefatos anteriores nunca sao apagados e o
+    // preview escolhe o mais recente sozinho.
+    const targetDirectory = path.join(projectDirectory, 'edicao', 'fase_2');
+    await mkdir(targetDirectory, { recursive: true });
+    let version = 1;
+    for (;;) {
+      try {
+        await stat(path.join(targetDirectory, `fase_2_v${version}.mp4`));
+        version += 1;
+      } catch {
+        break;
+      }
+    }
+    const finalName = `fase_2_v${version}.mp4`;
+    await rename(temporaryOutput, path.join(targetDirectory, finalName));
+    await writeFile(
+      stampFile,
+      `${JSON.stringify(
+        { fingerprint, output: path.join('edicao', 'fase_2', finalName) },
+        null,
+        2,
+      )}\n`,
+    );
+    return { status: 'ready', output: finalName };
+  })()
+    .catch((error): Phase2RenderState => ({
+      status: 'error',
+      error: error instanceof Error ? error.message : String(error),
+    }))
+    .then((state) => {
+      phase2Job = null;
+      broadcastPhase2State(state);
+      return state;
+    });
+  phase2Job = { directory: projectDirectory, promise };
+  return promise;
 }
 
 function ensureWhisperModel(): Promise<WhisperModelState> {
@@ -1519,6 +1738,14 @@ function registerIpcHandlers(): void {
       throw new Error('Abra o projeto antes de preparar a Fase 2.');
     }
     await scaffoldRemotionProject(requestedDirectory);
+  });
+
+  ipcMain.handle('phase2:render', (_event, input: { directory?: string }) => {
+    const requestedDirectory = path.resolve(asText(input.directory));
+    if (!selectedProjectDirectories.has(requestedDirectory)) {
+      throw new Error('Abra o projeto antes de renderizar a Fase 2.');
+    }
+    return renderPhase2(requestedDirectory);
   });
 
   ipcMain.handle('codex:account', () => getCodexAppServer().readAccount());

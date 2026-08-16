@@ -16,6 +16,7 @@ import type {
   CodexApproval,
   CodexEvent,
   DesktopInfo,
+  Phase2RenderState,
   ProjectSummary,
   ProjectWorkspace,
   RemotionRuntimeState,
@@ -356,6 +357,7 @@ function EditorWorkspace({
   applyingCorrections,
   onTimelineModelChange,
   onApplyTimelineEdits,
+  phase2Render,
 }: {
   workspace: ProjectWorkspace | null;
   style: StyleSetup;
@@ -366,6 +368,7 @@ function EditorWorkspace({
   applyingCorrections: boolean;
   onTimelineModelChange: (model: TimelineModel, commit: boolean) => void;
   onApplyTimelineEdits: () => Promise<boolean>;
+  phase2Render: Phase2RenderState;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const currentTimeRef = useRef(0);
@@ -1225,6 +1228,22 @@ function EditorWorkspace({
   return (
     <div className={`editor-workspace ${orientation}`}>
       <section className="preview-section">
+        {phase2Render.status === 'rendering' && (
+          <div className="phase2-render-banner" role="status">
+            <span className="phase2-render-orb" />
+            <div className="phase2-render-copy">
+              <strong>Renderizando a edição estilizada</strong>
+              <small>
+                {phase2Render.totalFrames
+                  ? `${Math.round((phase2Render.progress ?? 0) * 100)}% · ${phase2Render.renderedFrames ?? 0}/${phase2Render.totalFrames} frames`
+                  : 'Preparando o render. O resultado entra no preview sozinho.'}
+              </small>
+            </div>
+            <div className="phase2-render-track">
+              <span style={{ width: `${Math.min(100, Math.round((phase2Render.progress ?? 0) * 100))}%` }} />
+            </div>
+          </div>
+        )}
         <div className={`video-stage ${orientation}`}>
           {media ? (
             <>
@@ -1639,6 +1658,8 @@ export function App() {
   const [remotionRuntime, setRemotionRuntime] = useState<RemotionRuntimeState>({
     status: 'unknown',
   });
+  const [phase2Render, setPhase2Render] = useState<Phase2RenderState>({ status: 'idle' });
+  const phase2StatusRef = useRef<Phase2RenderState['status']>('idle');
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const activeProjectDirectoryRef = useRef<string | null>(null);
   const timelineSaveTimerRef = useRef<number | null>(null);
@@ -1690,6 +1711,9 @@ export function App() {
     setHandledCutApprovalId(null);
     setWorkTab('edit');
     setFollowingOutput(true);
+    // Cobre dados da Fase 2 que ficaram prontos com o aplicativo fechado ou
+    // um render interrompido no meio; sem nada novo, volta na hora.
+    requestPhase2Render();
   }
 
   async function reloadProjects() {
@@ -1757,6 +1781,31 @@ export function App() {
     }
   }
 
+  function requestPhase2Render() {
+    const directory = activeProjectDirectoryRef.current;
+    if (!directory) return;
+    // O andamento e o desfecho chegam por onPhase2RenderState.
+    void window.edvidDesktop.renderPhase2(directory).catch(() => {});
+  }
+
+  function handlePhase2RenderState(state: Phase2RenderState) {
+    const previous = phase2StatusRef.current;
+    phase2StatusRef.current = state.status;
+    setPhase2Render(state);
+    if (state.status === 'ready' && previous === 'rendering') {
+      // Um render novo terminou; recarrega o workspace para o preview trocar
+      // para o resultado estilizado.
+      void refreshWorkspace();
+    }
+    if (state.status === 'error' && previous !== 'error' && state.error) {
+      setMessages((current) => [...current, {
+        id: `error:${Date.now()}`,
+        role: 'system',
+        text: `O render da edição estilizada falhou: ${state.error}`,
+      }]);
+    }
+  }
+
   async function login() {
     setAccount({ ...initialAccount, status: 'starting' });
     try {
@@ -1816,6 +1865,9 @@ export function App() {
         setSending(false);
         if (event.error) setMessages((current) => [...current, { id: `error:${event.turnId}`, role: 'system', text: event.error ?? '' }]);
         void refreshWorkspace();
+        // Se o turno mudou os dados da Fase 2, o aplicativo renderiza fora do
+        // sandbox — sem dados novos o main devolve na hora, sem custo.
+        requestPhase2Render();
       }
       return;
     }
@@ -1902,8 +1954,9 @@ export function App() {
       `- Observação: ${style.note.trim() || 'nenhuma'}`,
       '',
       'O Edvid já montou o projeto Remotion em edit/remotion, com as dependências instaladas.',
-      'Renderize a Fase 2 por ele, nunca com legendas queimadas por FFmpeg nem imagens geradas em Python.',
+      'Prepare apenas os dados em edit/remotion/public/ (com os geradores oficiais), nunca legendas queimadas por FFmpeg nem imagens geradas em Python.',
       `Escreva as escolhas acima em edit/remotion/public/edit-data.json, incluindo hook.accent e captions.accent com ${style.accent}.`,
+      'Não execute remotion render: quando os dados estiverem prontos, encerre o turno com um resumo curto — o Edvid renderiza sozinho e mostra o progresso na interface.',
       'Use essas seleções como briefing definitivo e não peça para eu escolher os estilos novamente no chat.',
     ].join('\n');
     if (await dispatchMessage(prompt)) setWorkTab('edit');
@@ -2019,6 +2072,7 @@ export function App() {
     const unsubscribe = window.edvidDesktop.onCodexEvent(handleCodexEvent);
     const unsubscribeModel = window.edvidDesktop.onWhisperModelState(setWhisperModel);
     const unsubscribeRemotion = window.edvidDesktop.onRemotionRuntimeState(setRemotionRuntime);
+    const unsubscribePhase2 = window.edvidDesktop.onPhase2RenderState(handlePhase2RenderState);
     if (!booted.current) {
       booted.current = true;
       void window.edvidDesktop.getDesktopInfo().then(setDesktopInfo);
@@ -2043,6 +2097,7 @@ export function App() {
       unsubscribe();
       unsubscribeModel();
       unsubscribeRemotion();
+      unsubscribePhase2();
     };
   }, []);
 
@@ -2200,6 +2255,7 @@ export function App() {
                   applyingCorrections={sending}
                   onTimelineModelChange={handleTimelineModelChange}
                   onApplyTimelineEdits={applyTimelineEdits}
+                  phase2Render={phase2Render}
                 />
               ) : <StyleWorkspace style={style} onChange={setStyle} onApply={applyStyleSelection} canApply={canChat} applying={sending} runtime={remotionRuntime} />}
             </div>

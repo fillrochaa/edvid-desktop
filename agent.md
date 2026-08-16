@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-16 (0.7.5 — instalação do motor Remotion corrigida no app empacotado)
+Atualizado em: 2026-08-16 (0.7.6 — Fase 2 renderizada pelo aplicativo, sem aprovações)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -355,19 +355,29 @@ Como funciona agora:
   - Mudou o fluxo de instalação? Validar com `userData/runtime/remotion`
     limpo, não apenas com o runtime pronto: a checagem de prontidão
     curto-circuita o caminho de instalação inteiro.
-- **Fontes locais**: o `@remotion/google-fonts` (63 MB) não embarca os
-  arquivos — ele aponta para `fonts.gstatic.com` e baixa durante o render, o
-  que não funciona no sandbox sem rede. A dependência foi removida; o
+- **Fontes locais embutidas (v2)**: o `@remotion/google-fonts` (63 MB) não
+  embarca os arquivos — ele aponta para `fonts.gstatic.com` e baixa durante o
+  render, o que não funciona sem rede. A dependência foi removida; o
   aplicativo baixa as cinco famílias (Poppins, Playfair Display, Lora, Libre
-  Baskerville, Inter) no install, gera `fonts/fonts.css` com os `@font-face`
-  apontando para arquivos locais, e `src/fonts.ts` do template injeta essa
-  folha com `delayRender` até `document.fonts.ready`.
+  Baskerville, Inter) no install e gera `fonts/fonts.css` com os woff2
+  **embutidos como data URIs** (primeira linha carrega a versão; mudou o
+  formato, `remotionRuntimeIsReady` regenera). Causa comprovada com
+  `--log=verbose` e marcadores `edvid-fonts` no console: o
+  `await document.fonts.ready` original nunca resolvia em pelo menos uma aba
+  de render, o `delayRender` das fontes estourava no `--timeout` e derrubava
+  o render inteiro com ~75% pronto (reproduzido três vezes, sempre no mesmo
+  ponto ≈ timeout de parede). O `src/fonts.ts` v2 carrega cada face declarada
+  com `face.load()` (instantâneo com data URI, nada de rede) e mantém um
+  backstop de 30 s que libera o handle de qualquer jeito.
 - **Scaffold por projeto**: `scaffoldRemotionProject` copia o template para
   `edit/remotion/` e cria um symlink `node_modules` para o runtime
-  compartilhado (junction no Windows). `public/` nunca é sobrescrito.
-- O agente só preenche `public/*.json` e roda
-  `node_modules/.bin/remotion render Reels`. As instruções proíbem
-  explicitamente npm install, legenda queimada e imagem gerada em Python.
+  compartilhado (junction no Windows). `public/` nunca é sobrescrito. O
+  `renderPhase2` reaplica o scaffold antes de cada render, então correções no
+  código do template chegam a projetos já montados.
+- O agente só preenche `public/*.json` com os geradores oficiais; **quem
+  renderiza é o aplicativo** (seção 10c). As instruções proíbem
+  explicitamente npm install, `remotion render`, legenda queimada e imagem
+  gerada em Python.
 
 Decisões apuradas com teste, não por suposição:
 
@@ -392,6 +402,39 @@ Decisões apuradas com teste, não por suposição:
 - O template embutido é uma **cópia** da skill. Mudanças de estilo na skill
   não chegam sozinhas ao Desktop; ao sincronizar, reaplicar a
   parametrização do accent.
+
+## 10c. Render da Fase 2 pelo aplicativo — 0.7.6
+
+O agente não roda `remotion render`. Motivo comprovado em campo: **o Chromium
+do render não inicia dentro do sandbox do Codex**
+(`Chromium.MachPortRendezvousServer: Permission denied`), então toda
+tentativa exigia escalação e aprovação do usuário — e o limite de tempo dos
+comandos ainda forçava o agente a fatiar o vídeo em partes de 1100 frames,
+cada uma com nova aprovação (seis diálogos numa única Fase 2). É o mesmo
+princípio da transcrição na 0.6.1: nunca auto-aprovar; remover a causa.
+
+Fluxo atual:
+
+- Depois de **todo turno concluído** (e ao abrir o projeto), a interface chama
+  `phase2:render`. O main calcula o fingerprint dos insumos em
+  `edit/remotion/public/` (`edit-data.json`, `captions.json`,
+  `caption-cues.json`, `segments.json`, `track.json` e `cut.mp4`; sem
+  `edit-data.json` e `cut.mp4` não há o que renderizar) e compara com
+  `edit/remotion/out/render-stamp.json`. Nada mudou → responde na hora.
+- Mudou → garante o runtime, reaplica o scaffold, **apaga o cache do webpack
+  do runtime** e roda `node remotion-cli.js render Reels` fora do sandbox,
+  com `--timeout=120000`, transmitindo progresso (`Rendered N/M`) para a
+  barra na seção de preview. O cache não é opcional de apagar: ele serviu um
+  módulo velho mesmo com o arquivo mudado no disco, e duas rodadas de
+  correção do fonts.ts pareceram "não funcionar" por causa disso. Sempre que
+  um render se comportar como se uma mudança não existisse, limpar
+  `node_modules/.cache/webpack` do runtime antes de concluir qualquer coisa.
+- O resultado sai versionado em `edicao/fase_2/fase_2_vN.mp4` (nunca
+  sobrescreve; o preview escolhe o mais recente sozinho) e o carimbo é
+  gravado. Um erro vira mensagem de sistema no chat com o motivo real.
+- Velocidade medida neste Mac (M-series, 14 núcleos): ~4340 frames
+  1080×1920 em ~4 min com a concorrência padrão — contra ~12 min nas partes
+  fatiadas do agente com `--concurrency=3`.
 
 ### Helpers da Fase 2 e tracking (0.7.0)
 
@@ -509,11 +552,11 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.7.5**.
+Versão corrente: **0.7.6**.
 
 Artefato local atual:
 
-`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.5-arm64.dmg`
+`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.6-arm64.dmg`
 
 Configuração do DMG:
 
@@ -558,6 +601,13 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.7.6: a Fase 2 é renderizada pelo aplicativo, fora do sandbox — o
+  Chromium não inicia no seatbelt e cada `remotion render` do agente pedia
+  aprovação (seis numa edição), além de fatiar o vídeo em partes. O
+  document.fonts.ready travava numa aba e derrubava renders completos aos
+  ~75%: fontes agora são data URIs embutidos, carregadas face a face, com
+  backstop. O cache do webpack é apagado a cada render (serviu módulo velho
+  com o arquivo mudado). Progresso na interface; saída em edicao/fase_2/.
 - 0.7.5: a instalação do motor Remotion falhava em toda máquina limpa — o
   npm empacotado é `node npm-cli.js` e o comando montado ignorava o
   argsPrefix, executando o binário do node como script. Spawns de runtime

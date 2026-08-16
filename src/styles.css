@@ -384,6 +384,13 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .discard-edits:hover { color: #c7ced6; border-color: rgba(255,255,255,.22); }
 .video-stage { position: relative; }
 .video-stage-note { position: absolute; inset: 0; display: grid; place-items: center; color: #77818d; background: rgba(4,6,9,.72); font-size: 8.5px; pointer-events: none; }
+.phase2-render-banner { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 7px 10px; border: 1px solid rgba(255,119,19,.28); border-radius: 9px; background: rgba(255,119,19,.07); }
+.phase2-render-orb { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #ff7713; animation: model-pulse 1.3s ease-in-out infinite; }
+.phase2-render-copy { min-width: 0; }
+.phase2-render-copy strong { display: block; color: #ffb680; font-size: 8.5px; }
+.phase2-render-copy small { display: block; color: #9aa4b1; font-size: 7.5px; }
+.phase2-render-track { flex: 1; height: 4px; margin-left: 6px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
+.phase2-render-track span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #ff7713, #ffb680); transition: width .4s ease; }
 /* Correções não bloqueiam seleção/trim dos clipes por baixo; o selo numerado
    continua interativo e revela o botão de excluir. */
 .timeline-correction-range { pointer-events: none; }

@@ -137,6 +137,17 @@ export type RemotionRuntimeState = {
   error?: string;
 };
 
+// Render da Fase 2 feito pelo aplicativo, fora do sandbox do agente. "idle"
+// tambem cobre "nada a renderizar" (dados do public/ ausentes ou incompletos).
+export type Phase2RenderState = {
+  status: 'idle' | 'rendering' | 'ready' | 'error';
+  progress?: number;
+  renderedFrames?: number;
+  totalFrames?: number;
+  output?: string;
+  error?: string;
+};
+
 export type CodexAccount = {
   type: 'chatgpt' | 'apiKey' | 'amazonBedrock';
   email: string | null;
@@ -222,6 +233,8 @@ export type EdvidDesktopApi = {
     listener: (state: RemotionRuntimeState) => void,
   ) => () => void;
   scaffoldRemotionProject: (directory: string) => Promise<void>;
+  renderPhase2: (directory: string) => Promise<Phase2RenderState>;
+  onPhase2RenderState: (listener: (state: Phase2RenderState) => void) => () => void;
   sendCodexMessage: (input: CodexSendMessageInput) => Promise<CodexSendMessageResult>;
   interruptCodexTurn: (threadId: string, turnId: string) => Promise<void>;
   respondToCodexApproval: (
