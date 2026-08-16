@@ -15,7 +15,11 @@ const config: ForgeConfig = {
     appCategoryType: 'public.app-category.video',
     icon: path.resolve('src/brand/edvid-icon'),
     asar: true,
-    extraResource: ['resources/runtime-manifest.json', 'resources/runtimes'],
+    extraResource: [
+      'resources/runtime-manifest.json',
+      'resources/runtimes',
+      'resources/remotion-template',
+    ],
     osxSign:
       process.platform === 'darwin'
         ? {
