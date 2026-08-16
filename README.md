@@ -13,7 +13,7 @@ npm run stage:codex
 npm start
 ```
 
-O estagio atual (`0.5.1`) inclui projetos recentes, login gerenciado do ChatGPT,
+O estagio atual (`0.5.2`) inclui projetos recentes, login gerenciado do ChatGPT,
 conversa em streaming, aprovacao visual do corte limpo e um workspace integrado
 de preview, timeline, estilos e correcoes por intervalos In/Out.
 

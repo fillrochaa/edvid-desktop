@@ -36,6 +36,7 @@ const qaWorkspace: ProjectWorkspace = {
 };
 const listeners = new Set<(event: CodexEvent) => void>();
 let turnNumber = 0;
+let approvalPreviewScheduled = false;
 
 const runtimeVersions: Record<RuntimeName, string> = {
   node: '26.7.0',
@@ -124,9 +125,26 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     interruptCodexTurn: async (threadId, turnId) => {
       emit({ type: 'turn-state', threadId, turnId, status: 'interrupted' });
     },
-    respondToCodexApproval: async () => undefined,
+    respondToCodexApproval: async (approvalId) => {
+      emit({ type: 'approval-resolved', approvalId });
+    },
     onCodexEvent: (listener) => {
       listeners.add(listener);
+      if (!approvalPreviewScheduled && new URLSearchParams(window.location.search).has('approval')) {
+        approvalPreviewScheduled = true;
+        window.setTimeout(() => emit({
+          type: 'approval-requested',
+          approval: {
+            id: 'qa-approval',
+            kind: 'command',
+            threadId: 'qa-thread',
+            turnId: 'qa-turn-approval',
+            title: 'Executar comando',
+            detail: "/bin/zsh -lc 'python3 -m venv edicao/fase_2/.venv && edicao/fase_2/.venv/bin/pip install mlx-whisper'",
+            cwd: '/Users/fillrocha/Documents/Coding/Edvid/projeto de teste',
+          },
+        }), 300);
+      }
       return () => listeners.delete(listener);
     },
   };

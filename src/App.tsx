@@ -837,6 +837,8 @@ export function App() {
   const [account, setAccount] = useState<CodexAccountState>(initialAccount);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [approvals, setApprovals] = useState<CodexApproval[]>([]);
+  const [answeringApprovalId, setAnsweringApprovalId] = useState<string | number | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
   const [composer, setComposer] = useState('');
   const [checking, setChecking] = useState(true);
   const [sending, setSending] = useState(false);
@@ -858,6 +860,7 @@ export function App() {
   const canChat = Boolean(projectDirectory) && account.status === 'signed-in';
   const readyRuntimes = runtimes.filter((runtime) => runtime.available).length;
   const accountLabel = account.account?.email ?? (account.status === 'waiting-for-browser' ? 'Conclua no navegador' : 'ChatGPT desconectado');
+  const activeApproval = approvals[0] ?? null;
   const pendingCutApprovalId = useMemo(
     () => [...messages].reverse().find((message) => (
       message.role === 'assistant' &&
@@ -886,6 +889,8 @@ export function App() {
     setWorkspace(next);
     setMessages([]);
     setApprovals([]);
+    setAnsweringApprovalId(null);
+    setApprovalError(null);
     setStyle(readStoredStyle(next.project.directory, next.style ?? defaultStyleSetup));
     setStyleApplied(next.media?.kind === 'final' || Boolean(next.style));
     setCorrections([]);
@@ -1004,11 +1009,18 @@ export function App() {
       return;
     }
     if (event.type === 'approval-requested') {
-      setApprovals((current) => [...current, event.approval]);
+      setApprovalError(null);
+      setApprovals((current) => (
+        current.some((approval) => approval.id === event.approval.id)
+          ? current
+          : [...current, event.approval]
+      ));
       return;
     }
     if (event.type === 'approval-resolved') {
       setApprovals((current) => current.filter((approval) => approval.id !== event.approvalId));
+      setAnsweringApprovalId((current) => current === event.approvalId ? null : current);
+      setApprovalError(null);
       return;
     }
     if (event.type === 'error') {
@@ -1106,10 +1118,14 @@ export function App() {
   }
 
   async function answerApproval(approval: CodexApproval, decision: 'accept' | 'acceptForSession' | 'decline') {
+    if (answeringApprovalId !== null) return;
+    setAnsweringApprovalId(approval.id);
+    setApprovalError(null);
     try {
       await window.edvidDesktop.respondToCodexApproval(approval.id, decision);
     } catch (error) {
-      setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: errorMessage(error) }]);
+      setApprovalError(errorMessage(error));
+      setAnsweringApprovalId(null);
     }
   }
 
@@ -1147,7 +1163,7 @@ export function App() {
     const element = messageListRef.current;
     if (!element) return;
     element.scrollTop = element.scrollHeight;
-  }, [messages, approvals, followingOutput]);
+  }, [messages, followingOutput]);
 
   return (
     <div className={`studio-shell ${railPinned ? 'rail-pinned' : ''}`}>
@@ -1259,19 +1275,6 @@ export function App() {
                   </article>
                 );
               })}
-              {approvals.map((approval) => (
-                <div className="approval-card" key={approval.id}>
-                  <span className="approval-kicker">Aprovação necessária</span>
-                  <strong>{approval.title}</strong>
-                  {approval.detail && <code>{approval.detail}</code>}
-                  {approval.cwd && <small>{approval.cwd}</small>}
-                  <div className="approval-actions">
-                    <button className="btn primary small" onClick={() => answerApproval(approval, 'accept')}>Permitir uma vez</button>
-                    <button className="btn ghost small" onClick={() => answerApproval(approval, 'acceptForSession')}>Nesta sessão</button>
-                    <button className="btn ghost small danger" onClick={() => answerApproval(approval, 'decline')}>Recusar</button>
-                  </div>
-                </div>
-              ))}
             </div>
             {!followingOutput && <button type="button" className="scroll-to-latest" onClick={() => { setFollowingOutput(true); const element = messageListRef.current; if (element) element.scrollTop = element.scrollHeight; }}><Icon name="arrowDown" /> Ir para o fim</button>}
             <form className="chat-composer" onSubmit={sendMessage}>
@@ -1302,6 +1305,75 @@ export function App() {
           </section>
         </div>
       </main>
+
+      {activeApproval && (
+        <div className="approval-overlay">
+          <section
+            className="approval-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="approval-title"
+            aria-describedby="approval-description"
+          >
+            <header className="approval-dialog-head">
+              <span className="approval-dialog-icon"><Icon name="settings" /></span>
+              <div>
+                <span className="approval-kicker">Permissão local</span>
+                <h2 id="approval-title">
+                  {activeApproval.kind === 'command' ? 'Permitir execução no computador?' : 'Permitir alteração nos arquivos?'}
+                </h2>
+              </div>
+              {approvals.length > 1 && <span className="approval-queue">1 de {approvals.length}</span>}
+            </header>
+
+            <p id="approval-description" className="approval-description">
+              O Edvid precisa desta autorização para continuar a tarefa. O processo ficará pausado até você decidir.
+            </p>
+
+            <div className="approval-detail">
+              <span>{activeApproval.kind === 'command' ? 'Comando solicitado' : 'Alteração solicitada'}</span>
+              <strong>{activeApproval.title}</strong>
+              {activeApproval.detail && <code>{activeApproval.detail}</code>}
+              {activeApproval.cwd && (
+                <div className="approval-project">
+                  <span>Projeto</span>
+                  <small>{activeApproval.cwd}</small>
+                </div>
+              )}
+            </div>
+
+            {approvalError && <div className="approval-error">{approvalError}</div>}
+            <p className="approval-privacy">Esta autorização é local e não fará parte do histórico do chat.</p>
+
+            <div className="approval-actions">
+              <button
+                type="button"
+                className="btn ghost danger"
+                onClick={() => void answerApproval(activeApproval, 'decline')}
+                disabled={answeringApprovalId !== null}
+              >
+                Recusar
+              </button>
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => void answerApproval(activeApproval, 'acceptForSession')}
+                disabled={answeringApprovalId !== null}
+              >
+                Permitir nesta sessão
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => void answerApproval(activeApproval, 'accept')}
+                disabled={answeringApprovalId !== null}
+              >
+                {answeringApprovalId === activeApproval.id ? 'Autorizando...' : 'Permitir uma vez'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
