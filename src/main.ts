@@ -36,6 +36,7 @@ import type {
 } from './shared';
 import {
   PREVIEW_SOURCE_ID,
+  asText,
   deriveSegments,
   migrateEdlToModel,
   modelFromSegments,
@@ -533,7 +534,7 @@ function segmentsFromJcut(edl: EdlDocument | null): ProjectTimeline['segments'] 
   if (jcut.length === 0) return null;
   const segments = jcut
     .map((segment, index) => ({
-      label: segment.beat?.trim() || `Take ${String(index + 1).padStart(2, '0')}`,
+      label: asText(segment.beat) || `Take ${String(index + 1).padStart(2, '0')}`,
       start: Number(segment.video_start_in_output),
       duration: Number(segment.video_duration),
       audioStart: Number(segment.audio_start_in_output),
@@ -1431,7 +1432,7 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle('project:open-recent', async (_event, input: { directory?: string }) => {
-    const requestedDirectory = path.resolve(input.directory?.trim() ?? '');
+    const requestedDirectory = path.resolve(asText(input.directory));
     const projects = await readRecentProjects();
     const qa = qaProject();
     const isRecent = projects.some(
@@ -1444,7 +1445,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     'project:refresh-workspace',
     async (_event, input: { directory?: string }) => {
-      const requestedDirectory = path.resolve(input.directory?.trim() ?? '');
+      const requestedDirectory = path.resolve(asText(input.directory));
       if (!selectedProjectDirectories.has(requestedDirectory)) {
         throw new Error('Abra o projeto antes de atualizar a edicao.');
       }
@@ -1455,7 +1456,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     'timeline:save',
     async (_event, input: { directory?: string; model?: unknown; loadStamp?: unknown }) => {
-      const requestedDirectory = path.resolve(input.directory?.trim() ?? '');
+      const requestedDirectory = path.resolve(asText(input.directory));
       if (!selectedProjectDirectories.has(requestedDirectory)) {
         throw new Error('Abra o projeto antes de salvar a timeline.');
       }
@@ -1490,7 +1491,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('remotion:ensure', () => ensureRemotionRuntime());
 
   ipcMain.handle('remotion:scaffold', async (_event, input: { directory?: string }) => {
-    const requestedDirectory = path.resolve(input.directory?.trim() ?? '');
+    const requestedDirectory = path.resolve(asText(input.directory));
     if (!selectedProjectDirectories.has(requestedDirectory)) {
       throw new Error('Abra o projeto antes de preparar a Fase 2.');
     }
@@ -1514,7 +1515,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('codex:logout', () => getCodexAppServer().logout());
 
   ipcMain.handle('codex:message', (_event, input: CodexSendMessageInput) => {
-    const projectDirectory = input.projectDirectory?.trim();
+    const projectDirectory = asText(input.projectDirectory);
     const text = input.text?.trim();
     if (!projectDirectory) throw new Error('Escolha uma pasta de projeto.');
     const resolvedProjectDirectory = path.resolve(projectDirectory);

@@ -48,6 +48,15 @@ export type PlaybackSegment = {
   speed: number;
 };
 
+// O edl.json e escrito pelo agente, entao os tipos declarados em EdlDocument
+// sao uma promessa, nao uma garantia. Um `"beat": 1` (numero) derrubava a
+// leitura inteira do projeto com "beat.trim is not a function".
+export function asText(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return '';
+}
+
 let fallbackIdCounter = 0;
 
 export function createClipId(): string {
@@ -161,8 +170,8 @@ export function migrateEdlToModel(edl: EdlDocument, fps: number): TimelineModel 
     const ordinal = String(index + 1).padStart(3, '0');
     const start = range.start as number;
     const end = range.end as number;
-    const sourceId = range.source?.trim() || fallbackSourceId;
-    const label = range.beat?.trim() || `Take ${String(index + 1).padStart(2, '0')}`;
+    const sourceId = asText(range.source) || fallbackSourceId;
+    const label = asText(range.beat) || `Take ${String(index + 1).padStart(2, '0')}`;
     const videoDuration =
       entry && finitePositive(entry.video_duration) && entry.video_duration > TIME_EPSILON
         ? entry.video_duration

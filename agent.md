@@ -491,7 +491,7 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.7.0**.
+Versão corrente: **0.7.1**.
 
 Artefato local atual:
 
@@ -540,6 +540,8 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.7.1: leitura tolerante do EDL — um "beat" numérico escrito pelo agente
+  derrubava o refresh do workspace a cada turno.
 - 0.7.0: Fase 2 renderizada pelo Remotion — template embutido com accent real,
   runtime instalado pelo aplicativo e agente proibido de improvisar pipeline.
 - 0.6.1: transcrição sem aprovação (caches em app data, `writable_roots` e

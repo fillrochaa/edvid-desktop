@@ -125,6 +125,39 @@ try {
   assert.equal(problemAudioRight.linkId, problemVideo.linkId);
   assert.equal(problemAudioLeft.linkId, null);
 
+  // --- Campos com tipo inesperado no EDL escrito pelo agente ---------------
+  // Regressão real: o agente gravou "beat": 1 (número) e a leitura do projeto
+  // inteiro morria com "beat.trim is not a function", quebrando o refresh do
+  // workspace ao fim de cada turno.
+  const edlBeatNumerico = {
+    source: '/tmp/IMG.MOV',
+    ranges: [
+      { beat: 1, start: 0.769, end: 4.758 },
+      { beat: 2, start: 6.0, end: 9.0 },
+    ],
+  };
+  const migradoNumerico = migrateEdlToModel(edlBeatNumerico, 30);
+  assert.ok(migradoNumerico, 'beat numérico não pode derrubar a migração');
+  assert.equal(sortedTrackClips(migradoNumerico, VIDEO_TRACK_ID)[0].label, '1');
+  assert.equal(sortedTrackClips(migradoNumerico, VIDEO_TRACK_ID)[1].label, '2');
+
+  // Qualquer outro tipo cai no rótulo padrão em vez de explodir.
+  for (const beat of [null, true, {}, [], undefined, Number.NaN]) {
+    const modelo = migrateEdlToModel(
+      { ranges: [{ beat, start: 0, end: 2 }] },
+      30,
+    );
+    assert.ok(modelo, `beat ${JSON.stringify(beat) ?? 'undefined'} derrubou a migração`);
+    assert.equal(sortedTrackClips(modelo, VIDEO_TRACK_ID)[0].label, 'Take 01');
+  }
+
+  // O mesmo vale para source, que vira o id da fonte.
+  const fonteNumerica = migrateEdlToModel(
+    { sources: { '7': '/tmp/a.mov' }, ranges: [{ source: 7, start: 0, end: 2 }] },
+    30,
+  );
+  assert.equal(sortedTrackClips(fonteNumerica, VIDEO_TRACK_ID)[0].sourceId, '7');
+
   // Um range inválido no meio não desalinha nem descarta os J-cuts.
   const edlWithBadRange = JSON.parse(JSON.stringify(edl));
   edlWithBadRange.ranges.splice(1, 0, { source: 'IMG', start: 50, end: 50 });
