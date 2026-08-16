@@ -67,7 +67,7 @@ const cleanCutQaResponse = [
   '- Preservados: respirações naturais e finais de palavras',
   '- Arquivo validado, sem erros de áudio ou vídeo',
   '',
-  '[Assistir ao corte limpo](</Users/qa/edicao/corte_limpo/corte_limpo_v1.mp4>)',
+  '[Visualizar corte_limpo_v1.mp4]\n(</Users/qa/edicao/corte_limpo/corte_limpo_v1.mp4>)',
   '',
   'Aprova este corte? Depois da aprovação, posso avançar para os estilos.',
 ].join('\n');

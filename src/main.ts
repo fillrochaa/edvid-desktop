@@ -77,6 +77,13 @@ type MediaCandidate = {
   score: number;
 };
 
+type InspectedProjectMedia = {
+  media: ProjectMedia;
+  absolutePath: string;
+};
+
+const inferredTimelineCache = new Map<string, Promise<ProjectTimeline | null>>();
+
 type FfprobeOutput = {
   format?: { duration?: string };
   streams?: Array<{
@@ -257,7 +264,7 @@ function inspectVideo(executable: string, argsPrefix: string[], filePath: string
   });
 }
 
-async function inspectProjectMedia(directory: string): Promise<ProjectMedia | null> {
+async function inspectProjectMedia(directory: string): Promise<InspectedProjectMedia | null> {
   const candidates: MediaCandidate[] = [];
   await collectMedia(directory, directory, 0, candidates);
   const candidate = candidates.sort((a, b) => b.score - a.score)[0];
@@ -292,18 +299,114 @@ async function inspectProjectMedia(directory: string): Promise<ProjectMedia | nu
   const token = randomUUID();
   authorizedMedia.set(token, candidate.absolutePath);
   return {
-    url: `edvid-media://local/${token}`,
-    name: path.basename(candidate.absolutePath),
-    width,
-    height,
-    duration: Number(probe.format?.duration) || 0,
-    fps: parseFrameRate(stream.avg_frame_rate || stream.r_frame_rate),
-    orientation: height > width ? 'vertical' : 'horizontal',
-    kind,
+    absolutePath: candidate.absolutePath,
+    media: {
+      url: `edvid-media://local/${token}`,
+      name: path.basename(candidate.absolutePath),
+      width,
+      height,
+      duration: Number(probe.format?.duration) || 0,
+      fps: parseFrameRate(stream.avg_frame_rate || stream.r_frame_rate),
+      orientation: height > width ? 'vertical' : 'horizontal',
+      kind,
+    },
   };
 }
 
-async function inspectProjectTimeline(directory: string): Promise<ProjectTimeline | null> {
+function detectSceneBoundaries(filePath: string, duration: number): Promise<ProjectTimeline | null> {
+  const ffmpeg = resolveRuntime('ffmpeg', {
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+  });
+  if (!ffmpeg.command || duration <= 0 || duration > 900) return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    const child = spawn(
+      ffmpeg.command as string,
+      [
+        ...ffmpeg.argsPrefix,
+        '-hide_banner',
+        '-i',
+        filePath,
+        '-filter:v',
+        "scale=320:-2,select='gt(scene,0.05)',metadata=print:key=lavfi.scene_score",
+        '-an',
+        '-f',
+        'null',
+        '-',
+      ],
+      { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] },
+    );
+    let stderr = '';
+    const timer = setTimeout(() => child.kill(), 60_000);
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      if (stderr.length < 2_000_000) stderr += chunk;
+    });
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
+      const detected: number[] = [];
+      for (const match of stderr.matchAll(/pts_time:([0-9]+(?:\.[0-9]+)?)/gu)) {
+        const time = Number(match[1]);
+        const previous = detected.at(-1) ?? -1;
+        if (time > 0.2 && time < duration - 0.2 && time - previous >= 0.25) {
+          detected.push(time);
+        }
+      }
+      if (detected.length === 0) {
+        resolve(null);
+        return;
+      }
+      const boundaries = [0, ...detected, duration];
+      resolve({
+        segments: boundaries.slice(0, -1).map((start, index) => ({
+          label: `Cena ${String(index + 1).padStart(2, '0')}`,
+          start,
+          duration: boundaries[index + 1] - start,
+          audioStart: start,
+          audioDuration: boundaries[index + 1] - start,
+        })),
+      });
+    });
+  });
+}
+
+async function inferProjectTimeline(
+  inspectedMedia: InspectedProjectMedia | null,
+): Promise<ProjectTimeline | null> {
+  if (!inspectedMedia || inspectedMedia.media.kind === 'source') return null;
+  try {
+    const fileStat = await stat(inspectedMedia.absolutePath);
+    const cacheKey = `${inspectedMedia.absolutePath}:${fileStat.size}:${fileStat.mtimeMs}`;
+    let pending = inferredTimelineCache.get(cacheKey);
+    if (!pending) {
+      pending = detectSceneBoundaries(
+        inspectedMedia.absolutePath,
+        inspectedMedia.media.duration,
+      );
+      inferredTimelineCache.set(cacheKey, pending);
+    }
+    return await pending;
+  } catch {
+    return null;
+  }
+}
+
+async function inspectProjectTimeline(
+  directory: string,
+  inspectedMedia: InspectedProjectMedia | null,
+): Promise<ProjectTimeline | null> {
   const candidatePaths = [
     path.join(directory, 'edit', 'edl.json'),
     path.join(directory, 'edit', 'corte_limpo', 'edl.json'),
@@ -325,24 +428,23 @@ async function inspectProjectTimeline(directory: string): Promise<ProjectTimelin
       };
       const jcut = Array.isArray(edl.jcut_timeline) ? edl.jcut_timeline : [];
       if (jcut.length > 0) {
-        return {
-          segments: jcut
-            .map((segment, index) => ({
-              label: segment.beat?.trim() || `Take ${String(index + 1).padStart(2, '0')}`,
-              start: Number(segment.video_start_in_output),
-              duration: Number(segment.video_duration),
-              audioStart: Number(segment.audio_start_in_output),
-              audioDuration: Number(segment.audio_duration),
-            }))
-            .filter((segment) => Number.isFinite(segment.start) && segment.duration > 0)
-            .map((segment) => ({
-              ...segment,
-              audioStart: Number.isFinite(segment.audioStart) ? segment.audioStart : segment.start,
-              audioDuration: Number.isFinite(segment.audioDuration) && segment.audioDuration > 0
-                ? segment.audioDuration
-                : segment.duration,
-            })),
-        };
+        const segments = jcut
+          .map((segment, index) => ({
+            label: segment.beat?.trim() || `Take ${String(index + 1).padStart(2, '0')}`,
+            start: Number(segment.video_start_in_output),
+            duration: Number(segment.video_duration),
+            audioStart: Number(segment.audio_start_in_output),
+            audioDuration: Number(segment.audio_duration),
+          }))
+          .filter((segment) => Number.isFinite(segment.start) && segment.duration > 0)
+          .map((segment) => ({
+            ...segment,
+            audioStart: Number.isFinite(segment.audioStart) ? segment.audioStart : segment.start,
+            audioDuration: Number.isFinite(segment.audioDuration) && segment.audioDuration > 0
+              ? segment.audioDuration
+              : segment.duration,
+          }));
+        if (segments.length > 0) return { segments };
       }
       const ranges = Array.isArray(edl.ranges) ? edl.ranges : [];
       let outputStart = 0;
@@ -359,12 +461,12 @@ async function inspectProjectTimeline(directory: string): Promise<ProjectTimelin
         outputStart += duration;
         return [segment];
       });
-      return segments.length > 0 ? { segments } : null;
+      if (segments.length > 0) return { segments };
     } catch {
       // Tenta a proxima localizacao conhecida do EDL.
     }
   }
-  return null;
+  return inferProjectTimeline(inspectedMedia);
 }
 
 async function inspectProjectStyle(directory: string): Promise<ProjectStyleState | null> {
@@ -427,12 +529,12 @@ async function openProject(directory: string, remember = true): Promise<ProjectW
         lastOpenedAt: new Date().toISOString(),
       };
   selectedProjectDirectories.add(resolvedDirectory);
-  const [media, timeline, style] = await Promise.all([
-    inspectProjectMedia(resolvedDirectory),
-    inspectProjectTimeline(resolvedDirectory),
+  const inspectedMedia = await inspectProjectMedia(resolvedDirectory);
+  const [timeline, style] = await Promise.all([
+    inspectProjectTimeline(resolvedDirectory, inspectedMedia),
     inspectProjectStyle(resolvedDirectory),
   ]);
-  return { project, media, timeline, style };
+  return { project, media: inspectedMedia?.media ?? null, timeline, style };
 }
 
 function broadcastCodexEvent(event: CodexEvent): void {
@@ -453,11 +555,37 @@ function getCodexAppServer(): CodexAppServer {
   if (!resolution.command) {
     throw new Error('Codex App Server interno nao foi empacotado para esta plataforma.');
   }
+  const runtimeContext = {
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+  };
+  const localRuntimes = ['node', 'ffmpeg', 'ffprobe', 'uv', 'yt-dlp', 'python']
+    .map((name) => resolveRuntime(name as RuntimeName, runtimeContext));
+  const runtimePath = [
+    ...new Set(localRuntimes.flatMap((runtime) => runtime.command ? [path.dirname(runtime.command)] : [])),
+    process.env.PATH,
+  ].filter((entry): entry is string => Boolean(entry)).join(path.delimiter);
+  const runtimeCommand = (name: RuntimeName) => (
+    localRuntimes.find((runtime) => runtime.name === name)?.command ?? ''
+  );
   codexAppServer = new CodexAppServer(
     resolution.command,
     path.join(app.getPath('userData'), 'codex'),
     app.getVersion(),
     broadcastCodexEvent,
+    {
+      PATH: runtimePath,
+      PYTHONDONTWRITEBYTECODE: '1',
+      PYTHONNOUSERSITE: '1',
+      EDVID_PYTHON: runtimeCommand('python'),
+      EDVID_FFMPEG: runtimeCommand('ffmpeg'),
+      EDVID_FFPROBE: runtimeCommand('ffprobe'),
+      EDVID_UV: runtimeCommand('uv'),
+      EDVID_YTDLP: runtimeCommand('yt-dlp'),
+    },
   );
   return codexAppServer;
 }

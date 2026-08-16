@@ -50,7 +50,13 @@ type LoginStartResponse =
 type ThreadStartResponse = { thread: { id: string } };
 type TurnStartResponse = { turn: { id: string } };
 
-const EDVID_INSTRUCTIONS = `Voce e o agente de edicao do Edvid Desktop. Converse em portugues do Brasil e trate a pasta do projeto como a unica area de trabalho do video. Preserve sempre os arquivos originais. Antes de uma edicao completa, faca primeiro o corte limpo guiado pelo audio e obtenha aprovacao do usuario; depois aplique visuais, legendas, trilha e acabamento. Explique mudancas importantes de forma curta e clara.`;
+const EDVID_INSTRUCTIONS = `Voce e o agente de edicao do Edvid Desktop. Converse em portugues do Brasil e trate a pasta do projeto como a unica area de trabalho do video. Preserve sempre os arquivos originais. Antes de uma edicao completa, faca primeiro o corte limpo guiado pelo audio e obtenha aprovacao do usuario; depois aplique visuais, legendas, trilha e acabamento.
+
+Contrato obrigatorio com a interface do Edvid:
+- O preview reproduz automaticamente a saida mais recente. Nunca inclua no chat caminhos absolutos, URLs file:// ou links Markdown para arquivos locais.
+- Depois de qualquer render que altere cortes ou duracao, crie ou atualize edit/edl.json antes de responder. Use ranges com um item para cada cena mantida (beat, start e end nos tempos da fonte). Quando houver J-cut, inclua tambem jcut_timeline com as posicoes reais no arquivo de saida. Esse EDL e o que permite a timeline desenhar blocos e cortes reais.
+- Node, npm, FFmpeg, FFprobe, uv, yt-dlp, Python e WhisperX ja estao empacotados e disponiveis no PATH. Nunca crie uma .venv e nunca execute pip install. Para transcrever, use python3 -m whisperx.
+- Explique apenas o resultado da edicao de forma curta; detalhes tecnicos de execucao pertencem a interface de permissao, nao a conversa.`;
 
 export class CodexAppServer {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -68,6 +74,7 @@ export class CodexAppServer {
     private readonly codexHome: string,
     private readonly appVersion: string,
     private readonly emit: (event: CodexEvent) => void,
+    private readonly runtimeEnvironment: NodeJS.ProcessEnv = {},
   ) {}
 
   async start(): Promise<void> {
@@ -84,7 +91,7 @@ export class CodexAppServer {
   private async startInternal(): Promise<void> {
     await mkdir(this.codexHome, { recursive: true });
     const child = spawn(this.executable, ['--listen', 'stdio://', '--session-source', 'appServer'], {
-      env: { ...process.env, CODEX_HOME: this.codexHome },
+      env: { ...process.env, ...this.runtimeEnvironment, CODEX_HOME: this.codexHome },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });

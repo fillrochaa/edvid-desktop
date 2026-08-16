@@ -182,6 +182,16 @@ function formatTime(seconds: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
 }
 
+function formatTimecode(seconds: number, fps: number): string {
+  const nominalFps = Math.max(1, Math.round(fps || 30));
+  const totalFrames = Math.max(0, Math.round((Number.isFinite(seconds) ? seconds : 0) * nominalFps));
+  const frames = totalFrames % nominalFps;
+  const totalSeconds = Math.floor(totalFrames / nominalFps);
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}:${String(frames).padStart(2, '0')}`;
+}
+
 const TIMELINE_LANE_START = 46;
 
 function timelinePoint(progress: number): string {
@@ -196,9 +206,9 @@ function timelineSpan(progress: number): string {
 
 function cleanAssistantText(text: string): string {
   return text
-    .replace(/^\s*\[[^\]\n]*(?:assistir|abrir)[^\]\n]*\]\(\s*<\/(?:Users|home|Volumes)\/[^)\n>]+>\s*\)\s*$/gimu, '')
-    .replace(/^\s*\[[^\]\n]+\]\(\s*(?:file:\/\/)?\/(?:Users|home|Volumes)\/[^)\n]+\)\s*$/gimu, '')
+    .replace(/^\s*\[[^\]\n]+\]\s*\(\s*<?(?:file:\/\/)?\/(?:Users|home|Volumes)\/[^)\n>]+>?\s*\)\s*$/gimu, '')
     .replace(/^\s*(?:arquivo|caminho|saída|output)\s*:\s*<?\/(?:Users|home|Volumes)\/.*$/gimu, '')
+    .replace(/^\s*<?(?:file:\/\/)?\/(?:Users|home|Volumes)\/[^>\n]+>?\s*$/gimu, '')
     .replace(/^\s*(?:aprova\s+este\s+corte\?|se\s+aprovar.*(?:diga|responda)).*$/gimu, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -323,6 +333,7 @@ function EditorWorkspace({
   applyingCorrections: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const currentTimeRef = useRef(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -342,6 +353,7 @@ function EditorWorkspace({
   const progress = effectiveDuration > 0 ? Math.min(1, currentTime / effectiveDuration) : 0;
 
   useEffect(() => {
+    currentTimeRef.current = 0;
     setCurrentTime(0);
     setPlaying(false);
     setMarkIn(null);
@@ -356,17 +368,28 @@ function EditorWorkspace({
     let frame = 0;
     const updatePlayhead = () => {
       const video = videoRef.current;
-      if (video) setCurrentTime(video.currentTime);
+      if (video) syncCurrentTime(video.currentTime);
       frame = window.requestAnimationFrame(updatePlayhead);
     };
     frame = window.requestAnimationFrame(updatePlayhead);
     return () => window.cancelAnimationFrame(frame);
   }, [playing]);
 
+  function syncCurrentTime(value: number) {
+    currentTimeRef.current = value;
+    setCurrentTime(value);
+  }
+
   function seek(value: number) {
     const nextTime = Math.max(0, Math.min(value, effectiveDuration || 0));
-    setCurrentTime(nextTime);
-    if (videoRef.current) videoRef.current.currentTime = nextTime;
+    syncCurrentTime(nextTime);
+    if (videoRef.current) {
+      try {
+        videoRef.current.currentTime = nextTime;
+      } catch {
+        // O estado da agulha continua responsivo enquanto os metadados carregam.
+      }
+    }
   }
 
   async function togglePlayback() {
@@ -384,11 +407,12 @@ function EditorWorkspace({
   }
 
   function jumpBy(seconds: number) {
-    seek(currentTime + seconds);
+    seek(currentTimeRef.current + seconds);
   }
 
   function stepByFrames(frames: number) {
-    seek(currentTime + frames / Math.max(media?.fps ?? 30, 1));
+    videoRef.current?.pause();
+    seek(currentTimeRef.current + frames / Math.max(media?.fps ?? 30, 1));
   }
 
   function toggleMute() {
@@ -398,28 +422,44 @@ function EditorWorkspace({
     setMuted(video.muted);
   }
 
-  function seekFromTimeline(event: ReactPointerEvent<HTMLDivElement>) {
+  function seekTimelineAt(clientX: number, timeline: HTMLDivElement) {
     if (!media || effectiveDuration <= 0) return;
-    if (event.type === 'pointermove' && (event.buttons & 1) === 0) return;
-    const timeline = event.currentTarget;
     const rect = timeline.getBoundingClientRect();
     const laneStart = TIMELINE_LANE_START;
     const laneEndPadding = 0;
     const laneWidth = Math.max(1, rect.width - laneStart - laneEndPadding);
-    const pointer = event.clientX - rect.left - laneStart;
+    const pointer = clientX - rect.left - laneStart;
     seek((Math.max(0, Math.min(pointer, laneWidth)) / laneWidth) * effectiveDuration);
-    if (event.type === 'pointerdown') timeline.setPointerCapture(event.pointerId);
+  }
+
+  function beginTimelineSeek(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.currentTarget.focus({ preventScroll: true });
+    event.currentTarget.setPointerCapture(event.pointerId);
+    seekTimelineAt(event.clientX, event.currentTarget);
+  }
+
+  function continueTimelineSeek(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId) && (event.buttons & 1) === 0) return;
+    seekTimelineAt(event.clientX, event.currentTarget);
+  }
+
+  function endTimelineSeek(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   }
 
   function setInPoint() {
     if (!media) return;
-    setMarkIn(currentTime);
+    setMarkIn(currentTimeRef.current);
   }
 
   function setOutPoint() {
-    if (markIn === null || currentTime <= markIn) return;
+    const outPoint = currentTimeRef.current;
+    if (markIn === null || outPoint <= markIn) return;
     videoRef.current?.pause();
-    setDraftRange({ start: markIn, end: currentTime });
+    setDraftRange({ start: markIn, end: outPoint });
     setDraftNote('');
     setMarkIn(null);
   }
@@ -508,7 +548,7 @@ function EditorWorkspace({
     };
     window.addEventListener('keydown', handleEditorShortcut);
     return () => window.removeEventListener('keydown', handleEditorShortcut);
-  }, [corrections, currentTime, draftRange, markIn, media?.fps, media?.url]);
+  }, [corrections, draftRange, markIn, media?.fps, media?.url]);
 
   const visibleTrackCount = 2
     + (phase === 2 && style.headline !== 'none' ? 1 : 0)
@@ -543,8 +583,8 @@ function EditorWorkspace({
               playsInline
               style={{ aspectRatio: `${media.width} / ${media.height}` }}
               onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
-              onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-              onSeeking={(event) => setCurrentTime(event.currentTarget.currentTime)}
+              onTimeUpdate={(event) => syncCurrentTime(event.currentTarget.currentTime)}
+              onSeeking={(event) => syncCurrentTime(event.currentTarget.currentTime)}
               onClick={() => void togglePlayback()}
               onPlay={() => setPlaying(true)}
               onPause={() => setPlaying(false)}
@@ -569,14 +609,18 @@ function EditorWorkspace({
               <small>{phase === 1 ? 'Aprovação do corte limpo' : 'Novas camadas na mesma timeline'}</small>
             </div>
           </div>
-          <div className="timeline-time">{formatTime(currentTime)} <span>/ {formatTime(effectiveDuration)}</span></div>
+          <div className="timeline-time">{formatTimecode(currentTime, media?.fps ?? 30)} <span>/ {formatTimecode(effectiveDuration, media?.fps ?? 30)}</span></div>
         </div>
         <div className="timeline-scroll">
           <div
             className="timeline-content"
             style={trackStyle}
-            onPointerDown={seekFromTimeline}
-            onPointerMove={seekFromTimeline}
+            tabIndex={media ? 0 : -1}
+            aria-label="Timeline de edição. Use as setas para mover um frame."
+            onPointerDown={beginTimelineSeek}
+            onPointerMove={continueTimelineSeek}
+            onPointerUp={endTimelineSeek}
+            onPointerCancel={endTimelineSeek}
           >
             <div className="timeline-ruler">
               <span>00:00</span><span>{formatTime(effectiveDuration * 0.25)}</span><span>{formatTime(effectiveDuration * 0.5)}</span><span>{formatTime(effectiveDuration * 0.75)}</span><span>{formatTime(effectiveDuration)}</span>
@@ -1100,7 +1144,8 @@ export function App() {
       `Aplique as ${items.length} correções marcadas na timeline do preview atual.`,
       'Os tempos abaixo são In/Out do vídeo renderizado exibido no preview:',
       ...items.map((item, index) => `${index + 1}. IN ${item.start.toFixed(3)}s | OUT ${item.end.toFixed(3)}s | ${item.note}`),
-      'Aplique todas as correções em uma única passagem, valide o novo resultado e atualize o preview. Não peça para eu reenviar estas marcações.',
+      'Aplique todas as correções em uma única passagem, valide o novo resultado e atualize o preview.',
+      'Crie ou atualize edit/edl.json com um range por cena mantida para a timeline refletir todos os cortes. Não peça para eu reenviar estas marcações.',
     ].join('\n');
     return dispatchMessage(
       prompt,
