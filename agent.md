@@ -357,12 +357,11 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente do código: **0.6.0** (DMG ainda não gerado; rodar `npm run
-make` quando for distribuir).
+Versão corrente: **0.6.0**.
 
-Último artefato local gerado:
+Artefato local atual:
 
-`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.5.3-arm64.dmg`
+`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.6.0-arm64.dmg`
 
 Configuração do DMG:
 
