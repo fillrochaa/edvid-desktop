@@ -3,6 +3,7 @@ import type {
   AppUpdateState,
   CodexEvent,
   EdvidDesktopApi,
+  MemberAuthState,
   Phase2RenderState,
   RemotionRuntimeState,
   WhisperModelState,
@@ -39,6 +40,14 @@ const api: EdvidDesktopApi = {
     ipcRenderer.invoke('remotion:scaffold', { directory }),
   getSourceWaveform: (mediaUrl) => ipcRenderer.invoke('waveform:get', { url: mediaUrl }),
   installAppUpdate: () => ipcRenderer.invoke('update:install'),
+  getMemberAuth: () => ipcRenderer.invoke('member:get'),
+  memberLogin: (email, password) => ipcRenderer.invoke('member:login', { email, password }),
+  memberLogout: () => ipcRenderer.invoke('member:logout'),
+  onMemberAuthState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: MemberAuthState) => listener(state);
+    ipcRenderer.on('member:state', handler);
+    return () => ipcRenderer.removeListener('member:state', handler);
+  },
   onAppUpdateState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: AppUpdateState) => listener(state);
     ipcRenderer.on('update:state', handler);

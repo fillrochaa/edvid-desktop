@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-17 (0.7.9 — OTA e pipeline de assinatura de produção prontos)
+Atualizado em: 2026-08-17 (0.8.0 — login de alunos pela Creator Factory)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -552,11 +552,11 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.7.9**.
+Versão corrente: **0.8.0**.
 
 Artefato local atual:
 
-`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.9-arm64.dmg`
+`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.8.0-arm64.dmg`
 
 Configuração do DMG:
 
@@ -601,7 +601,40 @@ credenciais e hospedagem:
 
 Pendente para distribuição pública: instalar o certificado + credenciais nas
 variáveis acima, criar o bucket do feed e validar a primeira build
-assinada/notarizada de ponta a ponta.
+assinada/notarizada de ponta a ponta. Status 2026-08-17: a assinatura Apple
+Developer está em renovação (até ~2 dias úteis); retomar OTA quando ativar.
+
+### 13c. Login de alunos — Creator Factory (0.8.0)
+
+O acesso ao Edvid é dos alunos com matrícula ativa no curso **IA Edit Pro**
+da Creator Factory (plataforma própria, Next.js + Supabase, repo
+`fillrochaa/creator-factory`). O gate usa a infraestrutura existente, sem
+backend novo:
+
+- **Mesmo login da área de membros**: Supabase Auth direto
+  (`/auth/v1/token`, grant password/refresh) com a **anon key** pública. A
+  senha nunca é persistida; o refresh token (rotativo) fica em
+  `userData/member-auth.json` (0600).
+- **Direito de uso**: leitura das próprias matrículas via política RLS
+  existente `enrollments_select_own_or_admin` —
+  `enrollments?select=status,expires_at,course:courses(slug,title)`; vale
+  matrícula `active` não expirada do slug `ia-edit-pro-thpgfw` (fallback por
+  título "IA Edit Pro", caso o curso seja recriado). Compra/reembolso já
+  mantêm a tabela em dia pelos webhooks Hotmart/Kiwify/Hubla da plataforma.
+- **Estados**: `unconfigured` (sem chaves → gate desligado, app normal),
+  `signed-out`, `checking`, `no-access` (login ok sem matrícula; sessão fica
+  guardada para reabrir resolver) e `signed-in` (com `offline: true` quando
+  validando pela tolerância de 7 dias sem rede).
+- **UI**: tela de login em tela cheia (e-mail/senha da Creator Factory),
+  tela "matrícula não está ativa", bloco do aluno com Sair na rail. O login
+  do ChatGPT (agente) permanece separado.
+- **Para ativar**: preencher `MEMBER_SUPABASE_URL` e
+  `MEMBER_SUPABASE_ANON_KEY` em src/main.ts (ou env `EDVID_SUPABASE_URL`/
+  `EDVID_SUPABASE_ANON_KEY` para teste) com a Project URL e a anon key do
+  painel Supabase. A anon é pública por design (RLS protege); a
+  **service_role jamais** entra no app ou no repositório.
+- QA visual: `?aluno` na URL do QA simula deslogado; senha "errada" e e-mail
+  contendo "sem-acesso" exercitam os erros.
 
 Ao testar um DMG novo, ejetar a versão montada anteriormente para evitar que o
 Finder reaproveite estado antigo.
@@ -628,6 +661,11 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.8.0: gate de login dos alunos — mesma conta da Creator Factory
+  (Supabase Auth com anon key), matrícula ativa do IA Edit Pro via RLS
+  existente, refresh token em userData, tolerância offline de 7 dias, telas
+  de login/sem-matrícula e conta do aluno na rail. Inerte até preencher a
+  URL e a anon key do projeto (seção 13c).
 - 0.7.9: OTA estilo ChatGPT implementado (autoUpdater Squirrel.Mac + feed
   JSON estático + botão "Atualizar · Reiniciar" no topo) e pipeline de
   assinatura de produção/notarização env-driven no Forge com

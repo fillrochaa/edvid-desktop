@@ -396,6 +396,18 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .video-stage { position: relative; }
 .video-stage-note { position: absolute; inset: 0; display: grid; place-items: center; color: #77818d; background: rgba(4,6,9,.72); font-size: 8.5px; pointer-events: none; }
 .chat-status { margin: 10px 2px 0; }
+.member-gate { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(1200px 640px at 70% -10%, rgba(255,119,19,.09), transparent 60%), var(--bg, #06080b); }
+.member-card { width: min(360px, 92vw); padding: 26px 26px 24px; border: 1px solid var(--stroke, rgba(255,255,255,.09)); border-radius: 16px; background: rgba(10,13,18,.92); box-shadow: 0 24px 60px rgba(0,0,0,.45); }
+.member-logo { height: 30px; margin-bottom: 18px; }
+.member-card h1 { margin: 0 0 6px; color: var(--text, #e8edf3); font-size: 14px; }
+.member-card p { margin: 0 0 14px; color: #97a1ad; font-size: 9px; line-height: 1.55; }
+.member-card p strong { color: #cfd6de; }
+.member-hint { font-size: 8px; }
+.member-card form { display: flex; flex-direction: column; gap: 10px; }
+.member-card label { display: flex; flex-direction: column; gap: 4px; color: #8b95a1; font-size: 8px; }
+.member-card input { padding: 9px 10px; border: 1px solid var(--stroke, rgba(255,255,255,.09)); border-radius: 9px; outline: none; color: var(--text, #e8edf3); background: rgba(0,0,0,.25); font-size: 9.5px; }
+.member-card input:focus { border-color: rgba(255,119,19,.45); }
+.member-card .btn { justify-content: center; }
 .btn.update-ready { animation: model-pulse 2.2s ease-in-out infinite; white-space: nowrap; }
 .phase2-render-banner { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 7px 10px; border: 1px solid rgba(255,119,19,.28); border-radius: 9px; background: rgba(255,119,19,.07); }
 .phase2-render-orb { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #ff7713; animation: model-pulse 1.3s ease-in-out infinite; }

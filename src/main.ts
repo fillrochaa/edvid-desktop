@@ -25,6 +25,7 @@ import type {
   CodexApprovalDecision,
   CodexEvent,
   CodexSendMessageInput,
+  MemberAuthState,
   Phase2RenderState,
   ProjectMedia,
   SourceWaveform,
@@ -1964,6 +1965,278 @@ function createWindow(): void {
   }
 }
 
+// --- Login do aluno (Creator Factory / Supabase) ---------------------------
+// O aluno entra com o MESMO e-mail/senha da area de membros: autenticacao
+// direta no Supabase Auth da plataforma com a anon key (chave publica,
+// protegida pelas RLS). O direito de uso e a matricula ativa no curso
+// IA Edit Pro, lida pela politica existente enrollments_select_own_or_admin.
+// Sem as duas chaves abaixo o gate fica desligado e o app se comporta como
+// sempre. A senha nunca e persistida; guardamos apenas o refresh token.
+
+const MEMBER_SUPABASE_URL =
+  process.env.EDVID_SUPABASE_URL?.trim() ||
+  // URL publica do projeto Supabase da Creator Factory (https://xxxx.supabase.co).
+  '';
+const MEMBER_SUPABASE_ANON_KEY =
+  process.env.EDVID_SUPABASE_ANON_KEY?.trim() ||
+  // Anon key publica do projeto (a mesma que o site entrega ao navegador).
+  '';
+// Matriculas que dao direito ao Edvid. O slug e o estavel; o titulo cobre o
+// caso de o curso ser recriado com slug novo.
+const MEMBER_ACCESS_SLUGS = new Set(['ia-edit-pro-thpgfw']);
+const MEMBER_ACCESS_TITLE = 'ia edit pro';
+// Ficar offline nao pode trancar o aluno na hora: a ultima validacao vale
+// por este periodo.
+const MEMBER_OFFLINE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+
+let memberAuthState: MemberAuthState = { status: 'unconfigured' };
+
+type StoredMemberAuth = {
+  refreshToken: string;
+  email: string;
+  name?: string;
+  lastValidatedAt: number;
+};
+
+function memberConfigured(): boolean {
+  return MEMBER_SUPABASE_URL.startsWith('https://') && MEMBER_SUPABASE_ANON_KEY.length > 20;
+}
+
+function memberAuthFile(): string {
+  return path.join(app.getPath('userData'), 'member-auth.json');
+}
+
+function broadcastMemberAuth(state: MemberAuthState): void {
+  memberAuthState = state;
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('member:state', state);
+  }
+}
+
+async function readStoredMemberAuth(): Promise<StoredMemberAuth | null> {
+  try {
+    const parsed = JSON.parse(await readFile(memberAuthFile(), 'utf8')) as Partial<StoredMemberAuth>;
+    const refreshToken = asText(parsed.refreshToken);
+    const email = asText(parsed.email);
+    if (!refreshToken || !email) return null;
+    return {
+      refreshToken,
+      email,
+      name: asText(parsed.name) || undefined,
+      lastValidatedAt: Number(parsed.lastValidatedAt) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeStoredMemberAuth(stored: StoredMemberAuth | null): Promise<void> {
+  if (!stored) {
+    await rm(memberAuthFile(), { force: true });
+    return;
+  }
+  await writeFile(memberAuthFile(), `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
+}
+
+type MemberTokens = {
+  accessToken: string;
+  refreshToken: string;
+  email: string;
+  name?: string;
+};
+
+type MemberTokenResult =
+  | { kind: 'ok'; tokens: MemberTokens }
+  | { kind: 'denied'; message: string }
+  | { kind: 'network' };
+
+async function requestMemberTokens(body: Record<string, string>, grantType: string): Promise<MemberTokenResult> {
+  let response: Response;
+  try {
+    response = await net.fetch(`${MEMBER_SUPABASE_URL}/auth/v1/token?grant_type=${grantType}`, {
+      method: 'POST',
+      headers: {
+        apikey: MEMBER_SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return { kind: 'network' };
+  }
+  let payload: {
+    access_token?: string;
+    refresh_token?: string;
+    user?: { email?: string; user_metadata?: { name?: string } };
+    error_description?: string;
+    msg?: string;
+    error_code?: string;
+  };
+  try {
+    payload = (await response.json()) as typeof payload;
+  } catch {
+    return response.ok ? { kind: 'network' } : { kind: 'denied', message: 'Falha ao entrar. Tente de novo.' };
+  }
+  if (!response.ok || !payload.access_token || !payload.refresh_token) {
+    const raw = asText(payload.error_description) || asText(payload.msg);
+    const message = /invalid login credentials/iu.test(raw)
+      ? 'E-mail ou senha incorretos. Use os mesmos dados da área de membros.'
+      : /email not confirmed/iu.test(raw)
+        ? 'Confirme seu e-mail na Creator Factory antes de entrar.'
+        : raw || 'Não foi possível entrar.';
+    return { kind: 'denied', message };
+  }
+  return {
+    kind: 'ok',
+    tokens: {
+      accessToken: payload.access_token,
+      refreshToken: payload.refresh_token,
+      email: asText(payload.user?.email),
+      name: asText(payload.user?.user_metadata?.name) || undefined,
+    },
+  };
+}
+
+type MemberEntitlement = 'active' | 'inactive' | 'network';
+
+async function checkMemberEntitlement(accessToken: string): Promise<MemberEntitlement> {
+  let response: Response;
+  try {
+    response = await net.fetch(
+      `${MEMBER_SUPABASE_URL}/rest/v1/enrollments?select=status,expires_at,course:courses(slug,title)`,
+      {
+        headers: {
+          apikey: MEMBER_SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+    );
+  } catch {
+    return 'network';
+  }
+  if (!response.ok) return response.status >= 500 ? 'network' : 'inactive';
+  let rows: Array<{
+    status?: string;
+    expires_at?: string | null;
+    course?: { slug?: string; title?: string } | null;
+  }>;
+  try {
+    rows = (await response.json()) as typeof rows;
+  } catch {
+    return 'network';
+  }
+  const now = Date.now();
+  const active = (Array.isArray(rows) ? rows : []).some((row) => {
+    if (asText(row.status) !== 'active') return false;
+    const expires = asText(row.expires_at);
+    if (expires && Date.parse(expires) <= now) return false;
+    const slug = asText(row.course?.slug).toLocaleLowerCase('pt-BR');
+    const title = asText(row.course?.title).toLocaleLowerCase('pt-BR');
+    return MEMBER_ACCESS_SLUGS.has(slug) || title === MEMBER_ACCESS_TITLE;
+  });
+  return active ? 'active' : 'inactive';
+}
+
+async function memberLogin(email: string, password: string): Promise<MemberAuthState> {
+  if (!memberConfigured()) return memberAuthState;
+  broadcastMemberAuth({ status: 'checking' });
+  const result = await requestMemberTokens({ email, password }, 'password');
+  if (result.kind === 'network') {
+    broadcastMemberAuth({ status: 'signed-out', error: 'Sem conexão. Verifique a internet e tente de novo.' });
+    return memberAuthState;
+  }
+  if (result.kind === 'denied') {
+    broadcastMemberAuth({ status: 'signed-out', error: result.message });
+    return memberAuthState;
+  }
+  const entitlement = await checkMemberEntitlement(result.tokens.accessToken);
+  if (entitlement === 'network') {
+    broadcastMemberAuth({ status: 'signed-out', error: 'Sem conexão para validar sua matrícula. Tente de novo.' });
+    return memberAuthState;
+  }
+  const identity = { email: result.tokens.email || email, name: result.tokens.name };
+  if (entitlement === 'inactive') {
+    // Guarda a sessao mesmo sem matricula: se o acesso for liberado depois,
+    // reabrir o aplicativo ja resolve sem novo login.
+    await writeStoredMemberAuth({
+      refreshToken: result.tokens.refreshToken,
+      email: identity.email,
+      name: identity.name,
+      lastValidatedAt: 0,
+    });
+    broadcastMemberAuth({ status: 'no-access', ...identity });
+    return memberAuthState;
+  }
+  await writeStoredMemberAuth({
+    refreshToken: result.tokens.refreshToken,
+    email: identity.email,
+    name: identity.name,
+    lastValidatedAt: Date.now(),
+  });
+  broadcastMemberAuth({ status: 'signed-in', ...identity });
+  return memberAuthState;
+}
+
+async function memberLogout(): Promise<MemberAuthState> {
+  await writeStoredMemberAuth(null);
+  if (memberConfigured()) broadcastMemberAuth({ status: 'signed-out' });
+  return memberAuthState;
+}
+
+async function memberBoot(): Promise<void> {
+  if (!memberConfigured()) {
+    broadcastMemberAuth({ status: 'unconfigured' });
+    return;
+  }
+  const stored = await readStoredMemberAuth();
+  if (!stored) {
+    broadcastMemberAuth({ status: 'signed-out' });
+    return;
+  }
+  broadcastMemberAuth({ status: 'checking' });
+  const offlineFallback = (): void => {
+    if (Date.now() - stored.lastValidatedAt < MEMBER_OFFLINE_GRACE_MS) {
+      broadcastMemberAuth({ status: 'signed-in', email: stored.email, name: stored.name, offline: true });
+    } else {
+      broadcastMemberAuth({
+        status: 'signed-out',
+        error: 'Não foi possível validar seu acesso. Conecte-se à internet e entre de novo.',
+      });
+    }
+  };
+  const result = await requestMemberTokens({ refresh_token: stored.refreshToken }, 'refresh_token');
+  if (result.kind === 'network') {
+    offlineFallback();
+    return;
+  }
+  if (result.kind === 'denied') {
+    await writeStoredMemberAuth(null);
+    broadcastMemberAuth({ status: 'signed-out' });
+    return;
+  }
+  const identity = {
+    email: result.tokens.email || stored.email,
+    name: result.tokens.name ?? stored.name,
+  };
+  // O refresh token rotaciona a cada uso; salvar o novo e obrigatorio.
+  const entitlement = await checkMemberEntitlement(result.tokens.accessToken);
+  await writeStoredMemberAuth({
+    refreshToken: result.tokens.refreshToken,
+    email: identity.email,
+    name: identity.name,
+    lastValidatedAt: entitlement === 'active' ? Date.now() : stored.lastValidatedAt,
+  });
+  if (entitlement === 'network') {
+    offlineFallback();
+    return;
+  }
+  if (entitlement === 'inactive') {
+    broadcastMemberAuth({ status: 'no-access', ...identity });
+    return;
+  }
+  broadcastMemberAuth({ status: 'signed-in', ...identity });
+}
+
 // --- Atualizacao OTA -------------------------------------------------------
 // Estilo ChatGPT: checa um feed estatico, baixa em segundo plano e avisa a
 // interface quando a nova versao esta pronta para reiniciar. Exige build com
@@ -2013,6 +2286,10 @@ registerIpcHandlers();
 ipcMain.handle('update:install', () => {
   if (appUpdateState.status === 'ready') autoUpdater.quitAndInstall();
 });
+ipcMain.handle('member:get', () => memberAuthState);
+ipcMain.handle('member:login', (_event, input: { email?: string; password?: string }) =>
+  memberLogin(asText(input.email).toLocaleLowerCase('pt-BR'), asText(input.password)));
+ipcMain.handle('member:logout', () => memberLogout());
 
 void app.whenReady().then(async () => {
   // Os caches precisam existir antes do Codex iniciar: eles entram como
@@ -2021,6 +2298,7 @@ void app.whenReady().then(async () => {
     console.warn('Nao foi possivel preparar os caches do Edvid:', error);
   });
   setupAutoUpdate();
+  void memberBoot();
   // Servidor de mídia com suporte a Range. Sem 206/Accept-Ranges o <video>
   // não consegue posicionar a agulha em arquivos grandes: o clique na
   // timeline era ignorado ou o vídeo reiniciava do zero.

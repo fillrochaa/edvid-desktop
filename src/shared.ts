@@ -151,6 +151,17 @@ export type AppUpdateState = {
   version?: string;
 };
 
+// Login do aluno (Creator Factory / Supabase). "unconfigured" = app sem as
+// chaves publicas do projeto: o gate fica desligado e tudo funciona como
+// antes. "no-access" = login valido, mas sem matricula ativa no curso.
+export type MemberAuthState = {
+  status: 'unconfigured' | 'checking' | 'signed-out' | 'signed-in' | 'no-access';
+  email?: string;
+  name?: string;
+  offline?: boolean;
+  error?: string;
+};
+
 // Render da Fase 2 feito pelo aplicativo, fora do sandbox do agente. "idle"
 // tambem cobre "nada a renderizar" (dados do public/ ausentes ou incompletos).
 export type Phase2RenderState = {
@@ -250,6 +261,10 @@ export type EdvidDesktopApi = {
   getSourceWaveform: (mediaUrl: string) => Promise<SourceWaveform | null>;
   installAppUpdate: () => Promise<void>;
   onAppUpdateState: (listener: (state: AppUpdateState) => void) => () => void;
+  getMemberAuth: () => Promise<MemberAuthState>;
+  memberLogin: (email: string, password: string) => Promise<MemberAuthState>;
+  memberLogout: () => Promise<MemberAuthState>;
+  onMemberAuthState: (listener: (state: MemberAuthState) => void) => () => void;
   renderPhase2: (directory: string) => Promise<Phase2RenderState>;
   onPhase2RenderState: (listener: (state: Phase2RenderState) => void) => () => void;
   sendCodexMessage: (input: CodexSendMessageInput) => Promise<CodexSendMessageResult>;

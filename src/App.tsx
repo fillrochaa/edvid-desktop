@@ -17,6 +17,7 @@ import type {
   CodexApproval,
   CodexEvent,
   DesktopInfo,
+  MemberAuthState,
   Phase2RenderState,
   ProjectSummary,
   ProjectWorkspace,
@@ -1747,6 +1748,85 @@ function StyleWorkspace({
   );
 }
 
+function MemberGate({
+  auth,
+  onLogin,
+  onLogout,
+}: {
+  auth: MemberAuthState;
+  onLogin: (email: string, password: string) => Promise<void>;
+  onLogout: () => Promise<void>;
+}) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const busy = submitting || auth.status === 'checking';
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy || !email.trim() || !password) return;
+    setSubmitting(true);
+    try {
+      await onLogin(email.trim(), password);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="member-gate">
+      <section className="member-card">
+        <img className="member-logo" src={edvidLogo} alt="Edvid" />
+        {auth.status === 'no-access' ? (
+          <>
+            <h1>Sua matrícula não está ativa</h1>
+            <p>
+              O Edvid é liberado para alunos com o <strong>IA Edit Pro</strong> ativo na Creator
+              Factory. A conta {auth.email ? <strong>{auth.email}</strong> : 'informada'} não tem essa
+              matrícula no momento — se você acabou de comprar ou renovou, feche e reabra o aplicativo.
+            </p>
+            <p className="member-hint">Dúvidas? Fale com o suporte da Creator Factory.</p>
+            <button type="button" className="btn ghost" onClick={() => void onLogout()}>Entrar com outra conta</button>
+          </>
+        ) : (
+          <>
+            <h1>Entre com sua conta de aluno</h1>
+            <p>Use o mesmo e-mail e senha da área de membros da Creator Factory.</p>
+            <form onSubmit={submit}>
+              <label>
+                <span>E-mail</span>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="username"
+                  placeholder="voce@exemplo.com"
+                  disabled={busy}
+                />
+              </label>
+              <label>
+                <span>Senha</span>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete="current-password"
+                  placeholder="Sua senha da Creator Factory"
+                  disabled={busy}
+                />
+              </label>
+              {auth.error && <div className="inline-error">{auth.error}</div>}
+              <button type="submit" className="btn primary" disabled={busy || !email.trim() || !password}>
+                {busy ? 'Entrando...' : 'Entrar'}
+              </button>
+            </form>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
 export function App() {
   const [desktopInfo, setDesktopInfo] = useState<DesktopInfo | null>(null);
   const [runtimes, setRuntimes] = useState<RuntimeCheck[]>([]);
@@ -1779,6 +1859,7 @@ export function App() {
   });
   const [phase2Render, setPhase2Render] = useState<Phase2RenderState>({ status: 'idle' });
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({ status: 'idle' });
+  const [memberAuth, setMemberAuth] = useState<MemberAuthState>({ status: 'unconfigured' });
   const [jcutApplied, setJcutApplied] = useState(false);
   const phase2StatusRef = useRef<Phase2RenderState['status']>('idle');
   const messageListRef = useRef<HTMLDivElement | null>(null);
@@ -2209,6 +2290,8 @@ export function App() {
     const unsubscribeRemotion = window.edvidDesktop.onRemotionRuntimeState(setRemotionRuntime);
     const unsubscribePhase2 = window.edvidDesktop.onPhase2RenderState(handlePhase2RenderState);
     const unsubscribeUpdate = window.edvidDesktop.onAppUpdateState(setAppUpdate);
+    const unsubscribeMember = window.edvidDesktop.onMemberAuthState(setMemberAuth);
+    void window.edvidDesktop.getMemberAuth().then(setMemberAuth);
     if (!booted.current) {
       booted.current = true;
       void window.edvidDesktop.getDesktopInfo().then(setDesktopInfo);
@@ -2235,6 +2318,7 @@ export function App() {
       unsubscribeRemotion();
       unsubscribePhase2();
       unsubscribeUpdate();
+      unsubscribeMember();
     };
   }, []);
 
@@ -2255,6 +2339,22 @@ export function App() {
       jcutApplied,
     } satisfies StoredChat));
   }, [messages, handledCutApprovalId, jcutApplied, projectDirectory]);
+
+  // Gate do aluno: sem sessão válida, o estúdio inteiro fica atrás do login.
+  // "unconfigured" (sem as chaves do Supabase) mantém o app aberto como antes.
+  if (memberAuth.status === 'signed-out' || memberAuth.status === 'checking' || memberAuth.status === 'no-access') {
+    return (
+      <MemberGate
+        auth={memberAuth}
+        onLogin={async (email, password) => {
+          setMemberAuth(await window.edvidDesktop.memberLogin(email, password));
+        }}
+        onLogout={async () => {
+          setMemberAuth(await window.edvidDesktop.memberLogout());
+        }}
+      />
+    );
+  }
 
   return (
     <div className={`studio-shell ${railPinned ? 'rail-pinned' : ''}`}>
@@ -2285,6 +2385,13 @@ export function App() {
             <span className={`status-orb ${readyRuntimes === runtimeNames.length ? 'ready' : ''}`} />
             <span className="rail-status-copy"><strong>{checking ? 'Verificando...' : `${readyRuntimes}/${runtimeNames.length} dependências`}</strong><small>{desktopInfo ? `${desktopInfo.platform} · ${desktopInfo.arch}` : 'Ambiente local'}</small></span>
           </button>
+          {memberAuth.status === 'signed-in' && (
+            <div className="rail-account">
+              <span className="account-avatar signed-in">{(memberAuth.name ?? memberAuth.email ?? 'A').slice(0, 1).toUpperCase()}</span>
+              <span className="rail-account-copy"><strong>{memberAuth.name ?? memberAuth.email}</strong><small>{memberAuth.offline ? 'Aluno · validação offline' : 'Aluno Creator Factory'}</small></span>
+              <button type="button" className="account-action" onClick={() => void window.edvidDesktop.memberLogout().then(setMemberAuth)}>Sair</button>
+            </div>
+          )}
           <div className="rail-account">
             <span className={`account-avatar ${account.status}`}>{account.account?.email?.slice(0, 1).toUpperCase() ?? 'E'}</span>
             <span className="rail-account-copy"><strong>{accountLabel}</strong><small>{account.status === 'signed-in' ? 'Conta ChatGPT' : 'Conecte sua conta'}</small></span>
