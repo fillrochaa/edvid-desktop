@@ -1975,12 +1975,13 @@ function createWindow(): void {
 
 const MEMBER_SUPABASE_URL =
   process.env.EDVID_SUPABASE_URL?.trim() ||
-  // URL publica do projeto Supabase da Creator Factory (https://xxxx.supabase.co).
-  '';
+  // URL publica do projeto Supabase da Creator Factory.
+  'https://pvefvoskgqthaazucuol.supabase.co';
 const MEMBER_SUPABASE_ANON_KEY =
   process.env.EDVID_SUPABASE_ANON_KEY?.trim() ||
-  // Anon key publica do projeto (a mesma que o site entrega ao navegador).
-  '';
+  // Anon key publica do projeto (a mesma que o site entrega ao navegador;
+  // protegida pelas RLS — a service_role jamais entra aqui).
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2ZWZ2b3NrZ3F0aGFhenVjdW9sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIzOTUyNDgsImV4cCI6MjA5Nzk3MTI0OH0.meYSpQTVUQf2a3dlgFe8LCjOApJkle2Hk6dhvrkpMaY';
 // Matriculas que dao direito ao Edvid. O slug e o estavel; o titulo cobre o
 // caso de o curso ser recriado com slug novo.
 const MEMBER_ACCESS_SLUGS = new Set(['ia-edit-pro-thpgfw']);
