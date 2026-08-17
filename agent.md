@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-17 (0.7.8 — trim restaurado, chat persistente e J-Cut opcional)
+Atualizado em: 2026-08-17 (0.7.9 — OTA e pipeline de assinatura de produção prontos)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -552,11 +552,11 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.7.8**.
+Versão corrente: **0.7.9**.
 
 Artefato local atual:
 
-`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.8-arm64.dmg`
+`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.9-arm64.dmg`
 
 Configuração do DMG:
 
@@ -568,13 +568,40 @@ Configuração do DMG:
 - Layout centralizado e compacto.
 
 O build local usa assinatura ad-hoc quando `EDVID_MAC_SIGN_IDENTITY` não está
-configurado. Para distribuição pública ainda serão necessários:
+configurado.
 
-- Certificado Developer ID Application.
-- Assinatura de produção.
-- Notarização da Apple.
-- Stapling do ticket.
-- Estratégia de atualização automática.
+### 13b. OTA e assinatura de produção (pipeline pronto na 0.7.9)
+
+A conta Apple Developer existe e está ativa. O pipeline inteiro está no
+repositório e liga sozinho pelas variáveis de ambiente — falta plugar
+credenciais e hospedagem:
+
+- **Assinatura de produção**: `EDVID_MAC_SIGN_IDENTITY="Developer ID
+  Application: Nome (TEAMID)"` com o certificado instalado no Keychain.
+  Com identidade real o build usa Hardened Runtime +
+  `entitlements.mac.plist` (JIT do V8, validação de biblioteca desligada e
+  dyld liberado para o Python/PyTorch e FFmpeg embutidos).
+- **Notarização**: `EDVID_APPLE_ID`, `EDVID_APPLE_APP_PASSWORD` (senha de
+  app de appleid.apple.com) e `EDVID_APPLE_TEAM_ID`. Presentes as três +
+  identidade, o `npm run make` assina, notariza e grampeia.
+- **OTA (Squirrel.Mac, o mesmo do app do ChatGPT)**: o aplicativo checa um
+  feed JSON a cada 4 h e no boot, baixa em segundo plano e mostra
+  "Atualizar para X · Reiniciar" no topo; um clique instala e reabre.
+  O feed sai de `node scripts/generate-update-feed.mjs <URL base>` usando o
+  ZIP que o make já produz. Hospedagem recomendada: bucket Cloudflare R2
+  público (egresso gratuito; cada update pesa ~820 MB hoje). A URL definitiva
+  entra em `UPDATE_FEED_URL` (src/main.ts) — até lá, o updater fica inerte
+  (também aceita `EDVID_UPDATE_FEED_URL` para teste).
+- **Avisos honestos**: o Squirrel recusa builds ad-hoc — OTA só funciona a
+  partir do primeiro build assinado; e a primeira notarização real dos
+  runtimes embutidos (centenas de Mach-O do Python/Torch) é o ponto
+  sabidamente trabalhoso — reservar uma iteração para ela.
+- Otimização futura: mover os runtimes (~700 MB) para download sob demanda
+  como o Remotion, derrubando o update para ~100 MB.
+
+Pendente para distribuição pública: instalar o certificado + credenciais nas
+variáveis acima, criar o bucket do feed e validar a primeira build
+assinada/notarizada de ponta a ponta.
 
 Ao testar um DMG novo, ejetar a versão montada anteriormente para evitar que o
 Finder reaproveite estado antigo.
@@ -601,6 +628,12 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.7.9: OTA estilo ChatGPT implementado (autoUpdater Squirrel.Mac + feed
+  JSON estático + botão "Atualizar · Reiniciar" no topo) e pipeline de
+  assinatura de produção/notarização env-driven no Forge com
+  entitlements.mac.plist. Inerte até plugar certificado, credenciais e a URL
+  do feed (seção 13b). Login de alunos: aguardando detalhes da plataforma
+  própria da Creator Factory para desenhar a integração.
 - 0.7.8: o trim por arrasto voltou — a regra `.timeline-clip > span` criada
   para o rótulo sobre as ondas tinha especificidade maior que `.clip-handle`
   e roubava position/z-index das alças (lição: estilos de rótulo em classe

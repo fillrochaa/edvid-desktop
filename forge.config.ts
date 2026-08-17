@@ -9,6 +9,15 @@ import path from 'node:path';
 
 const macSigningIdentity = process.env.EDVID_MAC_SIGN_IDENTITY?.trim();
 
+// Notarizacao so entra quando as tres credenciais estiverem no ambiente:
+// EDVID_APPLE_ID (e-mail da conta), EDVID_APPLE_APP_PASSWORD (senha de app
+// gerada em appleid.apple.com) e EDVID_APPLE_TEAM_ID. Sem elas o build segue
+// local (ad-hoc), como sempre.
+const appleId = process.env.EDVID_APPLE_ID?.trim();
+const appleAppPassword = process.env.EDVID_APPLE_APP_PASSWORD?.trim();
+const appleTeamId = process.env.EDVID_APPLE_TEAM_ID?.trim();
+const canNotarize = Boolean(macSigningIdentity && appleId && appleAppPassword && appleTeamId);
+
 const config: ForgeConfig = {
   packagerConfig: {
     appBundleId: 'com.creatorfactory.edvid',
@@ -27,10 +36,22 @@ const config: ForgeConfig = {
             identity: macSigningIdentity || '-',
             identityValidation: Boolean(macSigningIdentity),
             optionsForFile: macSigningIdentity
-              ? undefined
+              ? () => ({
+                  // Producao: Hardened Runtime e entitlements que cobrem o V8
+                  // e os runtimes embutidos (Python/PyTorch, FFmpeg, Node).
+                  hardenedRuntime: true,
+                  entitlements: path.resolve('entitlements.mac.plist'),
+                })
               : () => ({ entitlements: path.resolve('entitlements.mac.dev.plist') }),
           }
         : undefined,
+    osxNotarize: canNotarize
+      ? {
+          appleId: appleId as string,
+          appleIdPassword: appleAppPassword as string,
+          teamId: appleTeamId as string,
+        }
+      : undefined,
   },
   rebuildConfig: {},
   makers: [

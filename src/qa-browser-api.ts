@@ -142,6 +142,13 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     }),
     renderPhase2: async () => ({ status: 'idle' }),
     onPhase2RenderState: () => () => {},
+    installAppUpdate: async () => {},
+    onAppUpdateState: (listener) => {
+      if (new URLSearchParams(window.location.search).has('update')) {
+        window.setTimeout(() => listener({ status: 'ready', version: '9.9.9' }), 400);
+      }
+      return () => {};
+    },
     sendCodexMessage: async ({ text }) => {
       turnNumber += 1;
       const threadId = 'qa-thread';

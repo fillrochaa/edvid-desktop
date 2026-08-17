@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron';
 import started from 'electron-squirrel-startup';
 import { spawn } from 'node:child_process';
 import { createReadStream } from 'node:fs';
@@ -21,6 +21,7 @@ import { CodexAppServer } from './codex-app-server';
 import { mediaKind, mediaMimeType, mediaTier, pickPreviewMedia, resolveByteRange } from './media-selection';
 import { resolveRuntime, type RuntimeResolution } from './runtime';
 import type {
+  AppUpdateState,
   CodexApprovalDecision,
   CodexEvent,
   CodexSendMessageInput,
@@ -1963,7 +1964,55 @@ function createWindow(): void {
   }
 }
 
+// --- Atualizacao OTA -------------------------------------------------------
+// Estilo ChatGPT: checa um feed estatico, baixa em segundo plano e avisa a
+// interface quando a nova versao esta pronta para reiniciar. Exige build com
+// assinatura de producao (Squirrel.Mac recusa apps ad-hoc) e um feed JSON
+// hospedado; sem o feed configurado, nada acontece. O formato do feed sai de
+// scripts/generate-update-feed.mjs a cada release.
+const UPDATE_FEED_URL =
+  process.env.EDVID_UPDATE_FEED_URL?.trim() ||
+  // Definir aqui a URL publica definitiva (bucket R2) quando ela existir.
+  '';
+const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+let appUpdateState: AppUpdateState = { status: 'idle' };
+
+function broadcastAppUpdateState(state: AppUpdateState): void {
+  appUpdateState = state;
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('update:state', state);
+  }
+}
+
+function setupAutoUpdate(): void {
+  if (!app.isPackaged || process.platform !== 'darwin' || !UPDATE_FEED_URL) return;
+  try {
+    autoUpdater.setFeedURL({ url: UPDATE_FEED_URL, serverType: 'json' });
+  } catch {
+    return;
+  }
+  autoUpdater.on('update-downloaded', (_event, _notes, releaseName) => {
+    broadcastAppUpdateState({ status: 'ready', version: asText(releaseName) || undefined });
+  });
+  autoUpdater.on('error', () => {
+    // Sem rede ou build sem assinatura de producao: seguimos em silencio e a
+    // proxima checagem tenta de novo.
+  });
+  const check = () => {
+    try {
+      autoUpdater.checkForUpdates();
+    } catch {
+      // Checagem ja em andamento; ignora.
+    }
+  };
+  check();
+  setInterval(check, UPDATE_CHECK_INTERVAL_MS);
+}
+
 registerIpcHandlers();
+ipcMain.handle('update:install', () => {
+  if (appUpdateState.status === 'ready') autoUpdater.quitAndInstall();
+});
 
 void app.whenReady().then(async () => {
   // Os caches precisam existir antes do Codex iniciar: eles entram como
@@ -1971,6 +2020,7 @@ void app.whenReady().then(async () => {
   await prepareCacheDirectories().catch((error: unknown) => {
     console.warn('Nao foi possivel preparar os caches do Edvid:', error);
   });
+  setupAutoUpdate();
   // Servidor de mídia com suporte a Range. Sem 206/Accept-Ranges o <video>
   // não consegue posicionar a agulha em arquivos grandes: o clique na
   // timeline era ignorado ou o vídeo reiniciava do zero.

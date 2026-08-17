@@ -396,6 +396,7 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .video-stage { position: relative; }
 .video-stage-note { position: absolute; inset: 0; display: grid; place-items: center; color: #77818d; background: rgba(4,6,9,.72); font-size: 8.5px; pointer-events: none; }
 .chat-status { margin: 10px 2px 0; }
+.btn.update-ready { animation: model-pulse 2.2s ease-in-out infinite; white-space: nowrap; }
 .phase2-render-banner { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 7px 10px; border: 1px solid rgba(255,119,19,.28); border-radius: 9px; background: rgba(255,119,19,.07); }
 .phase2-render-orb { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #ff7713; animation: model-pulse 1.3s ease-in-out infinite; }
 .phase2-render-copy { min-width: 0; }

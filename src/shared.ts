@@ -144,6 +144,13 @@ export type SourceWaveform = {
   peaks: number[];
 };
 
+// Atualizacao OTA: "ready" significa nova versao ja baixada, aguardando o
+// reinicio. O download e a checagem acontecem sozinhos em segundo plano.
+export type AppUpdateState = {
+  status: 'idle' | 'ready';
+  version?: string;
+};
+
 // Render da Fase 2 feito pelo aplicativo, fora do sandbox do agente. "idle"
 // tambem cobre "nada a renderizar" (dados do public/ ausentes ou incompletos).
 export type Phase2RenderState = {
@@ -241,6 +248,8 @@ export type EdvidDesktopApi = {
   ) => () => void;
   scaffoldRemotionProject: (directory: string) => Promise<void>;
   getSourceWaveform: (mediaUrl: string) => Promise<SourceWaveform | null>;
+  installAppUpdate: () => Promise<void>;
+  onAppUpdateState: (listener: (state: AppUpdateState) => void) => () => void;
   renderPhase2: (directory: string) => Promise<Phase2RenderState>;
   onPhase2RenderState: (listener: (state: Phase2RenderState) => void) => () => void;
   sendCodexMessage: (input: CodexSendMessageInput) => Promise<CodexSendMessageResult>;

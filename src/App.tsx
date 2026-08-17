@@ -12,6 +12,7 @@ import {
 import edvidIcon from './brand/edvid-icon.png';
 import edvidLogo from './brand/edvid-logo.png';
 import type {
+  AppUpdateState,
   CodexAccountState,
   CodexApproval,
   CodexEvent,
@@ -1777,6 +1778,7 @@ export function App() {
     status: 'unknown',
   });
   const [phase2Render, setPhase2Render] = useState<Phase2RenderState>({ status: 'idle' });
+  const [appUpdate, setAppUpdate] = useState<AppUpdateState>({ status: 'idle' });
   const [jcutApplied, setJcutApplied] = useState(false);
   const phase2StatusRef = useRef<Phase2RenderState['status']>('idle');
   const messageListRef = useRef<HTMLDivElement | null>(null);
@@ -2206,6 +2208,7 @@ export function App() {
     const unsubscribeModel = window.edvidDesktop.onWhisperModelState(setWhisperModel);
     const unsubscribeRemotion = window.edvidDesktop.onRemotionRuntimeState(setRemotionRuntime);
     const unsubscribePhase2 = window.edvidDesktop.onPhase2RenderState(handlePhase2RenderState);
+    const unsubscribeUpdate = window.edvidDesktop.onAppUpdateState(setAppUpdate);
     if (!booted.current) {
       booted.current = true;
       void window.edvidDesktop.getDesktopInfo().then(setDesktopInfo);
@@ -2231,6 +2234,7 @@ export function App() {
       unsubscribeModel();
       unsubscribeRemotion();
       unsubscribePhase2();
+      unsubscribeUpdate();
     };
   }, []);
 
@@ -2297,6 +2301,16 @@ export function App() {
             {workspace && <small>{workspace.project.directory}</small>}
           </div>
           <div className="topbar-actions">
+            {appUpdate.status === 'ready' && (
+              <button
+                type="button"
+                className="btn primary small update-ready"
+                onClick={() => void window.edvidDesktop.installAppUpdate()}
+                title="A nova versão já foi baixada; o Edvid reinicia atualizado."
+              >
+                {appUpdate.version ? `Atualizar para ${appUpdate.version}` : 'Atualizar o Edvid'} · Reiniciar
+              </button>
+            )}
             {workspace?.media && <span className="media-meta">{workspace.media.orientation === 'vertical' ? '9:16 vertical' : '16:9 horizontal'} · {workspace.media.width}×{workspace.media.height}</span>}
             <button type="button" className="btn ghost small" onClick={chooseProjectDirectory} disabled={openingProject || Boolean(activeTurn)}>{workspace ? 'Trocar pasta' : 'Escolher pasta'}</button>
           </div>
