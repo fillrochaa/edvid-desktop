@@ -137,6 +137,13 @@ export type RemotionRuntimeState = {
   error?: string;
 };
 
+// Picos de amplitude (0..1) para desenhar a onda sonora dos clipes. Os picos
+// estao no tempo da FONTE; cada clipe recorta o trecho sourceIn..sourceOut.
+export type SourceWaveform = {
+  bucketsPerSecond: number;
+  peaks: number[];
+};
+
 // Render da Fase 2 feito pelo aplicativo, fora do sandbox do agente. "idle"
 // tambem cobre "nada a renderizar" (dados do public/ ausentes ou incompletos).
 export type Phase2RenderState = {
@@ -233,6 +240,7 @@ export type EdvidDesktopApi = {
     listener: (state: RemotionRuntimeState) => void,
   ) => () => void;
   scaffoldRemotionProject: (directory: string) => Promise<void>;
+  getSourceWaveform: (mediaUrl: string) => Promise<SourceWaveform | null>;
   renderPhase2: (directory: string) => Promise<Phase2RenderState>;
   onPhase2RenderState: (listener: (state: Phase2RenderState) => void) => () => void;
   sendCodexMessage: (input: CodexSendMessageInput) => Promise<CodexSendMessageResult>;

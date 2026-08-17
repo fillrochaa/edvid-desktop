@@ -36,6 +36,7 @@ const api: EdvidDesktopApi = {
   },
   scaffoldRemotionProject: (directory) =>
     ipcRenderer.invoke('remotion:scaffold', { directory }),
+  getSourceWaveform: (mediaUrl) => ipcRenderer.invoke('waveform:get', { url: mediaUrl }),
   renderPhase2: (directory) => ipcRenderer.invoke('phase2:render', { directory }),
   onPhase2RenderState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: Phase2RenderState) =>

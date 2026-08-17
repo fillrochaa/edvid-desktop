@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'elect
 import started from 'electron-squirrel-startup';
 import { spawn } from 'node:child_process';
 import { createReadStream } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   cp,
   lstat,
@@ -26,6 +26,7 @@ import type {
   CodexSendMessageInput,
   Phase2RenderState,
   ProjectMedia,
+  SourceWaveform,
   ProjectSource,
   ProjectSummary,
   ProjectStyleState,
@@ -925,6 +926,121 @@ function runModelDownload(python: string, hubCache: string): Promise<void> {
   });
 }
 
+// --- Ondas sonoras da timeline ---------------------------------------------
+// Picos de amplitude por fonte, calculados uma vez com o FFmpeg empacotado e
+// guardados em cache por caminho+mtime. A interface pede pela URL de midia ja
+// autorizada (edvid-media://), entao nao ha resolucao de caminho nova aqui.
+
+const WAVEFORM_BUCKETS_PER_SECOND = 25;
+const WAVEFORM_SAMPLE_RATE = 8000;
+const waveformJobs = new Map<string, Promise<SourceWaveform | null>>();
+
+function waveformCacheDirectory(): string {
+  return path.join(app.getPath('userData'), 'cache', 'waveforms');
+}
+
+function extractWaveformPeaks(mediaPath: string): Promise<number[] | null> {
+  const ffmpeg = resolveRuntime('ffmpeg', {
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+  });
+  if (!ffmpeg.command) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const child = spawn(
+      ffmpeg.command as string,
+      [
+        ...ffmpeg.argsPrefix,
+        '-v', 'error',
+        '-i', mediaPath,
+        '-map', 'a:0',
+        '-ac', '1',
+        '-ar', String(WAVEFORM_SAMPLE_RATE),
+        '-f', 's16le',
+        '-',
+      ],
+      { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    const samplesPerBucket = Math.round(WAVEFORM_SAMPLE_RATE / WAVEFORM_BUCKETS_PER_SECOND);
+    const peaks: number[] = [];
+    let bucketPeak = 0;
+    let bucketCount = 0;
+    let leftover: Buffer | null = null;
+    child.stdout.on('data', (chunk: Buffer) => {
+      const data = leftover ? Buffer.concat([leftover, chunk]) : chunk;
+      const usable = data.length - (data.length % 2);
+      for (let offset = 0; offset < usable; offset += 2) {
+        const amplitude = Math.abs(data.readInt16LE(offset)) / 32768;
+        if (amplitude > bucketPeak) bucketPeak = amplitude;
+        bucketCount += 1;
+        if (bucketCount === samplesPerBucket) {
+          peaks.push(Math.round(bucketPeak * 1000) / 1000);
+          bucketPeak = 0;
+          bucketCount = 0;
+        }
+      }
+      leftover = usable < data.length ? data.subarray(usable) : null;
+      // Backstop para midias absurdamente longas: ~11 h ja passam de qualquer
+      // timeline real e o JSON continuaria pequeno, mas nao crescemos alem.
+      if (peaks.length > 1_000_000) child.kill();
+    });
+    child.on('error', () => resolve(null));
+    child.on('close', (code) => {
+      if (bucketCount > 0) peaks.push(Math.round(bucketPeak * 1000) / 1000);
+      resolve(code === 0 && peaks.length > 0 ? peaks : null);
+    });
+  });
+}
+
+async function readSourceWaveform(mediaUrl: string): Promise<SourceWaveform | null> {
+  let token = '';
+  try {
+    const url = new URL(mediaUrl);
+    if (url.protocol !== 'edvid-media:' || url.hostname !== 'local') return null;
+    token = url.pathname.slice(1);
+  } catch {
+    return null;
+  }
+  const mediaPath = authorizedMedia.get(token);
+  if (!mediaPath) return null;
+  let fingerprint: string | null = null;
+  try {
+    fingerprint = await fingerprintOf(mediaPath);
+  } catch {
+    return null;
+  }
+  if (!fingerprint) return null;
+  const cacheKey = createHash('sha1').update(`${mediaPath}:${fingerprint}`).digest('hex');
+  const pending = waveformJobs.get(cacheKey);
+  if (pending) return pending;
+  const job = (async (): Promise<SourceWaveform | null> => {
+    const cacheFile = path.join(waveformCacheDirectory(), `${cacheKey}.json`);
+    try {
+      const cached = JSON.parse(await readFile(cacheFile, 'utf8')) as SourceWaveform;
+      if (Array.isArray(cached.peaks) && cached.peaks.length > 0) return cached;
+    } catch {
+      // Sem cache: calcula agora.
+    }
+    const peaks = await extractWaveformPeaks(mediaPath);
+    if (!peaks) return null;
+    const waveform: SourceWaveform = {
+      bucketsPerSecond: WAVEFORM_BUCKETS_PER_SECOND,
+      peaks,
+    };
+    try {
+      await mkdir(waveformCacheDirectory(), { recursive: true });
+      await writeFile(cacheFile, JSON.stringify(waveform));
+    } catch {
+      // Cache e conveniencia; sem ele o proximo pedido recalcula.
+    }
+    return waveform;
+  })();
+  waveformJobs.set(cacheKey, job);
+  return job;
+}
+
 // --- Motor de render da Fase 2 ---------------------------------------------
 // O Remotion nao cabe no instalador (node_modules + Chrome passam de 700 MB
 // por plataforma), entao o aplicativo instala uma vez em userData e todos os
@@ -1747,6 +1863,9 @@ function registerIpcHandlers(): void {
     }
     return renderPhase2(requestedDirectory);
   });
+
+  ipcMain.handle('waveform:get', (_event, input: { url?: string }) =>
+    readSourceWaveform(asText(input.url)));
 
   ipcMain.handle('codex:account', () => getCodexAppServer().readAccount());
 

@@ -367,7 +367,11 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .timeline-zoom button { width: 20px; height: 20px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.09); border-radius: 6px; color: #7e8995; background: rgba(255,255,255,.025); font-size: 9px; cursor: pointer; }
 .timeline-zoom button:hover:not(:disabled) { color: #72dadd; border-color: rgba(9,181,183,.3); }
 .timeline-zoom button:disabled { opacity: .34; cursor: default; }
-.timeline-zoom span { min-width: 18px; color: #5f6875; font-family: ui-monospace, monospace; font-size: 6.5px; text-align: center; }
+.timeline-zoom button.fit { width: auto; padding: 0 6px; font-size: 6.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.timeline-zoom span { min-width: 22px; color: #5f6875; font-family: ui-monospace, monospace; font-size: 6.5px; text-align: center; }
+.timeline-clip > span { position: relative; z-index: 1; overflow: hidden; text-overflow: ellipsis; }
+.clip-waveform { position: absolute; inset: 2px 1px; width: calc(100% - 2px); height: calc(100% - 4px); pointer-events: none; }
+.clip-waveform path { fill: rgba(255,255,255,.32); }
 .timeline-clip.selected { z-index: 6; outline: 1.5px solid rgba(255,209,174,.85); outline-offset: -1px; box-shadow: 0 0 0 3px rgba(255,119,19,.14); }
 .timeline-clip.linked-selected { outline: 1px dashed rgba(255,209,174,.5); outline-offset: -1px; }
 .timeline-clip.disabled { opacity: .3; }
@@ -384,7 +388,8 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .discard-edits:hover { color: #c7ced6; border-color: rgba(255,255,255,.22); }
 .video-stage { position: relative; }
 .video-stage-note { position: absolute; inset: 0; display: grid; place-items: center; color: #77818d; background: rgba(4,6,9,.72); font-size: 8.5px; pointer-events: none; }
-.phase2-render-banner { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 7px 10px; border: 1px solid rgba(255,119,19,.28); border-radius: 9px; background: rgba(255,119,19,.07); }
+.chat-status { margin: 10px 2px 0; }
+.phase2-render-banner { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 7px 10px; border: 1px solid rgba(255,119,19,.28); border-radius: 9px; background: rgba(255,119,19,.07); }
 .phase2-render-orb { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #ff7713; animation: model-pulse 1.3s ease-in-out infinite; }
 .phase2-render-copy { min-width: 0; }
 .phase2-render-copy strong { display: block; color: #ffb680; font-size: 8.5px; }

@@ -131,6 +131,15 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     ensureRemotionRuntime: async () => ({ status: 'ready' }),
     onRemotionRuntimeState: () => () => {},
     scaffoldRemotionProject: async () => {},
+    getSourceWaveform: async () => ({
+      // Onda sintética para o QA visual: dois ciclos de fala com pausa.
+      bucketsPerSecond: 25,
+      peaks: Array.from({ length: 268 }, (_, index) => {
+        const t = index / 25;
+        const speaking = t % 4 < 3;
+        return speaking ? 0.25 + 0.6 * Math.abs(Math.sin(index * 0.7)) : 0.05;
+      }),
+    }),
     renderPhase2: async () => ({ status: 'idle' }),
     onPhase2RenderState: () => () => {},
     sendCodexMessage: async ({ text }) => {

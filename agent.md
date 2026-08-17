@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-16 (0.7.6 — Fase 2 renderizada pelo aplicativo, sem aprovações)
+Atualizado em: 2026-08-16 (0.7.7 — chat com intenção do usuário, ondas sonoras e zoom por pinça)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -552,11 +552,11 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.7.6**.
+Versão corrente: **0.7.7**.
 
 Artefato local atual:
 
-`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.6-arm64.dmg`
+`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.7-arm64.dmg`
 
 Configuração do DMG:
 
@@ -601,6 +601,17 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.7.7: refinamentos de UI/UX — mensagens disparadas pela interface mostram
+  no chat só a intenção ("Aplicar os estilos escolhidos na edição"), com o
+  briefing técnico indo apenas ao agente (dispatchMessage já aceitava
+  displayText); o dot Trabalhando/Pronto e a barra de progresso do render
+  vivem abaixo da última mensagem do chat; a timeline ganhou botão Fit e
+  zoom fracionário por pinça do trackpad (wheel com ctrlKey, listener nativo
+  passive: false, âncora no cursor); a faixa de voz desenha ondas sonoras
+  (picos por fonte via FFmpeg s16le 8 kHz → 25 baldes/s, cache em
+  userData/cache/waveforms por caminho+mtime, IPC waveform:get pela URL
+  edvid-media já autorizada); chip da faixa de legendas mostra só
+  "Legendas"; ícone da headline é um T de texto.
 - 0.7.6: a Fase 2 é renderizada pelo aplicativo, fora do sandbox — o
   Chromium não inicia no seatbelt e cada `remotion render` do agente pedia
   aprovação (seis numa edição), além de fatiar o vídeo em partes. O

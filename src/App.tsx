@@ -21,6 +21,7 @@ import type {
   ProjectWorkspace,
   RemotionRuntimeState,
   RuntimeCheck,
+  SourceWaveform,
   TimelineClip,
   TimelineModel,
   WhisperModelState,
@@ -123,6 +124,7 @@ type IconName =
   | 'skipBack'
   | 'skipForward'
   | 'sparkles'
+  | 'text'
   | 'trash'
   | 'video'
   | 'volume'
@@ -194,6 +196,7 @@ function Icon({ name }: { name: IconName }) {
     skipBack: <><path d="M4 3v10M12.8 3.2 5.4 8l7.4 4.8z" /></>,
     skipForward: <><path d="M12 3v10M3.2 3.2 10.6 8l-7.4 4.8z" /></>,
     sparkles: <><path d="M8 1.5 9.2 5 12.5 6.2 9.2 7.4 8 11 6.8 7.4 3.5 6.2 6.8 5z" /><path d="m12.8 10 .5 1.5 1.4.5-1.4.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5z" /></>,
+    text: <path d="M3.2 3.2h9.6M8 3.2v9.6M5.8 12.8h4.4" />,
     trash: <><path d="M3.2 4.6h9.6M6 4.6V2.8h4v1.8M4.5 4.6l.7 8.5h5.6l.7-8.5M6.8 7v3.7M9.2 7v3.7" /></>,
     video: <><rect x="1.4" y="3" width="10" height="10" rx="2" /><path d="m11.4 6.2 3.2-1.8v7.2l-3.2-1.8" /></>,
     volume: <><path d="M2 6h3l3-2.7v9.4L5 10H2z" /><path d="M10 5.4a3.2 3.2 0 0 1 0 5.2M12 3.5a5.7 5.7 0 0 1 0 9" /></>,
@@ -357,7 +360,6 @@ function EditorWorkspace({
   applyingCorrections,
   onTimelineModelChange,
   onApplyTimelineEdits,
-  phase2Render,
 }: {
   workspace: ProjectWorkspace | null;
   style: StyleSetup;
@@ -368,7 +370,6 @@ function EditorWorkspace({
   applyingCorrections: boolean;
   onTimelineModelChange: (model: TimelineModel, commit: boolean) => void;
   onApplyTimelineEdits: () => Promise<boolean>;
-  phase2Render: Phase2RenderState;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const currentTimeRef = useRef(0);
@@ -380,6 +381,8 @@ function EditorWorkspace({
   const [draftNote, setDraftNote] = useState('');
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
+  const zoomStateRef = useRef(1);
+  const pinchZoomRef = useRef<(event: WheelEvent) => void>(() => {});
   const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
   const [inGap, setInGap] = useState(false);
   const correctionHistoryRef = useRef<CorrectionRange[][]>([]);
@@ -463,10 +466,66 @@ function EditorWorkspace({
     : null;
   const selectedLinkId = selectedClip?.linkId ?? null;
   const videoClips = model ? sortedTrackClips(model, VIDEO_TRACK_ID) : [];
-  const voiceClips = model ? sortedTrackClips(model, VOICE_TRACK_ID) : [];
+  const voiceClips = useMemo(
+    () => (model ? sortedTrackClips(model, VOICE_TRACK_ID) : []),
+    [model],
+  );
   const canDiscard = Boolean(
     model && baselineModelRef.current && !modelsEqual(model, baselineModelRef.current),
   );
+
+  // Ondas sonoras: os picos vêm do main uma vez por fonte e cada clipe recorta
+  // o próprio trecho. null marca fonte sem áudio (não insiste de novo).
+  const [waveforms, setWaveforms] = useState<Record<string, SourceWaveform | null>>({});
+  const requestedWaveformsRef = useRef<Set<string>>(new Set());
+  const workspaceDirectory = workspace?.project.directory ?? null;
+
+  useEffect(() => {
+    requestedWaveformsRef.current.clear();
+    setWaveforms({});
+  }, [workspaceDirectory]);
+
+  useEffect(() => {
+    for (const clip of voiceClips) {
+      const sourceId = clip.sourceId;
+      if (requestedWaveformsRef.current.has(sourceId)) continue;
+      const url = sourceById.get(sourceId)?.url;
+      if (!url) continue;
+      requestedWaveformsRef.current.add(sourceId);
+      void window.edvidDesktop.getSourceWaveform(url)
+        .then((waveform) => setWaveforms((current) => ({ ...current, [sourceId]: waveform })))
+        .catch(() => setWaveforms((current) => ({ ...current, [sourceId]: null })));
+    }
+  }, [voiceClips, sourceById]);
+
+  const waveformPaths = useMemo(() => {
+    const paths = new Map<string, string>();
+    for (const clip of voiceClips) {
+      const waveform = waveforms[clip.sourceId];
+      if (!waveform || waveform.peaks.length === 0) continue;
+      const speed = clip.speed || 1;
+      const start = clip.sourceIn;
+      const end = clip.sourceIn + clipDuration(clip) * speed;
+      const buckets = waveform.bucketsPerSecond;
+      const first = Math.max(0, Math.floor(start * buckets));
+      const last = Math.min(waveform.peaks.length, Math.ceil(end * buckets));
+      const available = last - first;
+      if (available < 2) continue;
+      const count = Math.min(240, available);
+      const top: string[] = [];
+      const bottom: string[] = [];
+      for (let index = 0; index < count; index += 1) {
+        const bucket = first + Math.floor(((available - 1) * index) / (count - 1));
+        const amplitude = Math.max(0.03, Math.min(1, waveform.peaks[bucket] ?? 0));
+        const x = ((index / (count - 1)) * 100).toFixed(2);
+        top.push(`${index === 0 ? 'M' : 'L'}${x} ${(16 - amplitude * 13).toFixed(2)}`);
+        bottom.push(`L${x} ${(16 + amplitude * 13).toFixed(2)}`);
+      }
+      bottom.reverse();
+      paths.set(clip.id, `${top.join(' ')} ${bottom.join(' ')} Z`);
+    }
+    return paths;
+  }, [voiceClips, waveforms]);
 
   useEffect(() => {
     playingRef.current = playing;
@@ -1033,21 +1092,34 @@ function EditorWorkspace({
     commitModel(final.model, drag.baseModel);
   }
 
-  function changeZoom(nextZoom: number) {
-    const clamped = Math.max(1, Math.min(8, Math.round(nextZoom)));
-    if (clamped === zoom) return;
+  function changeZoom(nextZoom: number, anchorClientX?: number) {
+    // Fracionário por causa da pinça do trackpad; botões continuam em passos.
+    const clamped = Math.max(1, Math.min(8, Math.round(nextZoom * 100) / 100));
+    if (clamped === zoomStateRef.current) return;
     const scroller = scrollRef.current;
     const content = contentRef.current;
     if (scroller && content) {
       const width = content.getBoundingClientRect().width;
-      const playheadX = TIMELINE_LANE_START + progress * Math.max(0, width - TIMELINE_LANE_START);
-      zoomAnchorRef.current = { progress, viewportX: playheadX - scroller.scrollLeft };
+      if (anchorClientX !== undefined) {
+        // Pinça: o ponto da timeline sob o cursor permanece parado.
+        const contentX = anchorClientX - content.getBoundingClientRect().left;
+        const lane = Math.max(1, width - TIMELINE_LANE_START);
+        const pointerProgress = Math.min(1, Math.max(0, (contentX - TIMELINE_LANE_START) / lane));
+        zoomAnchorRef.current = {
+          progress: pointerProgress,
+          viewportX: anchorClientX - scroller.getBoundingClientRect().left,
+        };
+      } else {
+        const playheadX = TIMELINE_LANE_START + progress * Math.max(0, width - TIMELINE_LANE_START);
+        zoomAnchorRef.current = { progress, viewportX: playheadX - scroller.scrollLeft };
+      }
     }
     setZoom(clamped);
   }
 
   // Zoom ancorado na agulha: mantém a agulha no mesmo ponto do viewport.
   useLayoutEffect(() => {
+    zoomStateRef.current = zoom;
     const anchor = zoomAnchorRef.current;
     zoomAnchorRef.current = null;
     if (!anchor) return;
@@ -1058,6 +1130,22 @@ function EditorWorkspace({
     const playheadX = TIMELINE_LANE_START + anchor.progress * Math.max(0, width - TIMELINE_LANE_START);
     scroller.scrollLeft = Math.max(0, playheadX - anchor.viewportX);
   }, [zoom]);
+
+  // Pinça do trackpad: o Chromium entrega o gesto como wheel com ctrlKey.
+  // Listener nativo com passive: false — o onWheel do React não permite
+  // preventDefault e a página daria zoom inteira.
+  pinchZoomRef.current = (event: WheelEvent) => {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    changeZoom(zoomStateRef.current * Math.exp(-event.deltaY * 0.01), event.clientX);
+  };
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const listener = (event: WheelEvent) => pinchZoomRef.current(event);
+    scroller.addEventListener('wheel', listener, { passive: false });
+    return () => scroller.removeEventListener('wheel', listener);
+  }, []);
 
   async function applyCorrections() {
     if (corrections.length === 0) return;
@@ -1122,12 +1210,12 @@ function EditorWorkspace({
       }
       if (key === '=' || key === '+') {
         event.preventDefault();
-        changeZoom(zoom + 1);
+        changeZoom(Math.round(zoom) + 1);
         return;
       }
       if (key === '-') {
         event.preventDefault();
-        changeZoom(zoom - 1);
+        changeZoom(Math.round(zoom) - 1);
         return;
       }
       if (key === '0') {
@@ -1200,6 +1288,11 @@ function EditorWorkspace({
           setSelectedClipId(clip.id);
         }}
       >
+        {waveformPaths.has(clip.id) && (
+          <svg className="clip-waveform" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true">
+            <path d={waveformPaths.get(clip.id)} />
+          </svg>
+        )}
         <span>{clip.label}</span>
         {isSelected && (
           <>
@@ -1228,22 +1321,6 @@ function EditorWorkspace({
   return (
     <div className={`editor-workspace ${orientation}`}>
       <section className="preview-section">
-        {phase2Render.status === 'rendering' && (
-          <div className="phase2-render-banner" role="status">
-            <span className="phase2-render-orb" />
-            <div className="phase2-render-copy">
-              <strong>Renderizando a edição estilizada</strong>
-              <small>
-                {phase2Render.totalFrames
-                  ? `${Math.round((phase2Render.progress ?? 0) * 100)}% · ${phase2Render.renderedFrames ?? 0}/${phase2Render.totalFrames} frames`
-                  : 'Preparando o render. O resultado entra no preview sozinho.'}
-              </small>
-            </div>
-            <div className="phase2-render-track">
-              <span style={{ width: `${Math.min(100, Math.round((phase2Render.progress ?? 0) * 100))}%` }} />
-            </div>
-          </div>
-        )}
         <div className={`video-stage ${orientation}`}>
           {media ? (
             <>
@@ -1321,9 +1398,10 @@ function EditorWorkspace({
           <div className="timeline-toolbar-right">
             {mapped && <span className="mapped-badge" title="O preview mostra as edições ainda não renderizadas">Prévia das edições</span>}
             <div className="timeline-zoom" aria-label="Zoom da timeline">
-              <button type="button" onClick={() => changeZoom(zoom - 1)} disabled={zoom <= 1} title="Reduzir zoom (-)">−</button>
-              <span>{zoom}×</span>
-              <button type="button" onClick={() => changeZoom(zoom + 1)} disabled={zoom >= 8} title="Aumentar zoom (+)">+</button>
+              <button type="button" onClick={() => changeZoom(Math.round(zoom) - 1)} disabled={zoom <= 1} title="Reduzir zoom (-)">−</button>
+              <span>{(Math.round(zoom * 10) / 10).toLocaleString('pt-BR')}×</span>
+              <button type="button" onClick={() => changeZoom(Math.round(zoom) + 1)} disabled={zoom >= 8} title="Aumentar zoom (+)">+</button>
+              <button type="button" className="fit" onClick={() => changeZoom(1)} disabled={zoom <= 1} title="Ver a timeline inteira (0)">Fit</button>
             </div>
             <div className="timeline-time">{formatTimecode(currentTime, fps)} <span>/ {formatTimecode(effectiveDuration, fps)}</span></div>
           </div>
@@ -1351,13 +1429,13 @@ function EditorWorkspace({
               ))}
             </div>
             {phase === 2 && style.headline !== 'none' && (
-              <TimelineTrack icon="sparkles" label="Headline" tone="orange">
+              <TimelineTrack icon="text" label="Headline" tone="orange">
                 <div className="timeline-chip headline-chip" style={{ width: '31%' }}>Headline · {style.headline}</div>
               </TimelineTrack>
             )}
             {phase === 2 && style.captions !== 'none' && (
               <TimelineTrack icon="captions" label="Legendas" tone="teal">
-                <div className="timeline-chip captions-chip" style={{ left: '2%', width: '96%' }}>Legendas · {style.captions}</div>
+                <div className="timeline-chip captions-chip" style={{ left: '2%', width: '96%' }}>Legendas</div>
               </TimelineTrack>
             )}
             {phase === 2 && style.edit !== 'limpa' && (
@@ -1959,7 +2037,9 @@ export function App() {
       'Não execute remotion render: quando os dados estiverem prontos, encerre o turno com um resumo curto — o Edvid renderiza sozinho e mostra o progresso na interface.',
       'Use essas seleções como briefing definitivo e não peça para eu escolher os estilos novamente no chat.',
     ].join('\n');
-    if (await dispatchMessage(prompt)) setWorkTab('edit');
+    // O briefing técnico segue completo para o agente; no chat aparece só a
+    // intenção do usuário.
+    if (await dispatchMessage(prompt, 'Aplicar os estilos escolhidos na edição')) setWorkTab('edit');
   }
 
   async function approveCleanCut(messageId: string) {
@@ -2106,7 +2186,7 @@ export function App() {
     const element = messageListRef.current;
     if (!element) return;
     element.scrollTop = element.scrollHeight;
-  }, [messages, followingOutput]);
+  }, [messages, followingOutput, phase2Render.status]);
 
   return (
     <div className={`studio-shell ${railPinned ? 'rail-pinned' : ''}`}>
@@ -2162,7 +2242,7 @@ export function App() {
           <section className="chat-panel">
             <div className="chat-head">
               <div><span className="eyebrow">Direção da edição</span><h1>Converse com o Edvid</h1></div>
-              <span className={`work-status ${activeTurn ? 'working' : canChat ? 'ready' : ''}`}><span />{activeTurn ? 'Trabalhando' : canChat ? 'Pronto' : 'Configuração pendente'}</span>
+              {!canChat && <span className="work-status"><span />Configuração pendente</span>}
             </div>
             <div
               className="chat-transcript"
@@ -2195,7 +2275,7 @@ export function App() {
                   <h2>O que vamos editar?</h2>
                   <p>O corte limpo vem primeiro. Depois da aprovação, os estilos aparecem visualmente na aba ao lado.</p>
                   <div className="prompt-examples">
-                    <button type="button" onClick={() => void dispatchMessage('Inicie a edição do vídeo e prepare o corte limpo.')} disabled={sending || whisperModel.status === 'downloading'}>Iniciar corte limpo</button>
+                    <button type="button" onClick={() => void dispatchMessage('Inicie a edição do vídeo e prepare o corte limpo.', 'Iniciar o corte limpo')} disabled={sending || whisperModel.status === 'downloading'}>Iniciar corte limpo</button>
                     <button type="button" onClick={() => void dispatchMessage('Analise os vídeos e imagens da pasta assets.')} disabled={sending}>Analisar assets</button>
                   </div>
                   {whisperModel.status === 'downloading' && (
@@ -2229,6 +2309,27 @@ export function App() {
                   </article>
                 );
               })}
+              {canChat && messages.length > 0 && (
+                <div className={`chat-status work-status ${activeTurn ? 'working' : 'ready'}`}>
+                  <span />{activeTurn ? 'Trabalhando' : 'Pronto'}
+                </div>
+              )}
+              {phase2Render.status === 'rendering' && (
+                <div className="phase2-render-banner" role="status">
+                  <span className="phase2-render-orb" />
+                  <div className="phase2-render-copy">
+                    <strong>Renderizando a edição estilizada</strong>
+                    <small>
+                      {phase2Render.totalFrames
+                        ? `${Math.round((phase2Render.progress ?? 0) * 100)}% · ${phase2Render.renderedFrames ?? 0}/${phase2Render.totalFrames} frames`
+                        : 'Preparando o render. O resultado entra no preview sozinho.'}
+                    </small>
+                  </div>
+                  <div className="phase2-render-track">
+                    <span style={{ width: `${Math.min(100, Math.round((phase2Render.progress ?? 0) * 100))}%` }} />
+                  </div>
+                </div>
+              )}
             </div>
             {!followingOutput && <button type="button" className="scroll-to-latest" onClick={() => { setFollowingOutput(true); const element = messageListRef.current; if (element) element.scrollTop = element.scrollHeight; }}><Icon name="arrowDown" /> Ir para o fim</button>}
             <form className="chat-composer" onSubmit={sendMessage}>
@@ -2255,7 +2356,6 @@ export function App() {
                   applyingCorrections={sending}
                   onTimelineModelChange={handleTimelineModelChange}
                   onApplyTimelineEdits={applyTimelineEdits}
-                  phase2Render={phase2Render}
                 />
               ) : <StyleWorkspace style={style} onChange={setStyle} onApply={applyStyleSelection} canApply={canChat} applying={sending} runtime={remotionRuntime} />}
             </div>
