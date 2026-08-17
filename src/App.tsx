@@ -257,6 +257,41 @@ function styleStorageKey(directory: string): string {
   return `edvid:style:${directory}`;
 }
 
+// Historico do chat por projeto. Fechar e reabrir o aplicativo nao pode zerar
+// a conversa nem reoferecer os botoes de inicio com o processo ja andando.
+type StoredChat = {
+  messages: ChatMessage[];
+  handledCutApprovalId: string | null;
+  jcutApplied: boolean;
+};
+
+function chatStorageKey(directory: string): string {
+  return `edvid:chat:${directory}`;
+}
+
+function readStoredChat(directory: string): StoredChat {
+  const empty: StoredChat = { messages: [], handledCutApprovalId: null, jcutApplied: false };
+  try {
+    const parsed = JSON.parse(localStorage.getItem(chatStorageKey(directory)) ?? 'null') as
+      | Partial<StoredChat>
+      | null;
+    if (!parsed || !Array.isArray(parsed.messages)) return empty;
+    return {
+      messages: parsed.messages.filter((message): message is ChatMessage => (
+        Boolean(message) &&
+        typeof message.id === 'string' &&
+        (message.role === 'user' || message.role === 'assistant' || message.role === 'system') &&
+        typeof message.text === 'string'
+      )),
+      handledCutApprovalId:
+        typeof parsed.handledCutApprovalId === 'string' ? parsed.handledCutApprovalId : null,
+      jcutApplied: parsed.jcutApplied === true,
+    };
+  } catch {
+    return empty;
+  }
+}
+
 function readStoredStyle(directory: string, fallback: StyleSetup = defaultStyleSetup): StyleSetup {
   try {
     const parsed = JSON.parse(localStorage.getItem(styleStorageKey(directory)) ?? 'null') as Partial<StyleSetup> | null;
@@ -1019,7 +1054,12 @@ function EditorWorkspace({
     videoRef.current?.pause();
     const lane = (event.currentTarget as HTMLElement).closest('.studio-lane');
     const laneWidth = Math.max(1, lane?.getBoundingClientRect().width ?? 1);
-    event.currentTarget.setPointerCapture(event.pointerId);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Sem captura o arrasto ainda funciona enquanto o ponteiro estiver
+      // sobre a alça; perder o capture não pode abortar o trim inteiro.
+    }
     trimDragRef.current = {
       clipId: clip.id,
       edge,
@@ -1293,7 +1333,7 @@ function EditorWorkspace({
             <path d={waveformPaths.get(clip.id)} />
           </svg>
         )}
-        <span>{clip.label}</span>
+        <span className="clip-label">{clip.label}</span>
         {isSelected && (
           <>
             <span
@@ -1737,6 +1777,7 @@ export function App() {
     status: 'unknown',
   });
   const [phase2Render, setPhase2Render] = useState<Phase2RenderState>({ status: 'idle' });
+  const [jcutApplied, setJcutApplied] = useState(false);
   const phase2StatusRef = useRef<Phase2RenderState['status']>('idle');
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const activeProjectDirectoryRef = useRef<string | null>(null);
@@ -1778,15 +1819,17 @@ export function App() {
 
   function activateWorkspace(next: ProjectWorkspace) {
     activeProjectDirectoryRef.current = next.project.directory;
+    const storedChat = readStoredChat(next.project.directory);
     setWorkspace(next);
-    setMessages([]);
+    setMessages(storedChat.messages);
     setApprovals([]);
     setAnsweringApprovalId(null);
     setApprovalError(null);
     setStyle(readStoredStyle(next.project.directory, next.style ?? defaultStyleSetup));
     setStyleApplied(next.media?.kind === 'final' || Boolean(next.style));
     setCorrections([]);
-    setHandledCutApprovalId(null);
+    setHandledCutApprovalId(storedChat.handledCutApprovalId);
+    setJcutApplied(storedChat.jcutApplied);
     setWorkTab('edit');
     setFollowingOutput(true);
     // Cobre dados da Fase 2 que ficaram prontos com o aplicativo fechado ou
@@ -1896,7 +1939,7 @@ export function App() {
   async function logout() {
     try {
       setAccount(await window.edvidDesktop.logoutCodex());
-      setMessages([]);
+      // O histórico não é apagado: a conversa pertence ao projeto, não à conta.
     } catch (error) {
       setAccount({ ...account, status: 'error', error: errorMessage(error) });
     }
@@ -2057,10 +2100,20 @@ export function App() {
       setMessages((current) => [...current, {
         id: `style-gate:${Date.now()}`,
         role: 'assistant',
-        text: 'Corte aprovado. Escolha agora os estilos visuais na aba Estilos. Ao clicar em “Salvar e aplicar”, suas escolhas serão salvas no projeto e a Fase 2 começará automaticamente.',
+        text: 'Corte aprovado. Escolha os estilos visuais na aba Estilos e clique em “Salvar e aplicar” para a Fase 2 começar — ou, se quiser, aplique antes o J-Cut nas transições.',
       }]);
     }
     setApprovingCut(false);
+  }
+
+  async function applyJcut() {
+    if (jcutApplied || sending) return;
+    const prompt = [
+      'Aplique J-cuts no corte limpo aprovado: nas transições adequadas, antecipe o áudio da cena seguinte em relação ao corte de vídeo (entre 60 e 200 ms, conforme a respiração da fala).',
+      'Re-renderize o corte com os J-cuts e atualize edit/edl.json mantendo os ranges nos tempos da fonte e preenchendo jcut_timeline com as posições reais no arquivo de saída.',
+      'Preserve o gate do corte aprovado e não faça perguntas de estilo no chat.',
+    ].join(' ');
+    if (await dispatchMessage(prompt, 'Aplicar J-Cut')) setJcutApplied(true);
   }
 
   function handleTimelineModelChange(model: TimelineModel, commit: boolean) {
@@ -2188,6 +2241,17 @@ export function App() {
     element.scrollTop = element.scrollHeight;
   }, [messages, followingOutput, phase2Render.status]);
 
+  // Persiste a conversa e os gates do projeto aberto. As últimas 200 mensagens
+  // bastam: o estado real da edição vive nos arquivos do projeto.
+  useEffect(() => {
+    if (!projectDirectory) return;
+    localStorage.setItem(chatStorageKey(projectDirectory), JSON.stringify({
+      messages: messages.slice(-200),
+      handledCutApprovalId,
+      jcutApplied,
+    } satisfies StoredChat));
+  }, [messages, handledCutApprovalId, jcutApplied, projectDirectory]);
+
   return (
     <div className={`studio-shell ${railPinned ? 'rail-pinned' : ''}`}>
       <aside className={`project-rail ${railPinned ? 'pinned' : ''}`}>
@@ -2303,6 +2367,14 @@ export function App() {
                         <div><strong>Corte limpo pronto</strong><span>Assista no preview e confirme para escolher os estilos.</span></div>
                         <button type="button" className="btn primary" onClick={() => void approveCleanCut(message.id)} disabled={sending || approvingCut}>
                           <Icon name="check" /> {approvingCut ? 'Aprovando...' : 'Aprovado'}
+                        </button>
+                      </div>
+                    )}
+                    {message.id.startsWith('style-gate:') && (
+                      <div className="clean-cut-gate jcut-gate">
+                        <div><strong>J-Cut opcional</strong><span>Antecipa o áudio da próxima cena nas transições do corte aprovado.</span></div>
+                        <button type="button" className="btn ghost small" onClick={() => void applyJcut()} disabled={sending || jcutApplied}>
+                          <Icon name="waveform" /> {jcutApplied ? 'J-Cut aplicado' : 'Aplicar J-Cut'}
                         </button>
                       </div>
                     )}

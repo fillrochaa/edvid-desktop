@@ -117,6 +117,10 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .chat-message p { font-size: 10.5px; line-height: 1.68; white-space: pre-wrap; overflow-wrap: anywhere; }
 .clean-cut-gate { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 13px; padding: 10px; border: 1px solid rgba(9,181,183,.3); border-radius: 11px; background: linear-gradient(135deg, rgba(9,181,183,.1), rgba(9,181,183,.035)); }
 .clean-cut-gate > div { min-width: 0; display: flex; flex-direction: column; }
+.clean-cut-gate.jcut-gate { border-color: rgba(255,119,19,.24); background: linear-gradient(135deg, rgba(255,119,19,.09), rgba(255,119,19,.03)); }
+.clean-cut-gate.jcut-gate strong { color: #ffd8b8; }
+.clean-cut-gate.jcut-gate span { color: #8d7f74; }
+.clean-cut-gate.jcut-gate button { white-space: nowrap; }
 .clean-cut-gate strong { color: #d9f4f4; font-size: 9.5px; }
 .clean-cut-gate span { margin-top: 2px; color: #6d898e; font-size: 7.5px; line-height: 1.4; }
 .clean-cut-gate .btn { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; }
@@ -369,7 +373,10 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .timeline-zoom button:disabled { opacity: .34; cursor: default; }
 .timeline-zoom button.fit { width: auto; padding: 0 6px; font-size: 6.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .timeline-zoom span { min-width: 22px; color: #5f6875; font-family: ui-monospace, monospace; font-size: 6.5px; text-align: center; }
-.timeline-clip > span { position: relative; z-index: 1; overflow: hidden; text-overflow: ellipsis; }
+/* Classe propria para o rotulo: uma regra generica em .timeline-clip > span
+   atropelava o position/z-index das alcas de trim (.clip-handle) e o arrasto
+   parava de funcionar. */
+.timeline-clip .clip-label { position: relative; z-index: 1; overflow: hidden; text-overflow: ellipsis; }
 .clip-waveform { position: absolute; inset: 2px 1px; width: calc(100% - 2px); height: calc(100% - 4px); pointer-events: none; }
 .clip-waveform path { fill: rgba(255,255,255,.32); }
 .timeline-clip.selected { z-index: 6; outline: 1.5px solid rgba(255,209,174,.85); outline-offset: -1px; box-shadow: 0 0 0 3px rgba(255,119,19,.14); }

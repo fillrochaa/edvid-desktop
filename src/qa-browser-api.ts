@@ -146,7 +146,8 @@ export function createQaBrowserApi(): EdvidDesktopApi {
       turnNumber += 1;
       const threadId = 'qa-thread';
       const turnId = `qa-turn-${turnNumber}`;
-      const response = /inicie a edição|corte limpo/iu.test(text) && !/oficialmente aprovado/iu.test(text)
+      const response = /inicie a edição|corte limpo/iu.test(text) &&
+        !/oficialmente aprovado|j-cut/iu.test(text)
         ? cleanCutQaResponse
         : longQaResponse;
       window.setTimeout(() => emit({ type: 'turn-state', threadId, turnId, status: 'started' }), 20);

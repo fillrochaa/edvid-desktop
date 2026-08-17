@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-16 (0.7.7 — chat com intenção do usuário, ondas sonoras e zoom por pinça)
+Atualizado em: 2026-08-17 (0.7.8 — trim restaurado, chat persistente e J-Cut opcional)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -552,11 +552,11 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.7.7**.
+Versão corrente: **0.7.8**.
 
 Artefato local atual:
 
-`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.7-arm64.dmg`
+`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.7.8-arm64.dmg`
 
 Configuração do DMG:
 
@@ -601,6 +601,17 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.7.8: o trim por arrasto voltou — a regra `.timeline-clip > span` criada
+  para o rótulo sobre as ondas tinha especificidade maior que `.clip-handle`
+  e roubava position/z-index das alças (lição: estilos de rótulo em classe
+  própria, `.clip-label`, nunca em seletor genérico de elemento; verificado
+  com arrasto de ponteiro real, 142→50 px). O histórico do chat, o gate de
+  aprovação e o estado do J-Cut persistem por projeto em localStorage
+  (últimas 200 mensagens; fechar e reabrir não reoferece o início do
+  processo; logout não apaga — a conversa pertence ao projeto). Novo botão
+  opcional "Aplicar J-Cut" no chat após a aprovação do corte: antecipa o
+  áudio da cena seguinte (60–200 ms) via agente, atualizando o
+  jcut_timeline; o usuário pode ignorá-lo e ir direto aos estilos.
 - 0.7.7: refinamentos de UI/UX — mensagens disparadas pela interface mostram
   no chat só a intenção ("Aplicar os estilos escolhidos na edição"), com o
   briefing técnico indo apenas ao agente (dispatchMessage já aceitava
