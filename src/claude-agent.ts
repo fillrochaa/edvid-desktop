@@ -610,7 +610,7 @@ export class ClaudeAgent {
 
     // Entrada em streaming: um unico envio, mas o canal fica aberto ate o
     // fim do turno — e o que habilita interrupt() (o botao Parar).
-    let releaseInput: (() => void) | null = null;
+    let releaseInput: () => void = () => {};
     const inputDone = new Promise<void>((resolve) => {
       releaseInput = resolve;
     });
@@ -625,7 +625,9 @@ export class ClaudeAgent {
     }
 
     const resumeSession = this.sessionsByProject.get(projectDirectory);
-    const query = sdk.query({
+    let query: SdkQuery;
+    try {
+      query = sdk.query({
       prompt: promptStream(),
       options: {
         cwd: projectDirectory,
@@ -656,10 +658,17 @@ export class ClaudeAgent {
         env: this.buildEnvironment(token),
         ...(resumeSession ? { resume: resumeSession } : {}),
       },
-    });
+      });
+    } catch (error) {
+      // Falha na CONSTRUCAO (opcoes invalidas, binario ausente): sem isso o
+      // turno fantasma ficava em activeTurns e travava o projeto.
+      this.activeTurns.delete(threadId);
+      releaseInput();
+      throw error;
+    }
     active.interrupt = typeof query.interrupt === 'function' ? () => query.interrupt!() : null;
 
-    void this.consumeTurn(query, projectDirectory, threadId, turnId, active, () => releaseInput?.());
+    void this.consumeTurn(query, projectDirectory, threadId, turnId, active, () => releaseInput());
 
     this.deps.emitEvent({ type: 'turn-state', threadId, turnId, status: 'started' });
     return { threadId, turnId };
