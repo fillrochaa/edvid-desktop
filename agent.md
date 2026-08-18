@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-18 (0.8.2 — OTA assinado e notarizado, comprovado em produção)
+Atualizado em: 2026-08-18 (0.8.3 — runtimes sob demanda; instalador e updates magros)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -622,6 +622,33 @@ Lições de campo desta primeira rodada:
 - O botão de atualização precisava aparecer também no gate de login
   (corrigido pós-0.8.2): aluno na tela de entrada ficava sem ver o update.
 
+### 13d. Runtimes sob demanda — instalador magro (0.8.3)
+
+As ferramentas (FFmpeg, Python/WhisperX/PyTorch, Node, Codex, uv, yt-dlp —
+1,8 GB descomprimidas) **não vão mais no instalador**. O aplicativo baixa um
+runtime pack uma única vez no primeiro boot, com progresso no chat
+("Preparando o Edvid"), e de novo apenas quando alguma versão do
+`runtime-manifest.json` mudar. Com isso cada update OTA cai de ~855 MB para
+~100 MB.
+
+- **Chave do pacote**: `runtimePackKey()` em src/runtime.ts = sha256 de
+  `JSON.stringify(manifest.runtimes)` (12 hex). `scripts/pack-runtimes.mjs`
+  computa a mesma chave — mudar um, mudar o outro.
+- **Fluxo no app**: `ensureRuntimePack()` (single-flight) baixa
+  `runtimes/<plat>-<chave>.tar.gz` do bucket, verifica o `.sha256`, extrai
+  com o bsdtar do sistema em `tools.partial` e troca atômico para
+  `userData/runtime/tools` com um `pack.json` de marcador. `resolveRuntime`
+  procura primeiro em tools, depois em resources (o repositório de dev segue
+  com as ferramentas staged e nunca baixa pacote).
+- **Gates**: modelo Whisper, servidor Codex (via `codexServer()`),
+  instalação/render do Remotion, ffprobe do workspace e ondas sonoras
+  aguardam o pacote; com ele instalado o await resolve na hora.
+- **Release do dia a dia**: `npm run make:signed` + `npm run publish:update`.
+  **Só quando o manifest de runtimes mudar**: `npm run pack:runtimes` +
+  `npm run publish:runtimes` (o publish pula se a chave já estiver no
+  bucket) — e o publish:update da release correspondente.
+- QA visual: `?pack` na URL simula o download do primeiro boot.
+
 ### 13c. Login de alunos — Creator Factory (0.8.0)
 
 O acesso ao Edvid é dos alunos com matrícula ativa no curso **IA Edit Pro**
@@ -679,6 +706,10 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.8.3: runtimes sob demanda — o instalador não embarca mais as
+  ferramentas; o app baixa o runtime pack (591 MB comprimido, chave por hash
+  do manifest, sha256 verificado) no primeiro boot para
+  userData/runtime/tools. Updates OTA caem de ~855 MB para ~100 MB.
 - 0.8.1/0.8.2: primeiras builds com assinatura de produção, Hardened
   Runtime e notarização (aceitas de primeira pela Apple); OTA comprovado de
   ponta a ponta com o par de versões — download em segundo plano, botão no
