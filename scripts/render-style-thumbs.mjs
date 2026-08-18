@@ -170,14 +170,13 @@ for (const styleName of ANIMATED) {
       '--frames', '27-165', '--muted',
     ], { cwd: work });
   }
-  // Janela um pouco mais alta que a do still: o texto se move entre frases.
-  // Alturas pares — o libx264 com yuv420p recusa dimensao impar.
-  const win = job.window ?? { x: 160, y: 763 };
-  const tallY = Math.max(0, Math.min(1920 - 500, win.y - 53));
+  // MESMA janela dos stills: video e imagem alinham identicos nos cards.
+  // Dimensoes pares — o libx264 com yuv420p recusa altura impar.
+  const win = job.window ?? windowFor(job.name);
   run(ffmpeg, [
     '-hide_banner', '-loglevel', 'error', '-y',
     '-i', clip,
-    '-vf', `crop=${WIN_W}:500:${win.x}:${tallY},scale=540:356:flags=lanczos,fps=30`,
+    '-vf', `crop=${WIN_W}:${WIN_H}:${win.x}:${win.y},scale=540:280:flags=lanczos,fps=30`,
     '-an', '-c:v', 'libx264', '-preset', 'slow', '-crf', '26', '-pix_fmt', 'yuv420p',
     '-movflags', '+faststart',
     path.join(thumbsOut, `caption-${styleName}.mp4`),
