@@ -189,13 +189,20 @@ function qaProject(): ProjectSummary | null {
   };
 }
 
+// Fixados primeiro; dentro de cada grupo, o aberto mais recentemente.
+function sortProjects(projects: ProjectSummary[]): ProjectSummary[] {
+  return [...projects].sort((a, b) =>
+    Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) ||
+    Date.parse(b.lastOpenedAt) - Date.parse(a.lastOpenedAt));
+}
+
 async function readRecentProjects(): Promise<ProjectSummary[]> {
   try {
     const parsed = JSON.parse(await readFile(projectsFile(), 'utf8')) as {
       projects?: unknown;
     };
     if (!Array.isArray(parsed.projects)) return [];
-    return parsed.projects
+    return sortProjects(parsed.projects
       .filter((project): project is ProjectSummary => {
         if (!project || typeof project !== 'object') return false;
         const item = project as Partial<ProjectSummary>;
@@ -205,28 +212,50 @@ async function readRecentProjects(): Promise<ProjectSummary[]> {
           typeof item.lastOpenedAt === 'string'
         );
       })
-      .slice(0, 16);
+      .slice(0, 16));
   } catch {
     return [];
   }
 }
 
-async function rememberProject(directory: string): Promise<ProjectSummary> {
-  const resolvedDirectory = path.resolve(directory);
-  const project: ProjectSummary = {
-    directory: resolvedDirectory,
-    name: path.basename(resolvedDirectory),
-    lastOpenedAt: new Date().toISOString(),
-  };
-  const current = await readRecentProjects();
-  const projects = [
-    project,
-    ...current.filter((item) => path.resolve(item.directory) !== resolvedDirectory),
-  ].slice(0, 16);
+async function writeRecentProjects(projects: ProjectSummary[]): Promise<ProjectSummary[]> {
   await mkdir(path.dirname(projectsFile()), { recursive: true });
   await writeFile(projectsFile(), `${JSON.stringify({ version: 1, projects }, null, 2)}\n`);
+  return sortProjects(projects);
+}
+
+async function rememberProject(directory: string, requestedName?: string): Promise<ProjectSummary> {
+  const resolvedDirectory = path.resolve(directory);
+  const current = await readRecentProjects();
+  const existing = current.find((item) => path.resolve(item.directory) === resolvedDirectory);
+  const project: ProjectSummary = {
+    directory: resolvedDirectory,
+    // O nome escolhido pelo usuario (na criacao ou no renomear) sobrevive a
+    // reaberturas; sem ele, vale o nome da pasta.
+    name: asText(requestedName) || existing?.name || path.basename(resolvedDirectory),
+    lastOpenedAt: new Date().toISOString(),
+    ...(existing?.pinned ? { pinned: true } : null),
+  };
+  await writeRecentProjects([
+    project,
+    ...current.filter((item) => path.resolve(item.directory) !== resolvedDirectory),
+  ].slice(0, 16));
   selectedProjectDirectories.add(resolvedDirectory);
   return project;
+}
+
+async function mutateRecentProject(
+  directory: string,
+  mutate: (project: ProjectSummary) => ProjectSummary | null,
+): Promise<ProjectSummary[]> {
+  const resolvedDirectory = path.resolve(asText(directory));
+  const current = await readRecentProjects();
+  const next = current.flatMap((item) => {
+    if (path.resolve(item.directory) !== resolvedDirectory) return [item];
+    const mutated = mutate(item);
+    return mutated ? [mutated] : [];
+  });
+  return writeRecentProjects(next);
 }
 
 async function isDirectory(directory: string): Promise<boolean> {
@@ -965,13 +994,13 @@ async function inspectProjectStyle(directory: string): Promise<ProjectStyleState
   return null;
 }
 
-async function openProject(directory: string, remember = true): Promise<ProjectWorkspace> {
+async function openProject(directory: string, remember = true, name?: string): Promise<ProjectWorkspace> {
   const resolvedDirectory = path.resolve(directory);
   if (!(await isDirectory(resolvedDirectory))) {
     throw new Error('A pasta deste projeto nao esta mais disponivel.');
   }
   const project = remember
-    ? await rememberProject(resolvedDirectory)
+    ? await rememberProject(resolvedDirectory, name)
     : {
         directory: resolvedDirectory,
         name: path.basename(resolvedDirectory),
@@ -1903,7 +1932,7 @@ function registerIpcHandlers(): void {
       : projects;
   });
 
-  ipcMain.handle('project:select-directory', async () => {
+  ipcMain.handle('project:select-directory', async (_event, input?: { name?: string }) => {
     const result = await dialog.showOpenDialog({
       title: 'Escolha a pasta do projeto de video',
       buttonLabel: 'Usar esta pasta',
@@ -1911,7 +1940,32 @@ function registerIpcHandlers(): void {
     });
 
     if (result.canceled || !result.filePaths[0]) return null;
-    return openProject(result.filePaths[0]);
+    return openProject(result.filePaths[0], true, asText(input?.name));
+  });
+
+  ipcMain.handle('project:rename', async (_event, input: { directory?: string; name?: string }) => {
+    const name = asText(input.name).slice(0, 60);
+    if (!name) throw new Error('Escolha um nome para o projeto.');
+    return mutateRecentProject(asText(input.directory), (project) => ({ ...project, name }));
+  });
+
+  ipcMain.handle('project:pin', (_event, input: { directory?: string; pinned?: boolean }) =>
+    mutateRecentProject(asText(input.directory), (project) => ({
+      ...project,
+      pinned: Boolean(input.pinned),
+    })));
+
+  // Remove apenas da lista de recentes; a pasta do usuario fica intacta.
+  ipcMain.handle('project:remove-recent', (_event, input: { directory?: string }) =>
+    mutateRecentProject(asText(input.directory), () => null));
+
+  ipcMain.handle('project:open-folder', async (_event, input: { directory?: string }) => {
+    const requestedDirectory = path.resolve(asText(input.directory));
+    const projects = await readRecentProjects();
+    const known = selectedProjectDirectories.has(requestedDirectory) ||
+      projects.some((project) => path.resolve(project.directory) === requestedDirectory);
+    if (!known) throw new Error('Pasta desconhecida.');
+    await shell.openPath(requestedDirectory);
   });
 
   ipcMain.handle('project:open-recent', async (_event, input: { directory?: string }) => {

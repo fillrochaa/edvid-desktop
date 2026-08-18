@@ -30,6 +30,7 @@ export type ProjectSummary = {
   directory: string;
   name: string;
   lastOpenedAt: string;
+  pinned?: boolean;
 };
 
 export type ProjectMedia = {
@@ -249,8 +250,12 @@ export type EdvidDesktopApi = {
   getDesktopInfo: () => Promise<DesktopInfo>;
   checkRuntimes: () => Promise<RuntimeCheck[]>;
   listRecentProjects: () => Promise<ProjectSummary[]>;
-  selectProjectDirectory: () => Promise<ProjectWorkspace | null>;
+  selectProjectDirectory: (name?: string) => Promise<ProjectWorkspace | null>;
   openRecentProject: (directory: string) => Promise<ProjectWorkspace>;
+  renameProject: (directory: string, name: string) => Promise<ProjectSummary[]>;
+  pinProject: (directory: string, pinned: boolean) => Promise<ProjectSummary[]>;
+  removeRecentProject: (directory: string) => Promise<ProjectSummary[]>;
+  openProjectFolder: (directory: string) => Promise<void>;
   refreshProjectWorkspace: (directory: string) => Promise<ProjectWorkspace>;
   getCodexAccount: () => Promise<CodexAccountState>;
   loginWithChatGPT: () => Promise<CodexAccountState>;

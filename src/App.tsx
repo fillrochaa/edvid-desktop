@@ -118,13 +118,16 @@ type IconName =
   | 'folder'
   | 'image'
   | 'layers'
+  | 'more'
   | 'music'
   | 'pause'
   | 'pin'
   | 'play'
   | 'scissors'
+  | 'send'
   | 'settings'
   | 'skipBack'
+  | 'stop'
   | 'skipForward'
   | 'sparkles'
   | 'text'
@@ -190,11 +193,14 @@ function Icon({ name }: { name: IconName }) {
     folder: <path d="M1.5 4.2h5l1.2 1.5h6.8v7.2h-13z" />,
     image: <><rect x="1.5" y="2.2" width="13" height="11.6" rx="2" /><path d="m3.5 11 3-3 2.1 2 1.7-1.5 2.2 2.5M11.3 5.5h.1" /></>,
     layers: <><path d="m8 1.8 6.2 3.4L8 8.6 1.8 5.2z" /><path d="m2 8 6 3.3L14 8M2 10.8l6 3.3 6-3.3" /></>,
+    more: <path d="M3.4 8h.01M8 8h.01M12.6 8h.01" />,
     music: <><path d="M6 12.2V4l7-1.5v8" /><circle cx="3.9" cy="12.3" r="2" /><circle cx="10.9" cy="10.7" r="2" /></>,
     pause: <><path d="M5.2 3v10M10.8 3v10" /></>,
     pin: <path d="m5 2 6 1-1.4 3 2.1 2.1-3 1.1-2.5 4.5-.5-4.9-3-1.4 2.4-1.8z" />,
     play: <path d="m5 2.5 8 5.5-8 5.5z" />,
     scissors: <><circle cx="4.2" cy="4.4" r="1.9" /><circle cx="4.2" cy="11.6" r="1.9" /><path d="m5.7 5.6 8 6.6M5.7 10.4l8-6.6" /></>,
+    send: <path d="M8 12.8V3.4M3.9 7.4 8 3.3l4.1 4.1" />,
+    stop: <rect x="4.4" y="4.4" width="7.2" height="7.2" rx="1.6" />,
     settings: <><circle cx="8" cy="8" r="2.2" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" /></>,
     skipBack: <><path d="M4 3v10M12.8 3.2 5.4 8l7.4 4.8z" /></>,
     skipForward: <><path d="M12 3v10M3.2 3.2 10.6 8l-7.4 4.8z" /></>,
@@ -1430,24 +1436,9 @@ function EditorWorkspace({
       </section>
 
       <section className="timeline-section">
-        <div className="timeline-toolbar">
-          <div className="phase-copy">
-            <span className={`phase-badge phase-${phase}`}>Fase {phase}</span>
-            <div>
-              <strong>{phase === 1 ? 'Limpeza e corte' : 'Edição completa'}</strong>
-              <small>{phase === 1 ? 'Aprovação do corte limpo' : 'Novas camadas na mesma timeline'}</small>
-            </div>
-          </div>
-          <div className="timeline-toolbar-right">
-            {mapped && <span className="mapped-badge" title="O preview mostra as edições ainda não renderizadas">Prévia das edições</span>}
-            <div className="timeline-zoom" aria-label="Zoom da timeline">
-              <button type="button" onClick={() => changeZoom(Math.round(zoom) - 1)} disabled={zoom <= 1} title="Reduzir zoom (-)">−</button>
-              <span>{(Math.round(zoom * 10) / 10).toLocaleString('pt-BR')}×</span>
-              <button type="button" onClick={() => changeZoom(Math.round(zoom) + 1)} disabled={zoom >= 8} title="Aumentar zoom (+)">+</button>
-              <button type="button" className="fit" onClick={() => changeZoom(1)} disabled={zoom <= 1} title="Ver a timeline inteira (0)">Fit</button>
-            </div>
-            <div className="timeline-time">{formatTimecode(currentTime, fps)} <span>/ {formatTimecode(effectiveDuration, fps)}</span></div>
-          </div>
+        <div className="timeline-toolbar slim">
+          {mapped && <span className="mapped-badge" title="O preview mostra as edições ainda não renderizadas">Prévia das edições</span>}
+          <div className="timeline-time">{formatTimecode(currentTime, fps)} <span>/ {formatTimecode(effectiveDuration, fps)}</span></div>
         </div>
         <div className="timeline-scroll" ref={scrollRef}>
           <div
@@ -1583,6 +1574,12 @@ function EditorWorkspace({
             </button>
           </div>
           <div className="transport-right">
+            <div className="timeline-zoom" aria-label="Zoom da timeline">
+              <button type="button" onClick={() => changeZoom(Math.round(zoom) - 1)} disabled={zoom <= 1} title="Reduzir zoom (-)">−</button>
+              <span>{(Math.round(zoom * 10) / 10).toLocaleString('pt-BR')}×</span>
+              <button type="button" onClick={() => changeZoom(Math.round(zoom) + 1)} disabled={zoom >= 8} title="Aumentar zoom (+)">+</button>
+              <button type="button" className="fit" onClick={() => changeZoom(1)} disabled={zoom <= 1} title="Ver a timeline inteira (0)">Fit</button>
+            </div>
             <button type="button" className="transport-button" onClick={toggleMute} disabled={!media} title={muted ? 'Ativar áudio' : 'Silenciar'}>
               <Icon name={muted ? 'volumeOff' : 'volume'} />
             </button>
@@ -1862,6 +1859,11 @@ export function App() {
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({ status: 'idle' });
   const [memberAuth, setMemberAuth] = useState<MemberAuthState>({ status: 'unconfigured' });
   const [runtimePack, setRuntimePack] = useState<RuntimePackState>({ status: 'unknown' });
+  const [nameDialog, setNameDialog] = useState<{ mode: 'create' } | { mode: 'rename'; directory: string } | null>(null);
+  const [nameValue, setNameValue] = useState('');
+  const [projectMenu, setProjectMenu] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'geral' | 'conexoes'>('geral');
   const [jcutApplied, setJcutApplied] = useState(false);
   const phase2StatusRef = useRef<Phase2RenderState['status']>('idle');
   const messageListRef = useRef<HTMLDivElement | null>(null);
@@ -1926,10 +1928,10 @@ export function App() {
     setProjects(await window.edvidDesktop.listRecentProjects());
   }
 
-  async function chooseProjectDirectory() {
+  async function chooseProjectDirectory(name?: string) {
     setOpeningProject(true);
     try {
-      const selected = await window.edvidDesktop.selectProjectDirectory();
+      const selected = await window.edvidDesktop.selectProjectDirectory(name);
       if (selected) {
         activateWorkspace(selected);
         await reloadProjects();
@@ -1938,6 +1940,58 @@ export function App() {
       setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: errorMessage(error) }]);
     } finally {
       setOpeningProject(false);
+    }
+  }
+
+  function startCreateProject() {
+    setNameValue('');
+    setNameDialog({ mode: 'create' });
+  }
+
+  function startRenameProject(project: ProjectSummary) {
+    setProjectMenu(null);
+    setNameValue(project.name);
+    setNameDialog({ mode: 'rename', directory: project.directory });
+  }
+
+  async function confirmNameDialog() {
+    const dialog = nameDialog;
+    if (!dialog) return;
+    const name = nameValue.trim();
+    setNameDialog(null);
+    if (dialog.mode === 'create') {
+      await chooseProjectDirectory(name || undefined);
+      return;
+    }
+    if (!name) return;
+    try {
+      setProjects(await window.edvidDesktop.renameProject(dialog.directory, name));
+      if (dialog.directory === projectDirectory) {
+        setWorkspace((current) => current
+          ? { ...current, project: { ...current.project, name } }
+          : current);
+      }
+    } catch (error) {
+      setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: errorMessage(error) }]);
+    }
+  }
+
+  async function togglePinProject(project: ProjectSummary) {
+    setProjectMenu(null);
+    try {
+      setProjects(await window.edvidDesktop.pinProject(project.directory, !project.pinned));
+    } catch (error) {
+      setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: errorMessage(error) }]);
+    }
+  }
+
+  async function removeProjectFromList(project: ProjectSummary) {
+    setProjectMenu(null);
+    try {
+      // Remove apenas da lista de recentes; a pasta continua intacta no disco.
+      setProjects(await window.edvidDesktop.removeRecentProject(project.directory));
+    } catch (error) {
+      setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: errorMessage(error) }]);
     }
   }
 
@@ -2350,11 +2404,41 @@ export function App() {
     } satisfies StoredChat));
   }, [messages, handledCutApprovalId, jcutApplied, projectDirectory]);
 
+  // Modal do primeiro boot: o pacote de ferramentas baixando com o app
+  // inteiro desfocado atrás. Aparece sobre o gate e sobre o estúdio.
+  const packModal = (runtimePack.status === 'downloading' || runtimePack.status === 'extracting' || runtimePack.status === 'error') && (
+    <div className="pack-overlay" role="dialog" aria-modal="true" aria-label="Preparando o Edvid">
+      <div className="pack-modal">
+        <strong>Preparando o Edvid</strong>
+        {runtimePack.status === 'error' ? (
+          <>
+            <p className="pack-error">{runtimePack.error ?? 'Não foi possível baixar as ferramentas.'}</p>
+            <button type="button" className="btn primary" onClick={() => void window.edvidDesktop.ensureRuntimePack().then(setRuntimePack)}>
+              Tentar de novo
+            </button>
+          </>
+        ) : (
+          <>
+            <div className={`pack-track ${runtimePack.status === 'extracting' ? 'indeterminate' : ''}`}>
+              <span
+                style={runtimePack.status === 'downloading' && runtimePack.totalBytes
+                  ? { width: `${Math.min(100, Math.round(((runtimePack.downloadedBytes ?? 0) / runtimePack.totalBytes) * 100))}%` }
+                  : undefined}
+              />
+            </div>
+            <small>Quando terminar você já pode iniciar suas edições</small>
+          </>
+        )}
+      </div>
+    </div>
+  );
+
   // Gate do aluno: sem sessão válida, o estúdio inteiro fica atrás do login.
   // "unconfigured" (sem as chaves do Supabase) mantém o app aberto como antes.
   if (memberAuth.status === 'signed-out' || memberAuth.status === 'checking' || memberAuth.status === 'no-access') {
     return (
       <>
+        {packModal}
         {appUpdate.status === 'ready' && (
           <button
             type="button"
@@ -2380,6 +2464,7 @@ export function App() {
 
   return (
     <div className={`studio-shell ${railPinned ? 'rail-pinned' : ''}`}>
+      {packModal}
       <aside className={`project-rail ${railPinned ? 'pinned' : ''}`}>
         <div className="rail-brand">
           <div className="rail-logo">
@@ -2388,36 +2473,42 @@ export function App() {
           </div>
           <button type="button" className={`rail-pin ${railPinned ? 'active' : ''}`} onClick={toggleRailPinned} title={railPinned ? 'Recolher barra lateral' : 'Manter barra expandida'}><Icon name="pin" /></button>
         </div>
-        <button type="button" className="new-project" onClick={chooseProjectDirectory} disabled={openingProject || Boolean(activeTurn)}>
+        <button type="button" className="new-project" onClick={startCreateProject} disabled={openingProject || Boolean(activeTurn)}>
           <span><Icon name="add" /></span><strong>Novo projeto</strong>
         </button>
         <div className="project-list-heading">Recentes</div>
         <nav className="project-list" aria-label="Projetos recentes">
           {projects.map((project) => (
-            <button type="button" key={project.directory} className={`project-item ${project.directory === projectDirectory ? 'active' : ''}`} onClick={() => openRecentProject(project)} title={project.directory} disabled={Boolean(activeTurn)}>
-              <span className="project-item-icon"><Icon name="folder" /></span>
-              <span className="project-item-copy"><strong>{project.name}</strong><small>{project.directory}</small></span>
-              <Icon name="chevron" />
-            </button>
+            <div className="project-row" key={project.directory}>
+              <button type="button" className={`project-item ${project.directory === projectDirectory ? 'active' : ''}`} onClick={() => openRecentProject(project)} title={project.directory} disabled={Boolean(activeTurn)}>
+                <span className="project-item-icon"><Icon name="folder" /></span>
+                <span className="project-item-copy">
+                  <strong>{project.name}{project.pinned && <span className="pin-flag"><Icon name="pin" /></span>}</strong>
+                  <small>{project.directory}</small>
+                </span>
+              </button>
+              <button type="button" className="project-more" onClick={(event) => { event.stopPropagation(); setProjectMenu((current) => current === project.directory ? null : project.directory); }} title="Opções do projeto">
+                <Icon name="more" />
+              </button>
+              {projectMenu === project.directory && (
+                <div className="project-menu" role="menu">
+                  <button type="button" onClick={() => void togglePinProject(project)}>{project.pinned ? 'Desafixar' : 'Fixar'}</button>
+                  <button type="button" onClick={() => startRenameProject(project)}>Renomear</button>
+                  <button type="button" className="danger" onClick={() => void removeProjectFromList(project)}>Excluir</button>
+                </div>
+              )}
+            </div>
           ))}
           {projects.length === 0 && <div className="project-list-empty">Seus projetos aparecerão aqui.</div>}
         </nav>
         <div className="rail-footer">
-          <button type="button" className="rail-status" onClick={refreshRuntimes} title={missingRuntimeNames.length ? `Pendentes: ${missingRuntimeNames.join(', ')}` : 'Todas as dependências estão prontas'}>
-            <span className={`status-orb ${readyRuntimes === runtimeNames.length ? 'ready' : ''}`} />
-            <span className="rail-status-copy"><strong>{checking ? 'Verificando...' : `${readyRuntimes}/${runtimeNames.length} dependências`}</strong><small>{desktopInfo ? `${desktopInfo.platform} · ${desktopInfo.arch}` : 'Ambiente local'}</small></span>
-          </button>
-          {memberAuth.status === 'signed-in' && (
-            <div className="rail-account">
-              <span className="account-avatar signed-in">{(memberAuth.name ?? memberAuth.email ?? 'A').slice(0, 1).toUpperCase()}</span>
-              <span className="rail-account-copy"><strong>{memberAuth.name ?? memberAuth.email}</strong><small>{memberAuth.offline ? 'Aluno · validação offline' : 'Aluno Creator Factory'}</small></span>
-              <button type="button" className="account-action" onClick={() => void window.edvidDesktop.memberLogout().then(setMemberAuth)}>Sair</button>
-            </div>
-          )}
           <div className="rail-account">
-            <span className={`account-avatar ${account.status}`}>{account.account?.email?.slice(0, 1).toUpperCase() ?? 'E'}</span>
-            <span className="rail-account-copy"><strong>{accountLabel}</strong><small>{account.status === 'signed-in' ? 'Conta ChatGPT' : 'Conecte sua conta'}</small></span>
-            {account.status === 'signed-in' ? <button type="button" className="account-action" onClick={logout}>Sair</button> : <button type="button" className="account-action" onClick={account.status === 'waiting-for-browser' ? cancelLogin : login}>{account.status === 'waiting-for-browser' ? 'Cancelar' : 'Entrar'}</button>}
+            <span className="account-avatar signed-in">{(memberAuth.name ?? memberAuth.email ?? 'E').slice(0, 1).toUpperCase()}</span>
+            <span className="rail-account-copy">
+              <strong>{memberAuth.name ?? memberAuth.email ?? 'Edvid'}</strong>
+              <small>{memberAuth.status === 'signed-in' ? memberAuth.email : 'Creator Factory'}</small>
+            </span>
+            <button type="button" className="account-action gear" onClick={() => setSettingsOpen(true)} title="Configurações"><Icon name="settings" /></button>
           </div>
         </div>
       </aside>
@@ -2425,10 +2516,24 @@ export function App() {
       <main className="studio-main">
         <header className="studio-topbar">
           <div className="active-project">
-            <span className="project-state-dot" />
-            <div><span>Projeto ativo</span><strong>{workspace?.project.name ?? 'Nenhum projeto selecionado'}</strong></div>
-            {workspace && <small>{workspace.project.directory}</small>}
+            <div><span>Projeto</span><strong>{workspace?.project.name ?? 'Nenhum projeto selecionado'}</strong></div>
           </div>
+          {workspace && (
+            <div className="project-subcard">
+              <span className="project-path" title={workspace.project.directory}>{workspace.project.directory}</span>
+              <button
+                type="button"
+                className="subcard-action"
+                onClick={() => void window.edvidDesktop.openProjectFolder(workspace.project.directory).catch(() => {})}
+                title="Abrir a pasta do projeto"
+              >
+                <Icon name="folder" />
+              </button>
+              {workspace.media && (
+                <span className="subcard-meta">{workspace.media.orientation === 'vertical' ? '9:16 vertical' : '16:9 horizontal'} · {workspace.media.width}×{workspace.media.height}</span>
+              )}
+            </div>
+          )}
           <div className="topbar-actions">
             {appUpdate.status === 'ready' && (
               <button
@@ -2440,8 +2545,6 @@ export function App() {
                 {appUpdate.version ? `Atualizar para ${appUpdate.version}` : 'Atualizar o Edvid'} · Reiniciar
               </button>
             )}
-            {workspace?.media && <span className="media-meta">{workspace.media.orientation === 'vertical' ? '9:16 vertical' : '16:9 horizontal'} · {workspace.media.width}×{workspace.media.height}</span>}
-            <button type="button" className="btn ghost small" onClick={chooseProjectDirectory} disabled={openingProject || Boolean(activeTurn)}>{workspace ? 'Trocar pasta' : 'Escolher pasta'}</button>
           </div>
         </header>
 
@@ -2464,7 +2567,7 @@ export function App() {
                   <span className="chat-empty-icon"><Icon name="folder" /></span>
                   <h2>Comece por um projeto</h2>
                   <p>Escolha a pasta do vídeo. O preview, a timeline e a conversa ficarão reunidos nesta janela.</p>
-                  <button type="button" className="btn primary" onClick={chooseProjectDirectory}>Escolher pasta</button>
+                  <button type="button" className="btn primary" onClick={startCreateProject}>Novo projeto</button>
                 </div>
               )}
               {workspace && account.status !== 'signed-in' && messages.length === 0 && (
@@ -2494,33 +2597,6 @@ export function App() {
                   {whisperModel.status === 'error' && (
                     <div className="model-status error">
                       Não foi possível preparar a transcrição. Verifique a conexão e reabra o Edvid.
-                    </div>
-                  )}
-                </div>
-              )}
-              {(runtimePack.status === 'downloading' || runtimePack.status === 'extracting' || runtimePack.status === 'error') && (
-                <div className="phase2-render-banner" role="status">
-                  <span className="phase2-render-orb" />
-                  <div className="phase2-render-copy">
-                    <strong>
-                      {runtimePack.status === 'error' ? 'Falha ao preparar as ferramentas' : 'Preparando o Edvid'}
-                    </strong>
-                    <small>
-                      {runtimePack.status === 'error'
-                        ? `${runtimePack.error ?? 'Erro no download.'} `
-                        : runtimePack.status === 'extracting'
-                          ? 'Instalando as ferramentas de edição. Falta pouco.'
-                          : runtimePack.totalBytes
-                            ? `Baixando as ferramentas de edição · ${Math.round(((runtimePack.downloadedBytes ?? 0) / runtimePack.totalBytes) * 100)}% (${Math.round((runtimePack.downloadedBytes ?? 0) / 1e6)}/${Math.round(runtimePack.totalBytes / 1e6)} MB). Acontece uma única vez.`
-                            : 'Baixando as ferramentas de edição. Acontece uma única vez.'}
-                      {runtimePack.status === 'error' && (
-                        <button type="button" className="link-button" onClick={() => void window.edvidDesktop.ensureRuntimePack().then(setRuntimePack)}>Tentar de novo</button>
-                      )}
-                    </small>
-                  </div>
-                  {runtimePack.status === 'downloading' && runtimePack.totalBytes && (
-                    <div className="phase2-render-track">
-                      <span style={{ width: `${Math.min(100, Math.round(((runtimePack.downloadedBytes ?? 0) / runtimePack.totalBytes) * 100))}%` }} />
                     </div>
                   )}
                 </div>
@@ -2576,15 +2652,16 @@ export function App() {
             {!followingOutput && <button type="button" className="scroll-to-latest" onClick={() => { setFollowingOutput(true); const element = messageListRef.current; if (element) element.scrollTop = element.scrollHeight; }}><Icon name="arrowDown" /> Ir para o fim</button>}
             <form className="chat-composer" onSubmit={sendMessage}>
               <textarea value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={canChat ? 'Descreva a próxima alteração...' : 'Conecte a conta e escolha um projeto'} disabled={!canChat || sending} rows={2} />
-              {activeTurn ? <button className="composer-action stop" type="button" onClick={interruptTurn}>Parar</button> : <button className="composer-action send" type="submit" disabled={!canChat || !composer.trim() || sending}>Enviar</button>}
-              <div className="composer-hint"><span>Enter para enviar</span><span>Shift + Enter para nova linha</span></div>
+              {activeTurn
+                ? <button className="composer-inline stop" type="button" onClick={interruptTurn} title="Parar"><Icon name="stop" /></button>
+                : <button className="composer-inline send" type="submit" disabled={!canChat || !composer.trim() || sending} title="Enviar"><Icon name="send" /></button>}
             </form>
           </section>
 
           <section className="work-panel">
             <nav className="work-tabs" aria-label="Área de trabalho">
-              <button type="button" className={workTab === 'edit' ? 'active' : ''} onClick={() => setWorkTab('edit')}><Icon name="layers" /><span><strong>Edição</strong><small>Preview e timeline</small></span></button>
-              <button type="button" className={workTab === 'styles' ? 'active' : ''} onClick={() => setWorkTab('styles')}><Icon name="sparkles" /><span><strong>Estilos</strong><small>Visual da Fase 2</small></span></button>
+              <button type="button" className={workTab === 'edit' ? 'active' : ''} onClick={() => setWorkTab('edit')}><Icon name="layers" /><strong>Edição</strong></button>
+              <button type="button" className={workTab === 'styles' ? 'active' : ''} onClick={() => setWorkTab('styles')}><Icon name="sparkles" /><strong>Estilos</strong></button>
             </nav>
             <div className="work-content">
               {workTab === 'edit' ? (
@@ -2670,6 +2747,88 @@ export function App() {
                 {answeringApprovalId === activeApproval.id ? 'Autorizando...' : 'Permitir uma vez'}
               </button>
             </div>
+          </section>
+        </div>
+      )}
+
+      {projectMenu && <div className="menu-backdrop" onClick={() => setProjectMenu(null)} />}
+
+      {nameDialog && (
+        <div className="modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setNameDialog(null); }}>
+          <section className="name-dialog" role="dialog" aria-modal="true">
+            <h2>{nameDialog.mode === 'create' ? 'Novo projeto' : 'Renomear projeto'}</h2>
+            <p>{nameDialog.mode === 'create' ? 'Dê um nome ao projeto e escolha a pasta com o vídeo.' : 'O novo nome aparece na lista e no topo do Edvid.'}</p>
+            <input
+              type="text"
+              value={nameValue}
+              autoFocus
+              maxLength={60}
+              placeholder="Nome do projeto"
+              onChange={(event) => setNameValue(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') void confirmNameDialog(); if (event.key === 'Escape') setNameDialog(null); }}
+            />
+            <div className="name-dialog-actions">
+              <button type="button" className="btn ghost" onClick={() => setNameDialog(null)}>Cancelar</button>
+              <button type="button" className="btn primary" onClick={() => void confirmNameDialog()} disabled={nameDialog.mode === 'rename' && !nameValue.trim()}>
+                {nameDialog.mode === 'create' ? 'Escolher pasta...' : 'Salvar'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {settingsOpen && (
+        <div className="modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
+          <section className="settings-modal" role="dialog" aria-modal="true" aria-label="Configurações">
+            <header className="settings-head">
+              <h2>Configurações</h2>
+              <button type="button" className="settings-close" onClick={() => setSettingsOpen(false)} title="Fechar">✕</button>
+            </header>
+            <nav className="settings-tabs">
+              <button type="button" className={settingsTab === 'geral' ? 'active' : ''} onClick={() => setSettingsTab('geral')}>Geral</button>
+              <button type="button" className={settingsTab === 'conexoes' ? 'active' : ''} onClick={() => setSettingsTab('conexoes')}>Conexões</button>
+            </nav>
+            {settingsTab === 'geral' ? (
+              <div className="settings-body">
+                <div className="settings-block">
+                  <h3>Conta do aluno</h3>
+                  {memberAuth.status === 'signed-in' ? (
+                    <div className="settings-row">
+                      <div><strong>{memberAuth.name ?? memberAuth.email}</strong><small>{memberAuth.email}{memberAuth.offline ? ' · validação offline' : ''}</small></div>
+                      <button type="button" className="account-action" onClick={() => void window.edvidDesktop.memberLogout().then(setMemberAuth)}>Sair</button>
+                    </div>
+                  ) : (
+                    <p className="settings-note">O login de aluno não está ativo nesta instalação.</p>
+                  )}
+                </div>
+                <div className="settings-block">
+                  <h3>Conexão de IA</h3>
+                  <div className="settings-row">
+                    <div><strong>ChatGPT</strong><small>{accountLabel}</small></div>
+                    {account.status === 'signed-in'
+                      ? <button type="button" className="account-action" onClick={logout}>Sair</button>
+                      : <button type="button" className="account-action" onClick={account.status === 'waiting-for-browser' ? cancelLogin : login}>{account.status === 'waiting-for-browser' ? 'Cancelar' : 'Entrar'}</button>}
+                  </div>
+                </div>
+                <div className="settings-block">
+                  <h3>Dependências</h3>
+                  <div className="settings-row">
+                    <div>
+                      <strong>{checking ? 'Verificando...' : `${readyRuntimes}/${runtimeNames.length} ferramentas prontas`}</strong>
+                      <small>{missingRuntimeNames.length ? `Pendentes: ${missingRuntimeNames.join(', ')}` : `Todas instaladas${desktopInfo ? ` · ${desktopInfo.platform} ${desktopInfo.arch}` : ''}`}</small>
+                    </div>
+                    <button type="button" className="account-action" onClick={refreshRuntimes} disabled={checking}>Verificar</button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="settings-body">
+                <div className="settings-block">
+                  <h3>Conexões</h3>
+                  <p className="settings-note">Em breve: chaves de API e conexões MCP para ampliar o Edvid.</p>
+                </div>
+              </div>
+            )}
           </section>
         </div>
       )}

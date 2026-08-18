@@ -110,6 +110,10 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     listRecentProjects: async () => [qaProject],
     selectProjectDirectory: async () => qaWorkspace,
     openRecentProject: async () => qaWorkspace,
+    renameProject: async (_directory, name) => [{ ...qaProject, name }],
+    pinProject: async () => [{ ...qaProject, pinned: true }],
+    removeRecentProject: async () => [],
+    openProjectFolder: async () => {},
     refreshProjectWorkspace: async () => qaWorkspace,
     getCodexAccount: async () => ({
       status: 'signed-in',

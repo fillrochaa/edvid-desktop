@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-18 (0.8.3 — runtimes sob demanda; instalador e updates magros)
+Atualizado em: 2026-08-18 (0.8.4 — refino geral de UI: modal do pacote, topbar, chat, sidebar e Configurações)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -706,6 +706,15 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.8.4: refino de UI — pacote de ferramentas em modal central com fundo
+  desfocado; topbar "Projeto" + subcard (caminho, abrir no Finder,
+  proporção/resolução) sem "Trocar pasta"; chat compacto com envio embutido
+  no campo (sem gabarito de atalhos); abas só ícone+palavra; zoom/Fit na
+  barra de transporte; toolbar da timeline só com o tempo; sidebar quadrada
+  com ícones menores, menu ⋯ (fixar/renomear/excluir da lista — a pasta
+  nunca é apagada), nome definido ao criar projeto (projects.json preserva
+  nome e fixado); rodapé só com o aluno + engrenagem → Configurações
+  (Geral: aluno, ChatGPT, dependências · Conexões: placeholder de APIs/MCPs).
 - 0.8.3: runtimes sob demanda — o instalador não embarca mais as
   ferramentas; o app baixa o runtime pack (591 MB comprimido, chave por hash
   do manifest, sha256 verificado) no primeiro boot para

@@ -14,8 +14,12 @@ const api: EdvidDesktopApi = {
   getDesktopInfo: () => ipcRenderer.invoke('desktop:get-info'),
   checkRuntimes: () => ipcRenderer.invoke('runtime:check'),
   listRecentProjects: () => ipcRenderer.invoke('project:list'),
-  selectProjectDirectory: () => ipcRenderer.invoke('project:select-directory'),
+  selectProjectDirectory: (name) => ipcRenderer.invoke('project:select-directory', { name }),
   openRecentProject: (directory) => ipcRenderer.invoke('project:open-recent', { directory }),
+  renameProject: (directory, name) => ipcRenderer.invoke('project:rename', { directory, name }),
+  pinProject: (directory, pinned) => ipcRenderer.invoke('project:pin', { directory, pinned }),
+  removeRecentProject: (directory) => ipcRenderer.invoke('project:remove-recent', { directory }),
+  openProjectFolder: (directory) => ipcRenderer.invoke('project:open-folder', { directory }),
   refreshProjectWorkspace: (directory) =>
     ipcRenderer.invoke('project:refresh-workspace', { directory }),
   getCodexAccount: () => ipcRenderer.invoke('codex:account'),
