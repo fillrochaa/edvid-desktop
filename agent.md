@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-18 (0.8.4 — refino geral de UI: modal do pacote, topbar, chat, sidebar e Configurações)
+Atualizado em: 2026-08-18 (0.8.5 — thumbnails reais na aba Estilos, renderizadas pelo template)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -706,6 +706,14 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.8.5: as thumbnails de headline (4) e legenda (6) da aba Estilos são
+  stills renderizados pelo próprio template do Remotion
+  (scripts/render-style-thumbs.mjs: backdrop sintético por FFmpeg, legendas
+  pelos helpers oficiais, accent padrão #ff5200, recortes por estilo em
+  src/brand/thumbs/*.png). Mudou o template? Rodar o script de novo. O
+  FFmpeg empacotado não tem encoder webp — saída em PNG. Sem loading=lazy
+  nos cards: dentro do scroll da aba as imagens nunca disparavam. Os cards
+  de tipo de edição continuam diagramas CSS (são layout, não tipografia).
 - 0.8.4: refino de UI — pacote de ferramentas em modal central com fundo
   desfocado; topbar "Projeto" + subcard (caminho, abrir no Finder,
   proporção/resolução) sem "Trocar pasta"; chat compacto com envio embutido

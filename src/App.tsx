@@ -11,6 +11,34 @@ import {
 } from 'react';
 import edvidIcon from './brand/edvid-icon.png';
 import edvidLogo from './brand/edvid-logo.png';
+// Thumbnails renderizadas pelo proprio template do Remotion
+// (scripts/render-style-thumbs.mjs) — fieis ao resultado da Fase 2.
+import thumbHeadlineOutline from './brand/thumbs/headline-outline.png';
+import thumbHeadlineCard from './brand/thumbs/headline-card.png';
+import thumbHeadlineRealce from './brand/thumbs/headline-realce.png';
+import thumbHeadlineMisto from './brand/thumbs/headline-misto.png';
+import thumbCaptionKaraoke from './brand/thumbs/caption-karaoke.png';
+import thumbCaptionStacked from './brand/thumbs/caption-stacked.png';
+import thumbCaptionScatter from './brand/thumbs/caption-scatter.png';
+import thumbCaptionSimples from './brand/thumbs/caption-simples.png';
+import thumbCaptionSerifada from './brand/thumbs/caption-serifada.png';
+import thumbCaptionClassica from './brand/thumbs/caption-classica.png';
+
+const headlineThumbs: Record<Exclude<HeadlineStyle, 'none'>, string> = {
+  outline: thumbHeadlineOutline,
+  card: thumbHeadlineCard,
+  realce: thumbHeadlineRealce,
+  misto: thumbHeadlineMisto,
+};
+
+const captionThumbs: Record<Exclude<CaptionStyle, 'none'>, string> = {
+  karaoke: thumbCaptionKaraoke,
+  stacked: thumbCaptionStacked,
+  scatter: thumbCaptionScatter,
+  simples: thumbCaptionSimples,
+  serifada: thumbCaptionSerifada,
+  classica: thumbCaptionClassica,
+};
 import type {
   AppUpdateState,
   CodexAccountState,
@@ -325,24 +353,16 @@ function EditStylePreview({ style }: { style: EditStyle }) {
   );
 }
 
-function HeadlinePreview({ style, accent }: { style: HeadlineStyle; accent: string }) {
+function HeadlinePreview({ style }: { style: HeadlineStyle }) {
   if (style === 'none') return <div className="none-preview">Sem texto</div>;
-  return (
-    <div className={`headline-preview ${style}`} style={{ '--preview-accent': accent } as CSSProperties}>
-      <span>Este é o seu</span>
-      <span>novo headline</span>
-    </div>
-  );
+  // Frame real renderizado pelo template; o accent das thumbnails e o padrao
+  // laranja — a cor escolhida vale no render final.
+  return <img className="style-thumb" src={headlineThumbs[style]} alt="" draggable={false} />;
 }
 
-function CaptionPreview({ style, accent }: { style: CaptionStyle; accent: string }) {
+function CaptionPreview({ style }: { style: CaptionStyle }) {
   if (style === 'none') return <div className="none-preview">Sem legendas</div>;
-  return (
-    <div className={`caption-preview ${style}`} style={{ '--preview-accent': accent } as CSSProperties}>
-      <span>É assim que sua</span>
-      <span>legenda aparece</span>
-    </div>
-  );
+  return <img className="style-thumb" src={captionThumbs[style]} alt="" draggable={false} />;
 }
 
 function ChoiceCard({
@@ -1679,7 +1699,7 @@ function StyleWorkspace({
           <div className="choice-grid headline-choice-grid">
             {headlineStyles.map((option) => (
               <ChoiceCard key={option.id} selected={style.headline === option.id} title={option.name} onClick={() => onChange({ ...style, headline: option.id })}>
-                <HeadlinePreview style={option.id} accent={style.accent} />
+                <HeadlinePreview style={option.id} />
               </ChoiceCard>
             ))}
           </div>
@@ -1690,7 +1710,7 @@ function StyleWorkspace({
           <div className="choice-grid caption-choice-grid">
             {captionStyles.map((option) => (
               <ChoiceCard key={option.id} selected={style.captions === option.id} title={option.name} subtitle={option.kind} onClick={() => onChange({ ...style, captions: option.id })}>
-                <CaptionPreview style={option.id} accent={style.accent} />
+                <CaptionPreview style={option.id} />
               </ChoiceCard>
             ))}
           </div>
