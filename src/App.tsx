@@ -143,6 +143,7 @@ type IconName =
   | 'chat'
   | 'check'
   | 'chevron'
+  | 'enter'
   | 'folder'
   | 'image'
   | 'layers'
@@ -218,6 +219,7 @@ function Icon({ name }: { name: IconName }) {
     chat: <path d="M2 2.5h12v8.6H7l-3.7 2.4.9-2.4H2z" />,
     check: <path d="m2.6 8.2 3.2 3.1 7.6-7.4" />,
     chevron: <path d="m6 3.2 4.8 4.8L6 12.8" />,
+    enter: <path d="M12.8 3.6v3.6a2.4 2.4 0 0 1-2.4 2.4H3.6M6.5 6.6 3.4 9.6l3.1 3" />,
     folder: <path d="M1.5 4.2h5l1.2 1.5h6.8v7.2h-13z" />,
     image: <><rect x="1.5" y="2.2" width="13" height="11.6" rx="2" /><path d="m3.5 11 3-3 2.1 2 1.7-1.5 2.2 2.5M11.3 5.5h.1" /></>,
     layers: <><path d="m8 1.8 6.2 3.4L8 8.6 1.8 5.2z" /><path d="m2 8 6 3.3L14 8M2 10.8l6 3.3 6-3.3" /></>,
@@ -229,7 +231,7 @@ function Icon({ name }: { name: IconName }) {
     scissors: <><circle cx="4.2" cy="4.4" r="1.9" /><circle cx="4.2" cy="11.6" r="1.9" /><path d="m5.7 5.6 8 6.6M5.7 10.4l8-6.6" /></>,
     send: <path d="M8 12.8V3.4M3.9 7.4 8 3.3l4.1 4.1" />,
     stop: <rect x="4.4" y="4.4" width="7.2" height="7.2" rx="1.6" />,
-    settings: <><circle cx="8" cy="8" r="2.2" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" /></>,
+    settings: <g transform="scale(.6667)"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></g>,
     skipBack: <><path d="M4 3v10M12.8 3.2 5.4 8l7.4 4.8z" /></>,
     skipForward: <><path d="M12 3v10M3.2 3.2 10.6 8l-7.4 4.8z" /></>,
     sparkles: <><path d="M8 1.5 9.2 5 12.5 6.2 9.2 7.4 8 11 6.8 7.4 3.5 6.2 6.8 5z" /><path d="m12.8 10 .5 1.5 1.4.5-1.4.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5z" /></>,
@@ -2485,7 +2487,9 @@ export function App() {
   return (
     <div className={`studio-shell ${railPinned ? 'rail-pinned' : ''}`}>
       {packModal}
-      <aside className={`project-rail ${railPinned ? 'pinned' : ''}`}>
+      {/* Menu ⋯ aberto força a rail expandida: o backdrop fica fora dela e
+          mataria o hover, colapsando a rail com o menu no ar. */}
+      <aside className={`project-rail ${railPinned || projectMenu ? 'pinned' : ''}`}>
         <div className="rail-brand">
           <div className="rail-logo">
             <img className="rail-brand-icon" src={edvidIcon} alt="" />
@@ -2674,7 +2678,7 @@ export function App() {
               <textarea value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder={canChat ? 'Descreva a próxima alteração...' : 'Conecte a conta e escolha um projeto'} disabled={!canChat || sending} rows={2} />
               {activeTurn
                 ? <button className="composer-inline stop" type="button" onClick={interruptTurn} title="Parar"><Icon name="stop" /></button>
-                : <button className="composer-inline send" type="submit" disabled={!canChat || !composer.trim() || sending} title="Enviar"><Icon name="send" /></button>}
+                : <button className="composer-inline send" type="submit" disabled={!canChat || !composer.trim() || sending} title="Enviar (Enter)"><Icon name="enter" /></button>}
             </form>
           </section>
 

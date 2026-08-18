@@ -139,11 +139,13 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .scroll-to-latest .icon { width: 11px; height: 11px; }
 .chat-composer { position: relative; flex: 0 0 auto; display: block; padding: 9px 10px; border-top: 1px solid var(--stroke); background: rgba(10,13,18,.9); }
 .chat-composer textarea { width: 100%; min-height: 48px; max-height: 112px; resize: none; padding: 9px 40px 9px 10px; border: 1px solid var(--stroke); border-radius: 11px; outline: none; color: var(--text); background: rgba(0,0,0,.2); font-size: 9.5px; line-height: 1.5; user-select: text; }
-.composer-inline { position: absolute; right: 17px; bottom: 17px; width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 9px; color: #fff; cursor: pointer; }
+/* Ícone de enter discreto, ancorado no canto interno do campo. */
+.composer-inline { position: absolute; right: 16px; bottom: 21px; width: 20px; height: 20px; display: grid; place-items: center; border: 0; border-radius: 6px; color: #7f8996; background: transparent; cursor: pointer; transition: color .12s, background .12s; }
 .composer-inline .icon { width: 12px; height: 12px; }
-.composer-inline.send { background: linear-gradient(135deg, var(--orange), #ff9440); }
-.composer-inline.send:disabled { opacity: .35; cursor: default; }
-.composer-inline.stop { border: 1px solid rgba(255,94,115,.32); color: #ff91a0; background: rgba(255,94,115,.07); }
+.composer-inline.send:hover:not(:disabled) { color: #ffb680; background: rgba(255,119,19,.12); }
+.composer-inline.send:disabled { opacity: .3; cursor: default; }
+.composer-inline.stop { color: #ff91a0; }
+.composer-inline.stop:hover { background: rgba(255,94,115,.12); }
 .chat-composer textarea:focus { border-color: rgba(9,181,183,.48); box-shadow: 0 0 0 3px rgba(9,181,183,.055); }
 .chat-composer textarea::placeholder { color: #596270; }
 .composer-action { min-width: 58px; align-self: stretch; border: 0; border-radius: 10px; color: #fff; font-size: 8.5px; font-weight: 700; cursor: pointer; }
@@ -459,15 +461,17 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .pin-flag .icon { width: 8px; height: 8px; }
 .project-item-copy strong { display: flex; align-items: center; }
 .project-more { position: absolute; top: 50%; right: 5px; transform: translateY(-50%); width: 20px; height: 20px; display: grid; place-items: center; border: 0; border-radius: 6px; color: #7c8694; background: transparent; opacity: 0; cursor: pointer; }
-.project-rail:hover .project-more, .project-rail.pinned .project-more { opacity: .55; }
-.project-more:hover { opacity: 1; color: var(--text); background: rgba(255,255,255,.07); }
+.project-rail:hover .project-more, .project-rail.pinned .project-more { opacity: .8; }
+.project-more:hover { opacity: 1; color: var(--text); background: rgba(255,255,255,.1); }
 .project-more .icon { width: 12px; height: 12px; }
-.project-menu { position: absolute; top: calc(100% - 4px); right: 4px; z-index: 40; min-width: 118px; display: flex; flex-direction: column; padding: 4px; border: 1px solid var(--stroke); border-radius: 10px; background: rgba(16,19,25,.98); box-shadow: 0 14px 40px rgba(0,0,0,.5); }
-.project-menu button { padding: 7px 9px; border: 0; border-radius: 7px; color: #aab3bf; background: transparent; text-align: left; font-size: 9px; cursor: pointer; }
-.project-menu button:hover { color: var(--text); background: rgba(255,255,255,.06); }
+.project-menu { position: absolute; top: calc(100% - 4px); right: 4px; z-index: 40; min-width: 132px; display: flex; flex-direction: column; gap: 1px; padding: 5px; border: 1px solid rgba(255,255,255,.14); border-radius: 10px; background: #161a21; box-shadow: 0 16px 44px rgba(0,0,0,.65); }
+.project-menu button { padding: 8px 10px; border: 0; border-radius: 7px; color: #d3d9e0; background: transparent; text-align: left; font-size: 9.5px; font-weight: 600; cursor: pointer; }
+.project-menu button:hover { color: #fff; background: rgba(255,255,255,.09); }
 .project-menu button.danger { color: #ff9fae; }
 .project-menu button.danger:hover { background: rgba(255,94,115,.08); }
-.menu-backdrop { position: fixed; inset: 0; z-index: 35; }
+/* Abaixo da rail (z 20): o menu dentro dela continua clicável e com hover;
+   o backdrop só pega os cliques no resto da janela. */
+.menu-backdrop { position: fixed; inset: 0; z-index: 15; }
 .account-action.gear { width: 24px; height: 24px; display: grid; place-items: center; padding: 0; }
 .account-action.gear .icon { width: 12px; height: 12px; }
 .rail-pin .icon { width: 11px; height: 11px; }
