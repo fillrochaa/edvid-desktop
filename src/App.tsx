@@ -2344,15 +2344,27 @@ export function App() {
   // "unconfigured" (sem as chaves do Supabase) mantém o app aberto como antes.
   if (memberAuth.status === 'signed-out' || memberAuth.status === 'checking' || memberAuth.status === 'no-access') {
     return (
-      <MemberGate
-        auth={memberAuth}
-        onLogin={async (email, password) => {
-          setMemberAuth(await window.edvidDesktop.memberLogin(email, password));
-        }}
-        onLogout={async () => {
-          setMemberAuth(await window.edvidDesktop.memberLogout());
-        }}
-      />
+      <>
+        {appUpdate.status === 'ready' && (
+          <button
+            type="button"
+            className="btn primary small update-ready update-floating"
+            onClick={() => void window.edvidDesktop.installAppUpdate()}
+            title="A nova versão já foi baixada; o Edvid reinicia atualizado."
+          >
+            {appUpdate.version ? `Atualizar para ${appUpdate.version}` : 'Atualizar o Edvid'} · Reiniciar
+          </button>
+        )}
+        <MemberGate
+          auth={memberAuth}
+          onLogin={async (email, password) => {
+            setMemberAuth(await window.edvidDesktop.memberLogin(email, password));
+          }}
+          onLogout={async () => {
+            setMemberAuth(await window.edvidDesktop.memberLogout());
+          }}
+        />
+      </>
     );
   }
 
