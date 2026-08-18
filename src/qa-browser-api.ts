@@ -1,4 +1,6 @@
 import type {
+  AiProvider,
+  ClaudeAccountState,
   CodexEvent,
   EdvidDesktopApi,
   ProjectSummary,
@@ -56,6 +58,19 @@ const qaWorkspace: ProjectWorkspace = {
 const listeners = new Set<(event: CodexEvent) => void>();
 let turnNumber = 0;
 let approvalPreviewScheduled = false;
+
+// QA das conexões de IA: ?ia abre o app com nenhuma IA conectada (mostra o
+// onboarding); ?ia=manual força o fluxo de colar o código do Claude.
+const qaSearch = () => new URLSearchParams(window.location.search);
+let qaChatGptConnected = !qaSearch().has('ia');
+let qaProvider: AiProvider = 'chatgpt';
+let qaClaude: ClaudeAccountState = { status: 'signed-out', email: null };
+const claudeListeners = new Set<(state: ClaudeAccountState) => void>();
+
+function emitClaude(state: ClaudeAccountState): void {
+  qaClaude = state;
+  for (const listener of claudeListeners) listener(state);
+}
 
 const runtimeVersions: Record<RuntimeName, string> = {
   node: '26.7.0',
@@ -115,18 +130,60 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     removeRecentProject: async () => [],
     openProjectFolder: async () => {},
     refreshProjectWorkspace: async () => qaWorkspace,
-    getCodexAccount: async () => ({
-      status: 'signed-in',
-      account: { type: 'chatgpt', email: 'qa@edvid.local', planType: 'qa' },
-      requiresOpenaiAuth: false,
-    }),
-    loginWithChatGPT: async () => ({
-      status: 'signed-in',
-      account: { type: 'chatgpt', email: 'qa@edvid.local', planType: 'qa' },
-      requiresOpenaiAuth: false,
-    }),
+    getCodexAccount: async () => (qaChatGptConnected
+      ? {
+          status: 'signed-in',
+          account: { type: 'chatgpt', email: 'qa@edvid.local', planType: 'qa' },
+          requiresOpenaiAuth: false,
+        }
+      : { status: 'signed-out', account: null, requiresOpenaiAuth: true }),
+    loginWithChatGPT: async () => {
+      qaChatGptConnected = true;
+      return {
+        status: 'signed-in',
+        account: { type: 'chatgpt', email: 'qa@edvid.local', planType: 'qa' },
+        requiresOpenaiAuth: false,
+      };
+    },
     cancelChatGPTLogin: async () => ({ status: 'signed-out', account: null, requiresOpenaiAuth: true }),
-    logoutCodex: async () => ({ status: 'signed-out', account: null, requiresOpenaiAuth: true }),
+    logoutCodex: async () => {
+      qaChatGptConnected = false;
+      return { status: 'signed-out', account: null, requiresOpenaiAuth: true };
+    },
+    getAiProvider: async () => qaProvider,
+    setAiProvider: async (provider) => {
+      qaProvider = provider;
+      return provider;
+    },
+    getClaudeAccount: async () => qaClaude,
+    loginWithClaude: async () => {
+      const manual = qaSearch().get('ia') === 'manual';
+      emitClaude({ status: 'waiting-for-browser', email: null, manual });
+      if (!manual) {
+        window.setTimeout(() => emitClaude({ status: 'signed-in', email: 'aluno@claude.ai' }), 1600);
+      }
+      return qaClaude;
+    },
+    submitClaudeLoginCode: async (code) => {
+      if (code.includes('errado')) {
+        emitClaude({ status: 'waiting-for-browser', email: null, manual: true, error: 'O Claude recusou o login. Tente de novo.' });
+      } else {
+        emitClaude({ status: 'signed-in', email: 'aluno@claude.ai' });
+      }
+      return qaClaude;
+    },
+    cancelClaudeLogin: async () => {
+      emitClaude({ status: 'signed-out', email: null });
+      return qaClaude;
+    },
+    logoutClaude: async () => {
+      emitClaude({ status: 'signed-out', email: null });
+      return qaClaude;
+    },
+    onClaudeAccount: (listener) => {
+      claudeListeners.add(listener);
+      return () => claudeListeners.delete(listener);
+    },
     saveTimelineModel: async () => {
       // O QA visual não persiste; as edições ficam apenas em memória.
     },

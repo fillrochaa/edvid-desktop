@@ -40,8 +40,12 @@ const captionThumbs: Record<Exclude<CaptionStyle, 'none'>, { kind: 'video' | 'im
   serifada: { kind: 'image', src: thumbCaptionSerifada },
   classica: { kind: 'image', src: thumbCaptionClassica },
 };
+import chatgptMark from './brand/ai/chatgpt-mark.svg';
+import claudeMark from './brand/ai/claude-mark.svg';
 import type {
+  AiProvider,
   AppUpdateState,
+  ClaudeAccountState,
   CodexAccountState,
   CodexApproval,
   CodexEvent,
@@ -1884,6 +1888,11 @@ export function App() {
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({ status: 'idle' });
   const [memberAuth, setMemberAuth] = useState<MemberAuthState>({ status: 'unconfigured' });
   const [runtimePack, setRuntimePack] = useState<RuntimePackState>({ status: 'unknown' });
+  const [claudeAccount, setClaudeAccount] = useState<ClaudeAccountState>({ status: 'signed-out', email: null });
+  const [claudeLoaded, setClaudeLoaded] = useState(false);
+  const [aiProvider, setAiProviderState] = useState<AiProvider>('chatgpt');
+  const [aiOnboardingDismissed, setAiOnboardingDismissed] = useState(false);
+  const [claudeCode, setClaudeCode] = useState('');
   const [nameDialog, setNameDialog] = useState<{ mode: 'create' } | { mode: 'rename'; directory: string } | null>(null);
   const [nameValue, setNameValue] = useState('');
   const [projectMenu, setProjectMenu] = useState<string | null>(null);
@@ -1902,9 +1911,19 @@ export function App() {
   const booted = useRef(false);
 
   const projectDirectory = workspace?.project.directory ?? null;
-  const canChat = Boolean(projectDirectory) && account.status === 'signed-in';
+  const chatgptConnected = account.status === 'signed-in';
+  const claudeConnected = claudeAccount.status === 'signed-in';
+  // O chat conversa com o provedor ATIVO; o outro pode ficar conectado em
+  // espera. A troca acontece nas Configurações (ou sozinha, abaixo).
+  const activeAiConnected = aiProvider === 'claude' ? claudeConnected : chatgptConnected;
+  const canChat = Boolean(projectDirectory) && activeAiConnected;
   const readyRuntimes = runtimes.filter((runtime) => runtime.available).length;
   const accountLabel = account.account?.email ?? (account.status === 'waiting-for-browser' ? 'Conclua no navegador' : 'ChatGPT desconectado');
+  const claudeLabel = claudeAccount.email ?? (
+    claudeAccount.status === 'waiting-for-browser'
+      ? claudeAccount.manual ? 'Cole o código exibido no site' : 'Conclua no navegador'
+      : 'Claude desconectado'
+  );
   const activeApproval = approvals[0] ?? null;
   const pendingCutApprovalId = useMemo(
     () => [...messages].reverse().find((message) => (
@@ -2117,6 +2136,46 @@ export function App() {
     }
   }
 
+  async function claudeLogin() {
+    try {
+      setClaudeAccount(await window.edvidDesktop.loginWithClaude());
+    } catch (error) {
+      setClaudeAccount({ status: 'error', email: null, error: errorMessage(error) });
+    }
+  }
+
+  async function claudeCancelLogin() {
+    setClaudeCode('');
+    try {
+      setClaudeAccount(await window.edvidDesktop.cancelClaudeLogin());
+    } catch (error) {
+      setClaudeAccount({ status: 'error', email: null, error: errorMessage(error) });
+    }
+  }
+
+  async function claudeLogout() {
+    try {
+      setClaudeAccount(await window.edvidDesktop.logoutClaude());
+    } catch (error) {
+      setClaudeAccount({ ...claudeAccount, status: 'error', error: errorMessage(error) });
+    }
+  }
+
+  async function claudeSubmitCode() {
+    const code = claudeCode.trim();
+    if (!code) return;
+    try {
+      setClaudeAccount(await window.edvidDesktop.submitClaudeLoginCode(code));
+      setClaudeCode('');
+    } catch (error) {
+      setClaudeAccount({ status: 'error', email: null, error: errorMessage(error) });
+    }
+  }
+
+  function switchAiProvider(provider: AiProvider) {
+    void window.edvidDesktop.setAiProvider(provider).then(setAiProviderState);
+  }
+
   function handleCodexEvent(event: CodexEvent) {
     if (event.type === 'account') {
       setAccount(event.state);
@@ -2179,7 +2238,7 @@ export function App() {
 
   async function dispatchMessage(text: string, displayText = text) {
     const trimmed = text.trim();
-    if (!trimmed || !projectDirectory || account.status !== 'signed-in' || sending) return false;
+    if (!trimmed || !projectDirectory || !activeAiConnected || sending) return false;
     setSending(true);
     setFollowingOutput(true);
     setMessages((current) => [...current, { id: `user:${Date.now()}`, role: 'user', text: displayText.trim() || trimmed }]);
@@ -2372,6 +2431,7 @@ export function App() {
     const unsubscribePhase2 = window.edvidDesktop.onPhase2RenderState(handlePhase2RenderState);
     const unsubscribeUpdate = window.edvidDesktop.onAppUpdateState(setAppUpdate);
     const unsubscribeMember = window.edvidDesktop.onMemberAuthState(setMemberAuth);
+    const unsubscribeClaude = window.edvidDesktop.onClaudeAccount(setClaudeAccount);
     void window.edvidDesktop.getMemberAuth().then(setMemberAuth);
     const unsubscribePack = window.edvidDesktop.onRuntimePackState((state) => {
       setRuntimePack(state);
@@ -2384,6 +2444,11 @@ export function App() {
       booted.current = true;
       void window.edvidDesktop.getDesktopInfo().then(setDesktopInfo);
       void window.edvidDesktop.getCodexAccount().then(setAccount);
+      void window.edvidDesktop.getClaudeAccount().then((state) => {
+        setClaudeAccount(state);
+        setClaudeLoaded(true);
+      });
+      void window.edvidDesktop.getAiProvider().then(setAiProviderState);
       void refreshRuntimes();
       // O modelo de transcricao e preparado pelo aplicativo, antes de o
       // usuario pedir o corte: assim a edicao nunca para para baixar nada.
@@ -2408,6 +2473,7 @@ export function App() {
       unsubscribeUpdate();
       unsubscribeMember();
       unsubscribePack();
+      unsubscribeClaude();
     };
   }, []);
 
@@ -2428,6 +2494,85 @@ export function App() {
       jcutApplied,
     } satisfies StoredChat));
   }, [messages, handledCutApprovalId, jcutApplied, projectDirectory]);
+
+  // Se o provedor ativo está desconectado mas o outro está pronto, a troca é
+  // automática: o aluno nunca fica com o chat travado por uma escolha antiga.
+  useEffect(() => {
+    if (aiProvider === 'chatgpt' && claudeConnected && (account.status === 'signed-out' || account.status === 'error')) {
+      switchAiProvider('claude');
+    }
+    if (aiProvider === 'claude' && chatgptConnected && claudeLoaded && claudeAccount.status === 'signed-out') {
+      switchAiProvider('chatgpt');
+    }
+  }, [aiProvider, chatgptConnected, claudeConnected, claudeLoaded, account.status, claudeAccount.status]);
+
+  // Onboarding da conexão de IA: logo depois do login do aluno, se nenhuma
+  // IA estiver conectada, o Edvid oferece ChatGPT e Claude. Clicar no logo
+  // abre o login daquele provedor; dá para deixar para depois.
+  const showAiOnboarding =
+    claudeLoaded &&
+    account.status !== 'starting' &&
+    !chatgptConnected &&
+    !claudeConnected &&
+    !aiOnboardingDismissed;
+
+  const claudeWaiting = claudeAccount.status === 'waiting-for-browser';
+  const aiModal = showAiOnboarding && (
+    <div className="modal-overlay ai-overlay">
+      <section className="ai-onboarding" role="dialog" aria-modal="true" aria-label="Conecte sua IA">
+        <h2>Conecte sua IA</h2>
+        <p>O Edvid edita com a inteligência da sua própria conta. Escolha qual conectar — dá para trocar depois em Configurações.</p>
+        <div className="ai-choices">
+          <button
+            type="button"
+            className={`ai-choice ${account.status === 'waiting-for-browser' ? 'busy' : ''}`}
+            onClick={() => { if (account.status !== 'waiting-for-browser' && account.status !== 'starting') void login(); }}
+            disabled={claudeWaiting}
+          >
+            <img src={chatgptMark} alt="" />
+            <strong>ChatGPT</strong>
+            <small>{account.status === 'waiting-for-browser' ? 'Conclua no navegador…' : account.status === 'starting' ? 'Preparando…' : 'Entrar com sua conta'}</small>
+          </button>
+          <button
+            type="button"
+            className={`ai-choice ${claudeWaiting ? 'busy' : ''}`}
+            onClick={() => { if (!claudeWaiting) void claudeLogin(); }}
+            disabled={account.status === 'waiting-for-browser'}
+          >
+            <img src={claudeMark} alt="" />
+            <strong>Claude</strong>
+            <small>{claudeWaiting ? (claudeAccount.manual ? 'Cole o código abaixo' : 'Conclua no navegador…') : 'Entrar com sua conta'}</small>
+          </button>
+        </div>
+        {claudeWaiting && claudeAccount.manual && (
+          <div className="ai-code-row">
+            <input
+              type="text"
+              value={claudeCode}
+              placeholder="Cole aqui o código exibido pelo site"
+              onChange={(event) => setClaudeCode(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') void claudeSubmitCode(); }}
+            />
+            <button type="button" className="btn primary small" onClick={() => void claudeSubmitCode()} disabled={!claudeCode.trim()}>Confirmar</button>
+          </div>
+        )}
+        {(account.error || claudeAccount.error) && (
+          <div className="inline-error">{claudeAccount.error ?? account.error}</div>
+        )}
+        {(account.status === 'waiting-for-browser' || claudeWaiting) ? (
+          <button
+            type="button"
+            className="ai-skip"
+            onClick={() => { if (claudeWaiting) void claudeCancelLogin(); else void cancelLogin(); }}
+          >
+            Cancelar login
+          </button>
+        ) : (
+          <button type="button" className="ai-skip" onClick={() => setAiOnboardingDismissed(true)}>Conectar depois</button>
+        )}
+      </section>
+    </div>
+  );
 
   // Modal do primeiro boot: o pacote de ferramentas baixando com o app
   // inteiro desfocado atrás. Aparece sobre o gate e sobre o estúdio.
@@ -2490,6 +2635,7 @@ export function App() {
   return (
     <div className={`studio-shell ${railPinned ? 'rail-pinned' : ''}`}>
       {packModal}
+      {aiModal}
       {/* Menu ⋯ aberto força a rail expandida: o backdrop fica fora dela e
           mataria o hover, colapsando a rail com o menu no ar. */}
       <aside className={`project-rail ${railPinned || projectMenu ? 'pinned' : ''}`}>
@@ -2597,16 +2743,16 @@ export function App() {
                   <button type="button" className="btn primary" onClick={startCreateProject}>Novo projeto</button>
                 </div>
               )}
-              {workspace && account.status !== 'signed-in' && messages.length === 0 && (
+              {workspace && !activeAiConnected && messages.length === 0 && (
                 <div className="auth-inline">
                   <span className="chat-empty-icon"><Icon name="chat" /></span>
-                  <h2>Conecte sua conta do ChatGPT</h2>
-                  <p>O login acontece no navegador e volta automaticamente para o Edvid.</p>
+                  <h2>Conecte sua IA</h2>
+                  <p>Entre com sua conta do ChatGPT ou do Claude para começar a editar.</p>
                   {account.error && <div className="inline-error">{account.error}</div>}
-                  <button type="button" className="btn primary" onClick={account.status === 'waiting-for-browser' ? cancelLogin : login} disabled={account.status === 'starting'}>{account.status === 'waiting-for-browser' ? 'Cancelar login' : account.status === 'starting' ? 'Preparando...' : 'Entrar com ChatGPT'}</button>
+                  <button type="button" className="btn primary" onClick={() => setAiOnboardingDismissed(false)}>Conectar IA</button>
                 </div>
               )}
-              {workspace && account.status === 'signed-in' && messages.length === 0 && (
+              {workspace && activeAiConnected && messages.length === 0 && (
                 <div className="chat-empty compact">
                   <span className="chat-empty-icon"><Icon name="sparkles" /></span>
                   <h2>O que vamos editar?</h2>
@@ -2831,11 +2977,46 @@ export function App() {
                 <div className="settings-block">
                   <h3>Conexão de IA</h3>
                   <div className="settings-row">
-                    <div><strong>ChatGPT</strong><small>{accountLabel}</small></div>
-                    {account.status === 'signed-in'
-                      ? <button type="button" className="account-action" onClick={logout}>Sair</button>
-                      : <button type="button" className="account-action" onClick={account.status === 'waiting-for-browser' ? cancelLogin : login}>{account.status === 'waiting-for-browser' ? 'Cancelar' : 'Entrar'}</button>}
+                    <div className="ai-ident">
+                      <img src={chatgptMark} alt="" />
+                      <div><strong>ChatGPT</strong><small>{accountLabel}</small></div>
+                    </div>
+                    <div className="settings-row-actions">
+                      {chatgptConnected && (aiProvider === 'chatgpt'
+                        ? <span className="ai-active-badge">Em uso</span>
+                        : <button type="button" className="account-action" onClick={() => switchAiProvider('chatgpt')}>Usar</button>)}
+                      {chatgptConnected
+                        ? <button type="button" className="account-action" onClick={logout}>Sair</button>
+                        : <button type="button" className="account-action" onClick={account.status === 'waiting-for-browser' ? cancelLogin : login}>{account.status === 'waiting-for-browser' ? 'Cancelar' : 'Entrar'}</button>}
+                    </div>
                   </div>
+                  <div className="settings-row">
+                    <div className="ai-ident">
+                      <img src={claudeMark} alt="" />
+                      <div><strong>Claude</strong><small>{claudeLabel}</small></div>
+                    </div>
+                    <div className="settings-row-actions">
+                      {claudeConnected && (aiProvider === 'claude'
+                        ? <span className="ai-active-badge">Em uso</span>
+                        : <button type="button" className="account-action" onClick={() => switchAiProvider('claude')}>Usar</button>)}
+                      {claudeConnected
+                        ? <button type="button" className="account-action" onClick={() => void claudeLogout()}>Sair</button>
+                        : <button type="button" className="account-action" onClick={() => void (claudeAccount.status === 'waiting-for-browser' ? claudeCancelLogin() : claudeLogin())}>{claudeAccount.status === 'waiting-for-browser' ? 'Cancelar' : 'Entrar'}</button>}
+                    </div>
+                  </div>
+                  {claudeAccount.status === 'waiting-for-browser' && claudeAccount.manual && (
+                    <div className="ai-code-row">
+                      <input
+                        type="text"
+                        value={claudeCode}
+                        placeholder="Cole aqui o código exibido pelo site"
+                        onChange={(event) => setClaudeCode(event.target.value)}
+                        onKeyDown={(event) => { if (event.key === 'Enter') void claudeSubmitCode(); }}
+                      />
+                      <button type="button" className="btn primary small" onClick={() => void claudeSubmitCode()} disabled={!claudeCode.trim()}>Confirmar</button>
+                    </div>
+                  )}
+                  {claudeAccount.error && <p className="settings-note error">{claudeAccount.error}</p>}
                 </div>
                 <div className="settings-block">
                   <h3>Dependências</h3>

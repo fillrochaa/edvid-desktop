@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <!-- Sunburst do Claude: 12 raios irregulares com pontas arredondadas. -->
+  <g stroke="#D97757" stroke-width="10.5" stroke-linecap="round">
+    <line x1="50" y1="50" x2="94" y2="50" transform="rotate(0 50 50)"/>
+    <line x1="50" y1="50" x2="83" y2="50" transform="rotate(28 50 50)"/>
+    <line x1="50" y1="50" x2="92" y2="50" transform="rotate(58 50 50)"/>
+    <line x1="50" y1="50" x2="84" y2="50" transform="rotate(92 50 50)"/>
+    <line x1="50" y1="50" x2="93" y2="50" transform="rotate(118 50 50)"/>
+    <line x1="50" y1="50" x2="82" y2="50" transform="rotate(152 50 50)"/>
+    <line x1="50" y1="50" x2="93" y2="50" transform="rotate(178 50 50)"/>
+    <line x1="50" y1="50" x2="84" y2="50" transform="rotate(208 50 50)"/>
+    <line x1="50" y1="50" x2="94" y2="50" transform="rotate(242 50 50)"/>
+    <line x1="50" y1="50" x2="83" y2="50" transform="rotate(268 50 50)"/>
+    <line x1="50" y1="50" x2="92" y2="50" transform="rotate(298 50 50)"/>
+    <line x1="50" y1="50" x2="85" y2="50" transform="rotate(332 50 50)"/>
+  </g>
+</svg>

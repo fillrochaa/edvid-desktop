@@ -17,11 +17,14 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
+import { ClaudeAgent } from './claude-agent';
 import { CodexAppServer } from './codex-app-server';
 import { mediaKind, mediaMimeType, mediaTier, pickPreviewMedia, resolveByteRange } from './media-selection';
 import { resolveRuntime, runtimePackKey, type RuntimeResolution } from './runtime';
 import type {
+  AiProvider,
   AppUpdateState,
+  ClaudeAccountState,
   CodexApprovalDecision,
   CodexEvent,
   CodexSendMessageInput,
@@ -1762,6 +1765,46 @@ function ensureWhisperModel(): Promise<WhisperModelState> {
   return modelPrefetch;
 }
 
+// Ambiente de ferramentas dos agentes de IA (Codex e Claude): PATH das
+// ferramentas empacotadas, variaveis EDVID_* e caches fora do sandbox.
+function agentToolsEnvironment(): NodeJS.ProcessEnv {
+  const runtimeContext = appRuntimeContext();
+  const localRuntimes = ['node', 'ffmpeg', 'ffprobe', 'uv', 'yt-dlp', 'python']
+    .map((name) => resolveRuntime(name as RuntimeName, runtimeContext));
+  const runtimePath = [
+    ...new Set(localRuntimes.flatMap((runtime) => runtime.command ? [path.dirname(runtime.command)] : [])),
+    process.env.PATH,
+  ].filter((entry): entry is string => Boolean(entry)).join(path.delimiter);
+  const runtimeCommand = (name: RuntimeName) => (
+    localRuntimes.find((runtime) => runtime.name === name)?.command ?? ''
+  );
+  const caches = cachePaths();
+  return {
+    PATH: runtimePath,
+    PYTHONDONTWRITEBYTECODE: '1',
+    PYTHONNOUSERSITE: '1',
+    EDVID_PYTHON: runtimeCommand('python'),
+    EDVID_FFMPEG: runtimeCommand('ffmpeg'),
+    EDVID_FFPROBE: runtimeCommand('ffprobe'),
+    EDVID_UV: runtimeCommand('uv'),
+    EDVID_YTDLP: runtimeCommand('yt-dlp'),
+    // Caches dentro dos dados do aplicativo: o WhisperX encontra o modelo
+    // ja baixado e o matplotlib tem onde escrever, sem sair do sandbox.
+    HF_HOME: caches.huggingface,
+    HUGGINGFACE_HUB_CACHE: path.join(caches.huggingface, 'hub'),
+    TORCH_HOME: caches.torch,
+    XDG_CACHE_HOME: caches.xdg,
+    MPLCONFIGDIR: caches.matplotlib,
+    // O download do modelo e responsabilidade do aplicativo, nunca do
+    // agente: assim o sandbox continua sem rede.
+    HF_HUB_OFFLINE: '1',
+    EDVID_WHISPER_MODEL: WHISPERX_MODEL_NAME,
+    // Helpers oficiais da Fase 2, embutidos no aplicativo. Sem eles o agente
+    // escrevia os JSONs do Remotion na mao, com formato proprio.
+    EDVID_HELPERS: helpersDirectory(),
+  };
+}
+
 // O Codex (e o PATH de ferramentas que ele recebe) so pode ser construido
 // depois do pacote de runtimes: a resolucao acontece uma unica vez.
 async function codexServer(): Promise<CodexAppServer> {
@@ -1775,49 +1818,76 @@ function getCodexAppServer(): CodexAppServer {
   if (!resolution.command) {
     throw new Error('Codex App Server interno nao foi empacotado para esta plataforma.');
   }
-  const runtimeContext = appRuntimeContext();
-  const localRuntimes = ['node', 'ffmpeg', 'ffprobe', 'uv', 'yt-dlp', 'python']
-    .map((name) => resolveRuntime(name as RuntimeName, runtimeContext));
-  const runtimePath = [
-    ...new Set(localRuntimes.flatMap((runtime) => runtime.command ? [path.dirname(runtime.command)] : [])),
-    process.env.PATH,
-  ].filter((entry): entry is string => Boolean(entry)).join(path.delimiter);
-  const runtimeCommand = (name: RuntimeName) => (
-    localRuntimes.find((runtime) => runtime.name === name)?.command ?? ''
-  );
-  const caches = cachePaths();
   codexAppServer = new CodexAppServer(
     resolution.command,
     path.join(app.getPath('userData'), 'codex'),
     app.getVersion(),
     broadcastCodexEvent,
-    {
-      PATH: runtimePath,
-      PYTHONDONTWRITEBYTECODE: '1',
-      PYTHONNOUSERSITE: '1',
-      EDVID_PYTHON: runtimeCommand('python'),
-      EDVID_FFMPEG: runtimeCommand('ffmpeg'),
-      EDVID_FFPROBE: runtimeCommand('ffprobe'),
-      EDVID_UV: runtimeCommand('uv'),
-      EDVID_YTDLP: runtimeCommand('yt-dlp'),
-      // Caches dentro dos dados do aplicativo: o WhisperX encontra o modelo
-      // ja baixado e o matplotlib tem onde escrever, sem sair do sandbox.
-      HF_HOME: caches.huggingface,
-      HUGGINGFACE_HUB_CACHE: path.join(caches.huggingface, 'hub'),
-      TORCH_HOME: caches.torch,
-      XDG_CACHE_HOME: caches.xdg,
-      MPLCONFIGDIR: caches.matplotlib,
-      // O download do modelo e responsabilidade do aplicativo, nunca do
-      // agente: assim o sandbox continua sem rede.
-      HF_HUB_OFFLINE: '1',
-      EDVID_WHISPER_MODEL: WHISPERX_MODEL_NAME,
-      // Helpers oficiais da Fase 2, embutidos no aplicativo. Sem eles o agente
-      // escrevia os JSONs do Remotion na mao, com formato proprio.
-      EDVID_HELPERS: helpersDirectory(),
-    },
-    [caches.root],
+    agentToolsEnvironment(),
+    [cachePaths().root],
   );
   return codexAppServer;
+}
+
+// --- Provedor de IA ativo e agente Claude ----------------------------------
+// O aluno conecta a propria conta (ChatGPT ou Claude) e escolhe qual conduz a
+// conversa. O provedor fica em settings.json; os eventos de conversa dos dois
+// agentes saem pelo MESMO canal (codex:event) e o chat nao sabe a diferenca.
+
+let aiProvider: AiProvider = 'chatgpt';
+let claudeAgent: ClaudeAgent | null = null;
+
+function appSettingsFile(): string {
+  return path.join(app.getPath('userData'), 'settings.json');
+}
+
+async function loadAppSettings(): Promise<void> {
+  try {
+    const parsed = JSON.parse(await readFile(appSettingsFile(), 'utf8')) as { aiProvider?: unknown };
+    if (parsed.aiProvider === 'claude' || parsed.aiProvider === 'chatgpt') {
+      aiProvider = parsed.aiProvider;
+    }
+  } catch {
+    // Sem settings ainda: fica o padrao.
+  }
+}
+
+async function setAiProvider(provider: AiProvider): Promise<AiProvider> {
+  aiProvider = provider;
+  await writeFile(appSettingsFile(), `${JSON.stringify({ aiProvider: provider }, null, 2)}\n`).catch(() => {});
+  return aiProvider;
+}
+
+function broadcastClaudeAccount(state: ClaudeAccountState): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('claude:account', state);
+  }
+}
+
+function getClaudeAgent(): ClaudeAgent {
+  if (claudeAgent) return claudeAgent;
+  claudeAgent = new ClaudeAgent({
+    runtimeDirectory: path.join(app.getPath('userData'), 'runtime', 'claude'),
+    configDirectory: path.join(app.getPath('userData'), 'claude'),
+    authFile: path.join(app.getPath('userData'), 'claude-auth.json'),
+    toolsEnvironment: agentToolsEnvironment,
+    sandboxWritableRoots: [cachePaths().root],
+    resolveNpm: () => {
+      const npm = resolveRuntime('npm', appRuntimeContext());
+      return { command: npm.command, argsPrefix: npm.argsPrefix };
+    },
+    emitEvent: broadcastCodexEvent,
+    emitAccount: broadcastClaudeAccount,
+    fetchImpl: net.fetch.bind(net),
+  });
+  return claudeAgent;
+}
+
+// O motor (SDK) so e necessario para conversar; conta e login funcionam sem
+// o pacote de runtimes, entao apenas as mensagens passam por este gate.
+async function claudeAgentReady(): Promise<ClaudeAgent> {
+  await requireRuntimePack();
+  return getClaudeAgent();
 }
 
 function checkRuntime(
@@ -2071,13 +2141,20 @@ function registerIpcHandlers(): void {
       throw new Error('Escolha a pasta do projeto pelo seletor do Edvid.');
     }
     if (!text) throw new Error('Escreva uma mensagem para o Edvid.');
+    if (aiProvider === 'claude') {
+      return (await claudeAgentReady()).sendMessage(resolvedProjectDirectory, text);
+    }
     return (await codexServer()).sendMessage(resolvedProjectDirectory, text);
   });
 
   ipcMain.handle(
     'codex:interrupt',
-    async (_event, input: { threadId: string; turnId: string }) =>
-      (await codexServer()).interrupt(input.threadId, input.turnId),
+    async (_event, input: { threadId: string; turnId: string }) => {
+      if (getClaudeAgent().ownsThread(asText(input.threadId))) {
+        return getClaudeAgent().interrupt(input.threadId, input.turnId);
+      }
+      return (await codexServer()).interrupt(input.threadId, input.turnId);
+    },
   );
 
   ipcMain.handle(
@@ -2085,8 +2162,37 @@ function registerIpcHandlers(): void {
     async (
       _event,
       input: { approvalId: string | number; decision: CodexApprovalDecision },
-    ) => (await codexServer()).respondToApproval(input.approvalId, input.decision),
+    ) => {
+      if (getClaudeAgent().ownsApproval(input.approvalId)) {
+        return getClaudeAgent().respondToApproval(input.approvalId, input.decision);
+      }
+      return (await codexServer()).respondToApproval(input.approvalId, input.decision);
+    },
   );
+
+  ipcMain.handle('ai:provider-get', () => aiProvider);
+
+  ipcMain.handle('ai:provider-set', (_event, input: { provider?: unknown }) =>
+    setAiProvider(input.provider === 'claude' ? 'claude' : 'chatgpt'));
+
+  ipcMain.handle('claude:account', () => getClaudeAgent().readAccount());
+
+  ipcMain.handle('claude:login', async () => {
+    const login = await getClaudeAgent().startLogin();
+    const authUrl = new URL(login.authUrl);
+    if (authUrl.protocol !== 'https:' || authUrl.origin !== 'https://claude.ai') {
+      throw new Error('Endereço de login do Claude inesperado.');
+    }
+    await shell.openExternal(login.authUrl);
+    return login.state;
+  });
+
+  ipcMain.handle('claude:login-code', (_event, input: { code?: string }) =>
+    getClaudeAgent().submitLoginCode(asText(input.code)));
+
+  ipcMain.handle('claude:login-cancel', () => getClaudeAgent().cancelLogin());
+
+  ipcMain.handle('claude:logout', () => getClaudeAgent().logout());
 
   ipcMain.handle('runtime-pack:ensure', () => ensureRuntimePack());
 }
@@ -2483,6 +2589,15 @@ void app.whenReady().then(async () => {
   // O download do pacote de ferramentas comeca imediatamente, antes mesmo do
   // login: no primeiro boot ele e o caminho critico de tudo.
   void ensureRuntimePack();
+  // Provedor de IA escolhido e, se o Claude ja estiver conectado, o motor
+  // dele fica pronto em segundo plano antes da primeira mensagem.
+  void loadAppSettings().then(async () => {
+    const account = await getClaudeAgent().readAccount();
+    if (account.status === 'signed-in') {
+      await requireRuntimePack().catch(() => {});
+      void getClaudeAgent().ensureRuntime().catch(() => {});
+    }
+  });
   // Servidor de mídia com suporte a Range. Sem 206/Accept-Ranges o <video>
   // não consegue posicionar a agulha em arquivos grandes: o clique na
   // timeline era ignorado ou o vídeo reiniciava do zero.
@@ -2541,4 +2656,5 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   codexAppServer?.stop();
+  claudeAgent?.stop();
 });

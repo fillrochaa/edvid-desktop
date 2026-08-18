@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AppUpdateState,
+  ClaudeAccountState,
   CodexEvent,
   EdvidDesktopApi,
   MemberAuthState,
@@ -26,6 +27,18 @@ const api: EdvidDesktopApi = {
   loginWithChatGPT: () => ipcRenderer.invoke('codex:login'),
   cancelChatGPTLogin: () => ipcRenderer.invoke('codex:login-cancel'),
   logoutCodex: () => ipcRenderer.invoke('codex:logout'),
+  getAiProvider: () => ipcRenderer.invoke('ai:provider-get'),
+  setAiProvider: (provider) => ipcRenderer.invoke('ai:provider-set', { provider }),
+  getClaudeAccount: () => ipcRenderer.invoke('claude:account'),
+  loginWithClaude: () => ipcRenderer.invoke('claude:login'),
+  submitClaudeLoginCode: (code) => ipcRenderer.invoke('claude:login-code', { code }),
+  cancelClaudeLogin: () => ipcRenderer.invoke('claude:login-cancel'),
+  logoutClaude: () => ipcRenderer.invoke('claude:logout'),
+  onClaudeAccount: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: ClaudeAccountState) => listener(state);
+    ipcRenderer.on('claude:account', handler);
+    return () => ipcRenderer.removeListener('claude:account', handler);
+  },
   saveTimelineModel: (directory, model, loadStamp) =>
     ipcRenderer.invoke('timeline:save', { directory, model, loadStamp }),
   ensureRuntimePack: () => ipcRenderer.invoke('runtime-pack:ensure'),

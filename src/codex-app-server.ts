@@ -51,7 +51,9 @@ type LoginStartResponse =
 type ThreadStartResponse = { thread: { id: string } };
 type TurnStartResponse = { turn: { id: string } };
 
-const EDVID_INSTRUCTIONS = `Voce e o agente de edicao do Edvid Desktop. Converse em portugues do Brasil e trate a pasta do projeto como a unica area de trabalho do video. Preserve sempre os arquivos originais. Antes de uma edicao completa, faca primeiro o corte limpo guiado pelo audio e obtenha aprovacao do usuario; depois aplique visuais, legendas, trilha e acabamento.
+// Compartilhadas com o adaptador Claude: o contrato com a interface e o
+// mesmo seja qual for o provedor de IA que conduz a conversa.
+export const EDVID_INSTRUCTIONS = `Voce e o agente de edicao do Edvid Desktop. Converse em portugues do Brasil e trate a pasta do projeto como a unica area de trabalho do video. Preserve sempre os arquivos originais. Antes de uma edicao completa, faca primeiro o corte limpo guiado pelo audio e obtenha aprovacao do usuario; depois aplique visuais, legendas, trilha e acabamento.
 
 Contrato obrigatorio com a interface do Edvid:
 - O preview reproduz automaticamente o render mais recente que estiver dentro de edit/ ou edicao/. Grave todo resultado nessas pastas e nunca inclua no chat caminhos absolutos, URLs file:// ou links Markdown para arquivos locais.

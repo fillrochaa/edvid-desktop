@@ -508,4 +508,32 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .settings-row strong { display: block; font-size: 10.5px; }
 .settings-row small { display: block; margin-top: 2px; color: #7c8694; font-size: 8.5px; }
 .settings-note { margin: 0; color: #8b95a2; font-size: 9px; line-height: 1.5; }
+.settings-note.error { margin-top: 7px; color: #ff8fa0; }
+/* Fora da rail o account-action nao depende de hover: nas configuracoes os
+   botoes Entrar/Sair precisam estar sempre visiveis. */
+.settings-modal .account-action { opacity: 1; }
+.settings-block .settings-row + .settings-row { margin-top: 8px; }
+.settings-row-actions { display: flex; align-items: center; gap: 6px; }
+
+/* --- Conexao de IA (onboarding + configuracoes) -------------------------- */
+.ai-overlay { z-index: 80; }
+.ai-onboarding { width: min(400px, 94vw); display: flex; flex-direction: column; gap: 12px; padding: 24px 24px 18px; border: 1px solid var(--stroke); border-radius: 16px; background: rgba(13,16,22,.97); box-shadow: 0 30px 80px rgba(0,0,0,.5); text-align: center; }
+.ai-onboarding h2 { font-size: 13.5px; }
+.ai-onboarding > p { margin: 0; color: #8b95a2; font-size: 9px; line-height: 1.55; }
+.ai-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+.ai-choice { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 18px 12px 14px; border: 1px solid var(--stroke); border-radius: 13px; color: var(--text); background: rgba(255,255,255,.025); cursor: pointer; transition: border-color .15s ease, background .15s ease, transform .15s ease; }
+.ai-choice:hover:not(:disabled) { border-color: rgba(255,119,19,.5); background: rgba(255,255,255,.05); transform: translateY(-1px); }
+.ai-choice:disabled { opacity: .45; cursor: default; }
+.ai-choice.busy { border-color: rgba(255,119,19,.5); }
+.ai-choice img { width: 34px; height: 34px; }
+.ai-choice strong { font-size: 11px; }
+.ai-choice small { color: #7c8694; font-size: 8px; }
+.ai-code-row { display: flex; gap: 8px; }
+.ai-code-row input { flex: 1; padding: 9px 10px; border: 1px solid var(--stroke); border-radius: 9px; outline: none; color: var(--text); background: rgba(0,0,0,.25); font-size: 9.5px; }
+.ai-code-row input:focus { border-color: rgba(255,119,19,.45); }
+.ai-skip { align-self: center; padding: 5px 8px; border: 0; border-radius: 8px; color: #77818e; background: transparent; font-size: 8.5px; cursor: pointer; }
+.ai-skip:hover { color: var(--text); background: rgba(255,255,255,.06); }
+.ai-ident { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.ai-ident img { width: 22px; height: 22px; flex: none; }
+.ai-active-badge { padding: 3px 7px; border: 1px solid rgba(64,204,180,.4); border-radius: 999px; color: #57d9c1; font-size: 7.5px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase; }
 .style-thumb { display: block; width: 100%; height: auto; border-radius: 8px; background: #0c1015; user-select: none; }

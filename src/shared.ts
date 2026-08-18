@@ -184,6 +184,20 @@ export type Phase2RenderState = {
   error?: string;
 };
 
+// Provedor de IA que conduz a conversa. Cada aluno conecta a propria conta;
+// o Edvid so guarda qual provedor esta ativo e os tokens de cada um.
+export type AiProvider = 'chatgpt' | 'claude';
+
+// Conta Claude (assinatura Pro/Max, OAuth do proprio Claude Code). O login
+// abre o navegador; "manual" indica que o callback local nao pode ser usado
+// e o aluno deve colar o codigo exibido pelo site apos autorizar.
+export type ClaudeAccountState = {
+  status: 'signed-out' | 'waiting-for-browser' | 'signed-in' | 'error';
+  email: string | null;
+  manual?: boolean;
+  error?: string;
+};
+
 export type CodexAccount = {
   type: 'chatgpt' | 'apiKey' | 'amazonBedrock';
   email: string | null;
@@ -261,6 +275,14 @@ export type EdvidDesktopApi = {
   loginWithChatGPT: () => Promise<CodexAccountState>;
   cancelChatGPTLogin: () => Promise<CodexAccountState>;
   logoutCodex: () => Promise<CodexAccountState>;
+  getAiProvider: () => Promise<AiProvider>;
+  setAiProvider: (provider: AiProvider) => Promise<AiProvider>;
+  getClaudeAccount: () => Promise<ClaudeAccountState>;
+  loginWithClaude: () => Promise<ClaudeAccountState>;
+  submitClaudeLoginCode: (code: string) => Promise<ClaudeAccountState>;
+  cancelClaudeLogin: () => Promise<ClaudeAccountState>;
+  logoutClaude: () => Promise<ClaudeAccountState>;
+  onClaudeAccount: (listener: (state: ClaudeAccountState) => void) => () => void;
   saveTimelineModel: (
     directory: string,
     model: TimelineModel,

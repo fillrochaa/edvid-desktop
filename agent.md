@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-18 (0.8.6 — aba Estilos refinada: thumbs maiores por medida e legendas animadas)
+Atualizado em: 2026-08-18 (0.9.0 — provedor de IA duplo: login com conta Claude + onboarding de conexão de IA)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -148,16 +148,40 @@ sandbox, e cada transcrição exigia aprovação do usuário.
   `whisperx/assets/pytorch_model.bin`. Verificado rodando a transcrição
   completa com `HF_HUB_OFFLINE=1`.
 
-## 5. Login e Codex
+## 5. Login e provedores de IA (ChatGPT + Claude)
 
+Desde a 0.9.0 o Edvid tem dois provedores de IA; cada aluno conecta a própria
+conta e escolhe qual conduz a conversa (`settings.json` em userData guarda
+`aiProvider`). Os DOIS adaptadores emitem o mesmo vocabulário de eventos
+(`assistant-delta`, `assistant-final`, `turn-state`, `approval-*`) pelo canal
+`codex:event` — o chat do renderer não sabe qual provedor está por trás. O
+roteamento fica no main: `codex:message` despacha pelo provedor ativo;
+interrupção e aprovação são roteadas pela posse (`threadId` com prefixo
+`claude:` / approvalId `claude:N`).
+
+ChatGPT (Codex App Server):
 - O login com ChatGPT acontece pelo Codex App Server.
 - O navegador recebe o fluxo OAuth e retorna ao aplicativo.
 - O Codex usa um `CODEX_HOME` próprio dentro dos dados do Edvid.
 - O fluxo já suporta `account/login/start`, cancelamento, logout, criação de
   thread, envio de turnos, streaming e interrupção.
+
+Claude (Agent SDK — detalhes na seção 13e):
+- Login OAuth PKCE do próprio Claude Code (cliente público, porta de callback
+  54545; fallback manual de colar o código). Tokens em
+  `userData/claude-auth.json` (0600), refresh automático.
+- A conversa roda no `@anthropic-ai/claude-agent-sdk` pinado, instalado sob
+  demanda em `userData/runtime/claude` pelo npm empacotado (como o Remotion).
+- Onboarding: depois do login da Creator Factory, se nenhuma IA estiver
+  conectada, um modal oferece os dois logos; clicar abre o login daquele
+  provedor. Também dá para conectar/trocar em Configurações → Geral.
+- Se o provedor ativo está desconectado e o outro está pronto, o app troca
+  sozinho (o aluno nunca fica com o chat travado por uma escolha antiga).
+
 - O Desktop não deve depender da skill instalada no `CODEX_HOME` pessoal do
   usuário. As regras essenciais do produto ficam nas developer instructions do
-  próprio aplicativo.
+  próprio aplicativo (compartilhadas entre os dois provedores —
+  `EDVID_INSTRUCTIONS` exportada de `codex-app-server.ts`).
 - O fuse de criptografia de cookies está desabilitado porque o Edvid não
   persiste cookies do Electron. Isso evitou o prompt desnecessário do macOS
   Keychain chamado “Edvid Safe Storage”.
@@ -684,6 +708,58 @@ backend novo:
 Ao testar um DMG novo, ejetar a versão montada anteriormente para evitar que o
 Finder reaproveite estado antigo.
 
+### 13e. Provedor de IA duplo — Claude via Agent SDK (0.9.0)
+
+Arquitetura (`src/claude-agent.ts`, tudo em um módulo):
+- Conversa: `query()` do `@anthropic-ai/claude-agent-sdk` com entrada em
+  streaming (um envio por turno, canal aberto até o `result`) — é o que
+  habilita `interrupt()` para o botão Parar. Sessões retomadas por projeto
+  via `resume` (session_id capturado no `system:init`; em memória, como as
+  threads do Codex).
+- Opções do query espelham o modelo do Codex: `systemPrompt` preset
+  `claude_code` + `EDVID_INSTRUCTIONS`; `settingSources: []` (NADA do
+  `~/.claude` do usuário entra: sem CLAUDE.md, hooks ou MCPs da máquina);
+  `permissionMode: 'acceptEdits'`; `disallowedTools: WebSearch/WebFetch`;
+  sandbox nativo `{ enabled, autoAllowBashIfSandboxed, network sem domínios,
+  filesystem.allowWrite: caches }` — comando sandboxed roda sem prompt,
+  escapar do sandbox cai no `canUseTool`, que vira o card de aprovação
+  padrão da interface ("permitir nesta sessão" mantém um allowlist em
+  memória). AskUserQuestion é negada com instrução de perguntar em texto.
+- Ambiente: variáveis `ANTHROPIC_*`/`CLAUDE_*` herdadas são REMOVIDAS antes
+  de montar o env (uma `ANTHROPIC_API_KEY` da máquina teria precedência
+  sobre o token do aluno); entram o PATH das ferramentas empacotadas +
+  `EDVID_*` + caches (mesmo env do Codex, `agentToolsEnvironment()` no
+  main), `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CONFIG_DIR` (userData/claude),
+  `DISABLE_AUTOUPDATER=1`.
+- Runtime: SDK pinado (`CLAUDE_SDK_VERSION` em claude-agent.ts; o pacote
+  embute o binário nativo do Claude Code da mesma versão via
+  optionalDependency por plataforma). Instalado sob demanda em
+  `userData/runtime/claude` com o npm empacotado; carregado com import()
+  dinâmico protegido por `new Function` (o bundle CJS do main reescreveria
+  import() para require() e quebraria o ESM). A instalação dispara em
+  segundo plano no login e no boot (conta conectada), para a primeira
+  mensagem não esperar npm install.
+- Login OAuth: fluxo PKCE público do próprio Claude Code
+  (claude.ai/oauth/authorize → console.anthropic.com/v1/oauth/token,
+  client_id público 9d1c250a…, escopos org:create_api_key user:profile
+  user:inference). Callback local em `http://localhost:54545/callback`
+  (porta registrada do CLI); porta ocupada → fluxo manual com `code=true`
+  (o site mostra `código#estado` e o aluno cola no app). Refresh
+  automático com margem de 5 min; sessão expirada limpa o arquivo e volta
+  a signed-out. O endpoint de token responde erros ora como OAuth
+  (error_description) ora como API (`{error:{message}}`) — os dois são
+  tratados.
+- Provas executadas no desenvolvimento (sem conta real): instalação com o
+  npm empacotado ok; probe do query com token falso passou TODA a
+  validação de opções (init com session e claude-sonnet-5) e falhou
+  exatamente na autenticação (401) — com token real é um turno vivo. A
+  página de autorização renderiza o fluxo real no navegador. Lição: o SDK
+  LANÇA depois de um result com erro — extrair a mensagem do result e não
+  deixar o catch sobrescrever.
+- QA visual: `?ia` abre o app sem nenhuma IA conectada (onboarding);
+  `?ia=manual` força o fluxo de colar código ("codigo-errado" simula
+  recusa).
+
 ## 14. Windows
 
 - Existe configuração inicial com Electron Forge/Squirrel.
@@ -706,6 +782,18 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.9.0: provedor de IA duplo. Adaptador Claude (Agent SDK) falando o mesmo
+  vocabulário de eventos do Codex pelo mesmo canal; login OAuth PKCE com a
+  conta Claude do aluno (callback 54545 + fallback de colar código); runtime
+  do SDK pinado instalado sob demanda; sandbox nativo espelhando o modelo do
+  Codex (sem rede, caches graváveis, escapar = aprovação). Onboarding de
+  conexão de IA após o login do aluno (logos ChatGPT/Claude), conexões e
+  troca de provedor em Configurações → Geral, troca automática quando só um
+  está conectado. Correção de brinde: `.account-action` nascia com opacity 0
+  fora da rail e os botões Entrar/Sair das Configurações ficavam invisíveis.
+- 0.8.7: cards da aba Estilos com altura guiada pelo conteúdo (o
+  `.choice-visual` fixo em 72px decapitava os diagramas 9:14 e cortava as
+  thumbs); clipes animados re-recortados na MESMA janela dos stills.
 - 0.8.6: aba Estilos refinada — topo com um único título, sem numeração de
   seções, cards de tipo de edição verticais sem texto, seletor de cor com
   cantos arredondados, rodapé sem o bloco informativo. Thumbnails
