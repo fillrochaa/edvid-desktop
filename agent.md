@@ -599,10 +599,13 @@ credenciais e hospedagem:
 - Otimização futura: mover os runtimes (~700 MB) para download sob demanda
   como o Remotion, derrubando o update para ~100 MB.
 
-Pendente para distribuição pública: instalar o certificado + credenciais nas
-variáveis acima, criar o bucket do feed e validar a primeira build
-assinada/notarizada de ponta a ponta. Status 2026-08-17: a assinatura Apple
-Developer está em renovação (até ~2 dias úteis); retomar OTA quando ativar.
+Status: certificado Developer ID Application instalado e validado
+("Filipe Rocha", team X6ADV89943), credenciais no signing.env local
+(gitignored), bucket R2 criado com URL pública fixada em UPDATE_FEED_URL, e
+`npm run publish:update` publica ZIP + feed via wrangler. Lição de campo: o
+Keychain mostrando "0 valid identities" com o certificado presente significa
+**intermediária ausente** — instalar a Developer ID G2 CA de
+apple.com/certificateauthority/DeveloperIDG2CA.cer resolve.
 
 ### 13c. Login de alunos — Creator Factory (0.8.0)
 

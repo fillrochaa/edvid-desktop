@@ -2246,8 +2246,9 @@ async function memberBoot(): Promise<void> {
 // scripts/generate-update-feed.mjs a cada release.
 const UPDATE_FEED_URL =
   process.env.EDVID_UPDATE_FEED_URL?.trim() ||
-  // Definir aqui a URL publica definitiva (bucket R2) quando ela existir.
-  '';
+  // Bucket R2 publico da Creator Factory (scripts/publish-update.mjs publica
+  // o feed.json e o ZIP de cada release nesta URL).
+  'https://pub-89ee05cdaf26477c8984a36be2b373fa.r2.dev/feed.json';
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 let appUpdateState: AppUpdateState = { status: 'idle' };
 
