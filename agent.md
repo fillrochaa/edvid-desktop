@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-17 (0.8.0 — login de alunos pela Creator Factory)
+Atualizado em: 2026-08-18 (0.8.2 — OTA assinado e notarizado, comprovado em produção)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -552,11 +552,12 @@ destruam as diferenças entre os estilos de headline e legenda.
 
 ## 13. Empacotamento macOS
 
-Versão corrente: **0.8.0**.
+Versão corrente: **0.8.2** (instalada via OTA; DMGs assinados de 0.8.1 e
+0.8.2 em out/make/).
 
-Artefato local atual:
+Artefato de instalação para alunos:
 
-`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.8.0-arm64.dmg`
+`/Users/fillrocha/Developer/edvid-desktop/out/make/Edvid-0.8.2-arm64.dmg`
 
 Configuração do DMG:
 
@@ -599,13 +600,27 @@ credenciais e hospedagem:
 - Otimização futura: mover os runtimes (~700 MB) para download sob demanda
   como o Remotion, derrubando o update para ~100 MB.
 
-Status: certificado Developer ID Application instalado e validado
-("Filipe Rocha", team X6ADV89943), credenciais no signing.env local
-(gitignored), bucket R2 criado com URL pública fixada em UPDATE_FEED_URL, e
-`npm run publish:update` publica ZIP + feed via wrangler. Lição de campo: o
-Keychain mostrando "0 valid identities" com o certificado presente significa
-**intermediária ausente** — instalar a Developer ID G2 CA de
-apple.com/certificateauthority/DeveloperIDG2CA.cer resolve.
+**Status: OTA comprovado de ponta a ponta em 2026-08-18.** Fluxo verificado
+no ambiente real: 0.8.1 assinada+notarizada instalada → boot → feed no R2 →
+download de 855 MB em segundo plano → staging validado pelo Squirrel
+(assinatura conferida) → botão "Atualizar para 0.8.2 · Reiniciar" → clique →
+app trocado e reaberto como 0.8.2, Gatekeeper e stapler OK. O release de
+cada versão é: `npm run make:signed` e `npm run publish:update` (aceita a
+versão como argumento para publicar uma build anterior).
+
+Lições de campo desta primeira rodada:
+
+- Keychain com "0 valid identities" e o certificado presente =
+  **intermediária ausente**; instalar a Developer ID G2 CA de
+  apple.com/certificateauthority/DeveloperIDG2CA.cer resolve.
+- A notarização dos runtimes embutidos (Python/Torch/FFmpeg) passou de
+  primeira com o Hardened Runtime + entitlements.mac.plist — a iteração
+  reservada não foi necessária.
+- O wrangler limita uploads a 300 MiB; o publicador usa o protocolo S3 do
+  R2 com multipart, derivando as credenciais do próprio token (access key =
+  id do token via verify, secret = SHA-256 do valor).
+- O botão de atualização precisava aparecer também no gate de login
+  (corrigido pós-0.8.2): aluno na tela de entrada ficava sem ver o update.
 
 ### 13c. Login de alunos — Creator Factory (0.8.0)
 
@@ -664,6 +679,11 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.8.1/0.8.2: primeiras builds com assinatura de produção, Hardened
+  Runtime e notarização (aceitas de primeira pela Apple); OTA comprovado de
+  ponta a ponta com o par de versões — download em segundo plano, botão no
+  topo e troca automática. Publicador R2 via S3 multipart. Botão de update
+  também no gate de login (pós-0.8.2).
 - 0.8.0: gate de login dos alunos — mesma conta da Creator Factory
   (Supabase Auth com anon key), matrícula ativa do IA Edit Pro via RLS
   existente, refresh token em userData, tolerância offline de 7 dias, telas
