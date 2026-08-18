@@ -17,9 +17,9 @@ import thumbHeadlineOutline from './brand/thumbs/headline-outline.png';
 import thumbHeadlineCard from './brand/thumbs/headline-card.png';
 import thumbHeadlineRealce from './brand/thumbs/headline-realce.png';
 import thumbHeadlineMisto from './brand/thumbs/headline-misto.png';
-import thumbCaptionKaraoke from './brand/thumbs/caption-karaoke.png';
-import thumbCaptionStacked from './brand/thumbs/caption-stacked.png';
-import thumbCaptionScatter from './brand/thumbs/caption-scatter.png';
+import thumbCaptionKaraoke from './brand/thumbs/caption-karaoke.mp4';
+import thumbCaptionStacked from './brand/thumbs/caption-stacked.mp4';
+import thumbCaptionScatter from './brand/thumbs/caption-scatter.mp4';
 import thumbCaptionSimples from './brand/thumbs/caption-simples.png';
 import thumbCaptionSerifada from './brand/thumbs/caption-serifada.png';
 import thumbCaptionClassica from './brand/thumbs/caption-classica.png';
@@ -31,13 +31,14 @@ const headlineThumbs: Record<Exclude<HeadlineStyle, 'none'>, string> = {
   misto: thumbHeadlineMisto,
 };
 
-const captionThumbs: Record<Exclude<CaptionStyle, 'none'>, string> = {
-  karaoke: thumbCaptionKaraoke,
-  stacked: thumbCaptionStacked,
-  scatter: thumbCaptionScatter,
-  simples: thumbCaptionSimples,
-  serifada: thumbCaptionSerifada,
-  classica: thumbCaptionClassica,
+// Estilos animados mostram um clipe em loop; os estáticos, um frame.
+const captionThumbs: Record<Exclude<CaptionStyle, 'none'>, { kind: 'video' | 'image'; src: string }> = {
+  karaoke: { kind: 'video', src: thumbCaptionKaraoke },
+  stacked: { kind: 'video', src: thumbCaptionStacked },
+  scatter: { kind: 'video', src: thumbCaptionScatter },
+  simples: { kind: 'image', src: thumbCaptionSimples },
+  serifada: { kind: 'image', src: thumbCaptionSerifada },
+  classica: { kind: 'image', src: thumbCaptionClassica },
 };
 import type {
   AppUpdateState,
@@ -364,19 +365,25 @@ function HeadlinePreview({ style }: { style: HeadlineStyle }) {
 
 function CaptionPreview({ style }: { style: CaptionStyle }) {
   if (style === 'none') return <div className="none-preview">Sem legendas</div>;
-  return <img className="style-thumb" src={captionThumbs[style]} alt="" draggable={false} />;
+  const thumb = captionThumbs[style];
+  if (thumb.kind === 'video') {
+    return <video className="style-thumb" src={thumb.src} autoPlay loop muted playsInline disablePictureInPicture />;
+  }
+  return <img className="style-thumb" src={thumb.src} alt="" draggable={false} />;
 }
 
 function ChoiceCard({
   selected,
   title,
   subtitle,
+  label,
   onClick,
   children,
 }: {
   selected: boolean;
-  title: string;
+  title?: string;
   subtitle?: string;
+  label?: string;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -385,10 +392,11 @@ function ChoiceCard({
       type="button"
       className={`choice-card ${selected ? 'selected' : ''}`}
       aria-pressed={selected}
+      aria-label={title ?? label}
       onClick={onClick}
     >
       <div className="choice-visual">{children}</div>
-      <span className="choice-name">{title}</span>
+      {title && <span className="choice-name">{title}</span>}
       {subtitle && <span className="choice-description">{subtitle}</span>}
       <span className="choice-check"><Icon name="check" /></span>
     </button>
@@ -1666,18 +1674,15 @@ function StyleWorkspace({
       <div className="style-scroll">
         <div className="style-intro">
           <div>
-            <span className="eyebrow">Gate da Fase 2</span>
-            <h2>Escolha olhando, não imaginando</h2>
-            <p>Estas escolhas entram no projeto como um briefing estruturado e continuam editáveis.</p>
+            <h2>Escolha estilos e elementos de edição</h2>
           </div>
-          <span className="style-status"><Icon name="sparkles" /> Preview dos estilos</span>
         </div>
 
         <section className="style-group">
-          <div className="style-group-head"><span>01</span><div><h3>Tipo de edição</h3><p>Define como pessoa e inserts dividem o quadro.</p></div></div>
+          <div className="style-group-head"><div><h3>Tipo de edição</h3></div></div>
           <div className="choice-grid edit-choice-grid">
             {editStyles.map((option) => (
-              <ChoiceCard key={option.id} selected={style.edit === option.id} title={option.name} subtitle={option.description} onClick={() => onChange({ ...style, edit: option.id })}>
+              <ChoiceCard key={option.id} selected={style.edit === option.id} onClick={() => onChange({ ...style, edit: option.id })} label={option.name}>
                 <EditStylePreview style={option.id} />
               </ChoiceCard>
             ))}
@@ -1685,7 +1690,7 @@ function StyleWorkspace({
         </section>
 
         <section className="style-group accent-group">
-          <div className="style-group-head"><span>02</span><div><h3>Cor de destaque</h3><p>Usada por Realce, Misto e legenda Empilhada.</p></div></div>
+          <div className="style-group-head"><div><h3>Cor de destaque</h3></div></div>
           <div className={`accent-control ${accentUsed ? '' : 'unused'}`}>
             <input type="color" value={style.accent} onChange={(event) => onChange({ ...style, accent: event.target.value })} aria-label="Cor de destaque" />
             <input className="accent-hex" value={style.accent.toUpperCase()} onChange={(event) => {
@@ -1697,7 +1702,7 @@ function StyleWorkspace({
         </section>
 
         <section className="style-group">
-          <div className="style-group-head"><span>03</span><div><h3>Estilo de headline</h3><p>Duas linhas balanceadas para o hook.</p></div></div>
+          <div className="style-group-head"><div><h3>Estilo de headline</h3></div></div>
           <div className="choice-grid headline-choice-grid">
             {headlineStyles.map((option) => (
               <ChoiceCard key={option.id} selected={style.headline === option.id} title={option.name} onClick={() => onChange({ ...style, headline: option.id })}>
@@ -1708,10 +1713,10 @@ function StyleWorkspace({
         </section>
 
         <section className="style-group">
-          <div className="style-group-head"><span>04</span><div><h3>Estilo de legenda</h3><p>Escolha o ritmo visual que acompanha a fala.</p></div></div>
+          <div className="style-group-head"><div><h3>Estilo de legenda</h3></div></div>
           <div className="choice-grid caption-choice-grid">
             {captionStyles.map((option) => (
-              <ChoiceCard key={option.id} selected={style.captions === option.id} title={option.name} subtitle={option.kind} onClick={() => onChange({ ...style, captions: option.id })}>
+              <ChoiceCard key={option.id} selected={style.captions === option.id} title={option.name} onClick={() => onChange({ ...style, captions: option.id })}>
                 <CaptionPreview style={option.id} />
               </ChoiceCard>
             ))}
@@ -1719,7 +1724,7 @@ function StyleWorkspace({
         </section>
 
         <section className="style-group">
-          <div className="style-group-head"><span>05</span><div><h3>Elementos da edição</h3><p>Desmarcado significa que o elemento ficará fora.</p></div></div>
+          <div className="style-group-head"><div><h3>Elementos da edição</h3><p>Desmarcado significa que o elemento ficará fora.</p></div></div>
           <div className="element-grid">
             {([
               ['tracking', 'Tracking do rosto', 'Mantém olhos e rosto na zona segura.'],
@@ -1757,9 +1762,7 @@ function StyleWorkspace({
             <strong>Motor de render indisponível</strong>
             <span>{runtime.error || 'Falha ao preparar o Remotion.'} Clique em “Salvar e aplicar” para tentar de novo.</span>
           </div>
-        ) : (
-          <div><strong>Briefing visual pronto</strong><span>O Edvid receberá também tudo o que ficou desmarcado.</span></div>
-        )}
+        ) : <div />}
         <button type="button" className="btn primary apply-style" onClick={onApply} disabled={!canApply || applying || runtime.status === 'installing'}>
           <Icon name="sparkles" /> {runtime.status === 'installing' ? 'Preparando...' : applying ? 'Enviando...' : 'Salvar e aplicar'}
         </button>

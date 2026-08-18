@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-18 (0.8.5 — thumbnails reais na aba Estilos, renderizadas pelo template)
+Atualizado em: 2026-08-18 (0.8.6 — aba Estilos refinada: thumbs maiores por medida e legendas animadas)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -706,6 +706,16 @@ Finder reaproveite estado antigo.
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.8.6: aba Estilos refinada — topo com um único título, sem numeração de
+  seções, cards de tipo de edição verticais sem texto, seletor de cor com
+  cantos arredondados, rodapé sem o bloco informativo. Thumbnails
+  reenquadradas por POSIÇÃO MEDIDA por estilo (TEXT_CENTER_Y no script; o
+  cropdetect degenera com o gradiente) com janela 760×394 — texto ~50%
+  maior; legendas animadas (karaokê, empilhada, dispersa) viram clipes
+  h264 em loop de 6-29 KB (frames 27-165, altura PAR — o libx264 recusa
+  ímpar). EDVID_THUMBS_REUSE=1 reaproveita renders e itera só recortes.
+  Mudou o layout do template? Re-medir com a montagem hstack+drawgrid
+  (célula de 32px = 192px do quadro).
 - 0.8.5: as thumbnails de headline (4) e legenda (6) da aba Estilos são
   stills renderizados pelo próprio template do Remotion
   (scripts/render-style-thumbs.mjs: backdrop sintético por FFmpeg, legendas

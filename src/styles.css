@@ -293,7 +293,9 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .style-group-head h3 { font-size: 11px; }
 .style-group-head p { margin-top: 2px; color: #67717e; font-size: 7.5px; }
 .choice-grid { display: grid; gap: 8px; }
-.edit-choice-grid { grid-template-columns: repeat(3, minmax(0,1fr)); }
+.edit-choice-grid { grid-template-columns: repeat(3, minmax(0, 104px)); }
+.edit-choice-grid .choice-card { padding: 6px; }
+.edit-choice-grid .choice-visual { width: 100%; }
 .headline-choice-grid { grid-template-columns: repeat(5, minmax(0,1fr)); }
 .caption-choice-grid { grid-template-columns: repeat(4, minmax(0,1fr)); }
 .choice-card { position: relative; min-width: 0; display: flex; flex-direction: column; padding: 7px; border: 1px solid var(--stroke); border-radius: 11px; color: #9ba4af; background: rgba(255,255,255,.022); text-align: left; cursor: pointer; overflow: hidden; transition: border-color .15s, background .15s, transform .12s; }
@@ -306,12 +308,12 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .choice-check .icon { width: 9px; height: 9px; }
 .choice-card.selected .choice-check { border-color: var(--teal); color: #061112; background: var(--teal); }
 
-.edit-style-preview { position: relative; width: 48px; height: 62px; border: 1px solid rgba(255,255,255,.12); border-radius: 6px; overflow: hidden; background: linear-gradient(#1a2028, #0f1318); }
+.edit-style-preview { position: relative; width: 100%; height: auto; aspect-ratio: 9 / 14; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; overflow: hidden; background: linear-gradient(#1a2028, #0f1318); }
 .preview-art { position: absolute; background: linear-gradient(135deg, rgba(255,119,19,.55), rgba(9,181,183,.42)); }
 .preview-person { position: absolute; display: flex; align-items: flex-end; justify-content: center; background: #171b21; overflow: hidden; }
-.preview-person::before { content: ''; position: absolute; top: 16%; width: 14px; height: 14px; border-radius: 50%; background: #6e7680; }
-.preview-person span { width: 29px; height: 32px; border-radius: 15px 15px 3px 3px; background: #555d67; }
-.preview-caption { position: absolute; right: 11px; bottom: 7px; left: 11px; height: 3px; border-radius: 2px; background: #e8ebee; box-shadow: 0 5px 0 rgba(232,235,238,.8); }
+.preview-person::before { content: ''; position: absolute; top: 15%; width: 30%; aspect-ratio: 1; border-radius: 50%; background: #6e7680; }
+.preview-person span { width: 62%; height: 52%; border-radius: 999px 999px 6px 6px; background: #555d67; }
+.preview-caption { position: absolute; right: 18%; bottom: 9%; left: 18%; height: 4px; border-radius: 2px; background: #e8ebee; box-shadow: 0 7px 0 rgba(232,235,238,.8); }
 .edit-style-preview.limpa .preview-art { display: none; }
 .edit-style-preview.limpa .preview-person { inset: 0; }
 .edit-style-preview.split .preview-art { top: 0; right: 0; left: 0; height: 44%; }
@@ -339,7 +341,9 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 
 .accent-control { display: grid; grid-template-columns: 40px 88px minmax(0,1fr); align-items: center; gap: 9px; padding: 10px; border: 1px solid rgba(9,181,183,.14); border-radius: 11px; background: rgba(9,181,183,.035); }
 .accent-control.unused { border-color: var(--stroke); background: rgba(255,255,255,.018); }
-.accent-control input[type='color'] { width: 40px; height: 35px; padding: 3px; border: 1px solid var(--stroke); border-radius: 8px; background: transparent; cursor: pointer; }
+.accent-control input[type='color'] { width: 42px; height: 34px; padding: 0; border: 1px solid var(--stroke); border-radius: 10px; background: transparent; cursor: pointer; overflow: hidden; }
+.accent-control input[type='color']::-webkit-color-swatch-wrapper { padding: 3px; }
+.accent-control input[type='color']::-webkit-color-swatch { border: none; border-radius: 7px; }
 .accent-hex { width: 88px; padding: 8px; border: 1px solid var(--stroke); border-radius: 8px; outline: none; color: #d5dae0; background: rgba(0,0,0,.18); font-family: ui-monospace, monospace; font-size: 8px; text-transform: uppercase; }
 .accent-control > span { color: #6c7682; font-size: 7.5px; }
 .element-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 7px; }
