@@ -410,6 +410,7 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .member-card .btn { justify-content: center; }
 .btn.update-ready { animation: model-pulse 2.2s ease-in-out infinite; white-space: nowrap; }
 .update-floating { position: fixed; top: 14px; right: 14px; z-index: 60; }
+.link-button { margin-left: 6px; padding: 0; border: none; color: #ffb680; background: none; font-size: 7.5px; text-decoration: underline; cursor: pointer; }
 .phase2-render-banner { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 7px 10px; border: 1px solid rgba(255,119,19,.28); border-radius: 9px; background: rgba(255,119,19,.07); }
 .phase2-render-orb { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #ff7713; animation: model-pulse 1.3s ease-in-out infinite; }
 .phase2-render-copy { min-width: 0; }

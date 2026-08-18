@@ -1,7 +1,19 @@
+import { createHash } from 'node:crypto';
 import { constants, existsSync, accessSync } from 'node:fs';
 import path from 'node:path';
 import manifest from '../resources/runtime-manifest.json';
 import type { RuntimeName } from './shared';
+
+// Chave do pacote de runtimes sob demanda: muda quando qualquer versao do
+// manifest mudar, e por isso o aplicativo re-baixa o pacote so nesse caso.
+// scripts/pack-runtimes.mjs computa a MESMA chave lendo o arquivo do manifest;
+// qualquer mudanca aqui precisa ser espelhada la.
+export function runtimePackKey(): string {
+  return createHash('sha256')
+    .update(JSON.stringify(manifest.runtimes))
+    .digest('hex')
+    .slice(0, 12);
+}
 
 export type RuntimeResolution = {
   name: RuntimeName;
@@ -17,6 +29,10 @@ type RuntimeContext = {
   isPackaged: boolean;
   platform: NodeJS.Platform;
   arch: string;
+  // Raiz do pacote de runtimes baixado sob demanda (userData/runtime/tools).
+  // Tem prioridade sobre os resources: o instalador magro nao embarca as
+  // ferramentas, e no desenvolvimento os resources continuam valendo.
+  toolsRoot?: string | null;
 };
 
 const expectedVersions: Record<RuntimeName, string> = {
@@ -41,18 +57,33 @@ function isExecutable(filePath: string): boolean {
   }
 }
 
-function targetRoot(context: RuntimeContext): string {
+function candidateRoots(context: RuntimeContext): string[] {
   const resourcesRoot = context.isPackaged
     ? context.resourcesPath
     : path.join(context.appPath, 'resources');
-  return path.join(resourcesRoot, 'runtimes', `${context.platform}-${context.arch}`);
+  const suffix = `${context.platform}-${context.arch}`;
+  const roots: string[] = [];
+  if (context.toolsRoot) roots.push(path.join(context.toolsRoot, suffix));
+  roots.push(path.join(resourcesRoot, 'runtimes', suffix));
+  return roots;
 }
 
 function bundledResolution(
   name: RuntimeName,
   context: RuntimeContext,
 ): RuntimeResolution | null {
-  const root = targetRoot(context);
+  for (const root of candidateRoots(context)) {
+    const found = resolutionAtRoot(name, root, context);
+    if (found) return found;
+  }
+  return null;
+}
+
+function resolutionAtRoot(
+  name: RuntimeName,
+  root: string,
+  context: RuntimeContext,
+): RuntimeResolution | null {
   const isWindows = context.platform === 'win32';
   const nodeExecutable = path.join(root, 'node', isWindows ? 'node.exe' : 'bin/node');
 

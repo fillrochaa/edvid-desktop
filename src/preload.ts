@@ -6,6 +6,7 @@ import type {
   MemberAuthState,
   Phase2RenderState,
   RemotionRuntimeState,
+  RuntimePackState,
   WhisperModelState,
 } from './shared';
 
@@ -23,6 +24,12 @@ const api: EdvidDesktopApi = {
   logoutCodex: () => ipcRenderer.invoke('codex:logout'),
   saveTimelineModel: (directory, model, loadStamp) =>
     ipcRenderer.invoke('timeline:save', { directory, model, loadStamp }),
+  ensureRuntimePack: () => ipcRenderer.invoke('runtime-pack:ensure'),
+  onRuntimePackState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: RuntimePackState) => listener(state);
+    ipcRenderer.on('runtime-pack:state', handler);
+    return () => ipcRenderer.removeListener('runtime-pack:state', handler);
+  },
   ensureWhisperModel: () => ipcRenderer.invoke('whisper-model:ensure'),
   onWhisperModelState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: WhisperModelState) => listener(state);

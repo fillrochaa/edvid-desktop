@@ -126,6 +126,27 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     saveTimelineModel: async () => {
       // O QA visual não persiste; as edições ficam apenas em memória.
     },
+    ensureRuntimePack: async () => (
+      new URLSearchParams(window.location.search).has('pack')
+        ? { status: 'downloading', downloadedBytes: 0, totalBytes: 780_000_000 }
+        : { status: 'ready' }
+    ),
+    onRuntimePackState: (listener) => {
+      // QA do primeiro boot: ?pack simula o download das ferramentas.
+      if (new URLSearchParams(window.location.search).has('pack')) {
+        let sent = 0;
+        const timer = window.setInterval(() => {
+          sent += 90_000_000;
+          if (sent >= 780_000_000) {
+            window.clearInterval(timer);
+            listener({ status: 'ready' });
+          } else {
+            listener({ status: 'downloading', downloadedBytes: sent, totalBytes: 780_000_000 });
+          }
+        }, 350);
+      }
+      return () => {};
+    },
     ensureWhisperModel: async () => ({ status: 'ready', model: 'small' }),
     onWhisperModelState: () => () => {},
     ensureRemotionRuntime: async () => ({ status: 'ready' }),

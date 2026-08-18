@@ -1,7 +1,7 @@
 import { app, autoUpdater, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron';
 import started from 'electron-squirrel-startup';
 import { spawn } from 'node:child_process';
-import { createReadStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   cp,
@@ -19,7 +19,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { CodexAppServer } from './codex-app-server';
 import { mediaKind, mediaMimeType, mediaTier, pickPreviewMedia, resolveByteRange } from './media-selection';
-import { resolveRuntime, type RuntimeResolution } from './runtime';
+import { resolveRuntime, runtimePackKey, type RuntimeResolution } from './runtime';
 import type {
   AppUpdateState,
   CodexApprovalDecision,
@@ -27,6 +27,7 @@ import type {
   CodexSendMessageInput,
   MemberAuthState,
   Phase2RenderState,
+  RuntimePackState,
   ProjectMedia,
   SourceWaveform,
   ProjectSource,
@@ -322,19 +323,175 @@ function inspectVideo(executable: string, argsPrefix: string[], filePath: string
   });
 }
 
+function runtimeToolsRoot(): string {
+  return path.join(app.getPath('userData'), 'runtime', 'tools');
+}
+
+// Contexto padrao de resolucao de runtimes: o pacote baixado sob demanda
+// (userData/runtime/tools) tem prioridade; os resources cobrem o repositorio
+// de desenvolvimento, que continua com as ferramentas em resources/runtimes.
+function appRuntimeContext() {
+  return {
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+    toolsRoot: runtimeToolsRoot(),
+  };
+}
+
+// --- Pacote de runtimes sob demanda ----------------------------------------
+// O instalador magro nao embarca as ferramentas (FFmpeg, Python/WhisperX,
+// Node, Codex — 1,8 GB descomprimidos). O aplicativo baixa o pacote uma vez,
+// e de novo apenas quando o manifest de versoes mudar, para
+// userData/runtime/tools. Cada release do Edvid volta a pesar ~100 MB.
+
+const RUNTIME_PACK_BASE_URL =
+  'https://pub-89ee05cdaf26477c8984a36be2b373fa.r2.dev/runtimes';
+
+let runtimePackJob: Promise<RuntimePackState> | null = null;
+let runtimePackState: RuntimePackState = { status: 'unknown' };
+
+function broadcastRuntimePackState(state: RuntimePackState): void {
+  runtimePackState = state;
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('runtime-pack:state', state);
+  }
+}
+
+async function runtimePackIsReady(): Promise<boolean> {
+  // Repositorio de desenvolvimento (e builds antigas "gordas"): as
+  // ferramentas ainda estao nos resources e o pacote nao e necessario.
+  const bundled = resolveRuntime('ffmpeg', {
+    ...appRuntimeContext(),
+    toolsRoot: null,
+  });
+  if (bundled.source === 'bundled') return true;
+  try {
+    const marker = JSON.parse(
+      await readFile(path.join(runtimeToolsRoot(), 'pack.json'), 'utf8'),
+    ) as { key?: unknown };
+    return asText(marker.key) === runtimePackKey();
+  } catch {
+    return false;
+  }
+}
+
+function ensureRuntimePack(): Promise<RuntimePackState> {
+  if (runtimePackJob) return runtimePackJob;
+  const job = (async (): Promise<RuntimePackState> => {
+    broadcastRuntimePackState({ status: 'checking' });
+    if (await runtimePackIsReady()) return { status: 'ready' };
+    const key = runtimePackKey();
+    const packName = `runtimes-${process.platform}-${process.arch}-${key}.tar.gz`;
+    const packUrl = `${RUNTIME_PACK_BASE_URL}/${packName}`;
+
+    // O sha256 publicado junto garante a integridade do download.
+    let expectedDigest = '';
+    try {
+      const shaResponse = await net.fetch(`${packUrl}.sha256`);
+      if (shaResponse.ok) expectedDigest = (await shaResponse.text()).trim().split(/\s+/)[0] ?? '';
+    } catch {
+      // Sem o arquivo de integridade seguimos apenas com HTTPS.
+    }
+
+    const stagingRoot = path.join(app.getPath('userData'), 'runtime');
+    await mkdir(stagingRoot, { recursive: true });
+    const tarballPath = path.join(stagingRoot, `${packName}.download`);
+    const response = await net.fetch(packUrl);
+    if (!response.ok || !response.body) {
+      throw new Error(`Pacote de ferramentas indisponível (HTTP ${response.status}).`);
+    }
+    const totalBytes = Number(response.headers.get('content-length')) || undefined;
+    broadcastRuntimePackState({ status: 'downloading', downloadedBytes: 0, totalBytes });
+    const digest = createHash('sha256');
+    let downloadedBytes = 0;
+    let lastBroadcast = 0;
+    const reader = response.body.getReader();
+    const output = createWriteStream(tarballPath);
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          digest.update(value);
+          downloadedBytes += value.byteLength;
+          if (downloadedBytes - lastBroadcast > 8_000_000) {
+            lastBroadcast = downloadedBytes;
+            broadcastRuntimePackState({ status: 'downloading', downloadedBytes, totalBytes });
+          }
+          if (!output.write(value)) {
+            await new Promise<void>((resolve) => output.once('drain', resolve));
+          }
+        }
+      }
+      await new Promise<void>((resolve, reject) => {
+        output.end(() => resolve());
+        output.on('error', reject);
+      });
+    } catch (error) {
+      output.destroy();
+      await rm(tarballPath, { force: true });
+      throw error;
+    }
+    if (expectedDigest && digest.digest('hex') !== expectedDigest) {
+      await rm(tarballPath, { force: true });
+      throw new Error('O pacote de ferramentas chegou corrompido. Tente de novo.');
+    }
+
+    broadcastRuntimePackState({ status: 'extracting', downloadedBytes, totalBytes });
+    const partial = path.join(stagingRoot, 'tools.partial');
+    await rm(partial, { recursive: true, force: true });
+    await mkdir(partial, { recursive: true });
+    // bsdtar existe no macOS e no Windows 10+; extracao em streaming, sem
+    // dependencias novas.
+    await runCommand('tar', ['-xzf', tarballPath, '-C', partial], stagingRoot);
+    const probe = path.join(
+      partial,
+      `${process.platform}-${process.arch}`,
+      'ffmpeg',
+      'bin',
+      process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg',
+    );
+    await stat(probe);
+    await writeFile(path.join(partial, 'pack.json'), `${JSON.stringify({ key }, null, 2)}\n`);
+    const tools = runtimeToolsRoot();
+    await rm(tools, { recursive: true, force: true });
+    await rename(partial, tools);
+    await rm(tarballPath, { force: true });
+    return { status: 'ready' };
+  })()
+    .catch((error): RuntimePackState => ({
+      status: 'error',
+      error: error instanceof Error ? error.message : String(error),
+    }))
+    .then((state) => {
+      if (state.status !== 'ready' && runtimePackJob === job) runtimePackJob = null;
+      broadcastRuntimePackState(state);
+      return state;
+    });
+  runtimePackJob = job;
+  return job;
+}
+
+// Os fluxos que dependem das ferramentas aguardam o pacote; quando ele ja
+// esta pronto, o await resolve na hora.
+async function requireRuntimePack(): Promise<void> {
+  const state = await ensureRuntimePack();
+  if (state.status !== 'ready') {
+    throw new Error(state.error || 'As ferramentas do Edvid ainda estão sendo preparadas.');
+  }
+}
+
 async function inspectProjectMedia(directory: string): Promise<InspectedProjectMedia | null> {
   const candidates: MediaCandidate[] = [];
   await collectMedia(directory, directory, 0, candidates);
   const candidate = pickPreviewMedia(candidates);
   if (!candidate) return null;
 
-  const ffprobe = resolveRuntime('ffprobe', {
-    appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath,
-    isPackaged: app.isPackaged,
-    platform: process.platform,
-    arch: process.arch,
-  });
+  await requireRuntimePack().catch(() => {});
+  const ffprobe = resolveRuntime('ffprobe', appRuntimeContext());
   if (!ffprobe.command) return null;
   const probe = await inspectVideo(ffprobe.command, ffprobe.argsPrefix, candidate.absolutePath);
   const stream = probe.streams?.[0];
@@ -365,13 +522,7 @@ async function inspectProjectMedia(directory: string): Promise<InspectedProjectM
 }
 
 function detectSceneBoundaries(filePath: string, duration: number): Promise<ProjectTimeline | null> {
-  const ffmpeg = resolveRuntime('ffmpeg', {
-    appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath,
-    isPackaged: app.isPackaged,
-    platform: process.platform,
-    arch: process.arch,
-  });
+  const ffmpeg = resolveRuntime('ffmpeg', appRuntimeContext());
   if (!ffmpeg.command || duration <= 0 || duration > 900) return Promise.resolve(null);
 
   return new Promise((resolve) => {
@@ -563,13 +714,7 @@ async function probeSourceFile(absolutePath: string): Promise<FfprobeOutput | nu
   const cacheKey = `${absolutePath}:${fingerprint}`;
   let pending = sourceProbeCache.get(cacheKey);
   if (!pending) {
-    const ffprobe = resolveRuntime('ffprobe', {
-      appPath: app.getAppPath(),
-      resourcesPath: process.resourcesPath,
-      isPackaged: app.isPackaged,
-      platform: process.platform,
-      arch: process.arch,
-    });
+    const ffprobe = resolveRuntime('ffprobe', appRuntimeContext());
     pending = ffprobe.command
       ? inspectVideo(ffprobe.command, ffprobe.argsPrefix, absolutePath).catch(() => null)
       : Promise.resolve(null);
@@ -942,13 +1087,7 @@ function waveformCacheDirectory(): string {
 }
 
 function extractWaveformPeaks(mediaPath: string): Promise<number[] | null> {
-  const ffmpeg = resolveRuntime('ffmpeg', {
-    appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath,
-    isPackaged: app.isPackaged,
-    platform: process.platform,
-    arch: process.arch,
-  });
+  const ffmpeg = resolveRuntime('ffmpeg', appRuntimeContext());
   if (!ffmpeg.command) return Promise.resolve(null);
   return new Promise((resolve) => {
     const child = spawn(
@@ -1007,6 +1146,13 @@ async function readSourceWaveform(mediaUrl: string): Promise<SourceWaveform | nu
   }
   const mediaPath = authorizedMedia.get(token);
   if (!mediaPath) return null;
+  // Ondas sao decorativas: sem as ferramentas prontas, simplesmente nao ha
+  // onda ainda — os clipes redesenham quando o pacote concluir.
+  try {
+    await requireRuntimePack();
+  } catch {
+    return null;
+  }
   let fingerprint: string | null = null;
   try {
     fingerprint = await fingerprintOf(mediaPath);
@@ -1208,14 +1354,10 @@ function ensureRemotionRuntime(): Promise<RemotionRuntimeState> {
   const pending = (async (): Promise<RemotionRuntimeState> => {
     const runtime = remotionRuntimeDirectory();
     if (await remotionRuntimeIsReady()) return { status: 'ready' };
+    // O npm/node vem do pacote de ferramentas; sem ele nao ha o que instalar.
+    await requireRuntimePack();
 
-    const runtimeContext = {
-      appPath: app.getAppPath(),
-      resourcesPath: process.resourcesPath,
-      isPackaged: app.isPackaged,
-      platform: process.platform,
-      arch: process.arch,
-    };
+    const runtimeContext = appRuntimeContext();
     const node = resolveRuntime('node', runtimeContext);
     const npm = resolveRuntime('npm', runtimeContext);
     if (!node.command || !npm.command) {
@@ -1420,6 +1562,8 @@ function renderPhase2(projectDirectory: string): Promise<Phase2RenderState> {
           : 'Motor de render indisponivel.',
       };
     }
+    // O node do render vem do pacote de ferramentas.
+    await requireRuntimePack();
     // Reaplica o template antes de renderizar: correcoes no codigo (src/)
     // chegam aos projetos ja montados, e public/ nunca e sobrescrito.
     await scaffoldRemotionProject(projectDirectory);
@@ -1430,13 +1574,7 @@ function renderPhase2(projectDirectory: string): Promise<Phase2RenderState> {
       recursive: true,
       force: true,
     });
-    const node = resolveRuntime('node', {
-      appPath: app.getAppPath(),
-      resourcesPath: process.resourcesPath,
-      isPackaged: app.isPackaged,
-      platform: process.platform,
-      arch: process.arch,
-    });
+    const node = resolveRuntime('node', appRuntimeContext());
     if (!node.command) {
       return { status: 'error', error: 'Node interno nao esta disponivel nesta plataforma.' };
     }
@@ -1546,6 +1684,8 @@ function renderPhase2(projectDirectory: string): Promise<Phase2RenderState> {
 function ensureWhisperModel(): Promise<WhisperModelState> {
   if (modelPrefetch) return modelPrefetch;
   modelPrefetch = (async (): Promise<WhisperModelState> => {
+    // O download do modelo roda no Python do pacote de ferramentas.
+    await requireRuntimePack();
     const caches = cachePaths();
     const hubCache = path.join(caches.huggingface, 'hub');
     const modelDirectory = path.join(
@@ -1557,13 +1697,7 @@ function ensureWhisperModel(): Promise<WhisperModelState> {
     if ((await directorySize(modelDirectory)) > 100_000_000) {
       return { status: 'ready', model: WHISPERX_MODEL_NAME };
     }
-    const python = resolveRuntime('python', {
-      appPath: app.getAppPath(),
-      resourcesPath: process.resourcesPath,
-      isPackaged: app.isPackaged,
-      platform: process.platform,
-      arch: process.arch,
-    });
+    const python = resolveRuntime('python', appRuntimeContext());
     if (!python.command) {
       return {
         status: 'error',
@@ -1599,25 +1733,20 @@ function ensureWhisperModel(): Promise<WhisperModelState> {
   return modelPrefetch;
 }
 
+// O Codex (e o PATH de ferramentas que ele recebe) so pode ser construido
+// depois do pacote de runtimes: a resolucao acontece uma unica vez.
+async function codexServer(): Promise<CodexAppServer> {
+  await requireRuntimePack();
+  return getCodexAppServer();
+}
+
 function getCodexAppServer(): CodexAppServer {
   if (codexAppServer) return codexAppServer;
-  const resolution = resolveRuntime('codex-app-server', {
-    appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath,
-    isPackaged: app.isPackaged,
-    platform: process.platform,
-    arch: process.arch,
-  });
+  const resolution = resolveRuntime('codex-app-server', appRuntimeContext());
   if (!resolution.command) {
     throw new Error('Codex App Server interno nao foi empacotado para esta plataforma.');
   }
-  const runtimeContext = {
-    appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath,
-    isPackaged: app.isPackaged,
-    platform: process.platform,
-    arch: process.arch,
-  };
+  const runtimeContext = appRuntimeContext();
   const localRuntimes = ['node', 'ffmpeg', 'ffprobe', 'uv', 'yt-dlp', 'python']
     .map((name) => resolveRuntime(name as RuntimeName, runtimeContext));
   const runtimePath = [
@@ -1761,13 +1890,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('runtime:check', () =>
     Promise.all(runtimeCommands.map(({ name, args }) => {
-      const resolution = resolveRuntime(name, {
-        appPath: app.getAppPath(),
-        resourcesPath: process.resourcesPath,
-        isPackaged: app.isPackaged,
-        platform: process.platform,
-        arch: process.arch,
-      });
+      const resolution = resolveRuntime(name, appRuntimeContext());
       return checkRuntime(resolution, args);
     })),
   );
@@ -1869,10 +1992,10 @@ function registerIpcHandlers(): void {
   ipcMain.handle('waveform:get', (_event, input: { url?: string }) =>
     readSourceWaveform(asText(input.url)));
 
-  ipcMain.handle('codex:account', () => getCodexAppServer().readAccount());
+  ipcMain.handle('codex:account', async () => (await codexServer()).readAccount());
 
   ipcMain.handle('codex:login', async () => {
-    const login = await getCodexAppServer().startChatGptLogin();
+    const login = await (await codexServer()).startChatGptLogin();
     const authUrl = new URL(login.authUrl);
     if (authUrl.protocol !== 'https:' || authUrl.origin !== 'https://auth.openai.com') {
       throw new Error('O Codex retornou um endereco de login inesperado.');
@@ -1881,11 +2004,11 @@ function registerIpcHandlers(): void {
     return login.state;
   });
 
-  ipcMain.handle('codex:login-cancel', () => getCodexAppServer().cancelLogin());
+  ipcMain.handle('codex:login-cancel', async () => (await codexServer()).cancelLogin());
 
-  ipcMain.handle('codex:logout', () => getCodexAppServer().logout());
+  ipcMain.handle('codex:logout', async () => (await codexServer()).logout());
 
-  ipcMain.handle('codex:message', (_event, input: CodexSendMessageInput) => {
+  ipcMain.handle('codex:message', async (_event, input: CodexSendMessageInput) => {
     const projectDirectory = asText(input.projectDirectory);
     const text = input.text?.trim();
     if (!projectDirectory) throw new Error('Escolha uma pasta de projeto.');
@@ -1894,22 +2017,24 @@ function registerIpcHandlers(): void {
       throw new Error('Escolha a pasta do projeto pelo seletor do Edvid.');
     }
     if (!text) throw new Error('Escreva uma mensagem para o Edvid.');
-    return getCodexAppServer().sendMessage(resolvedProjectDirectory, text);
+    return (await codexServer()).sendMessage(resolvedProjectDirectory, text);
   });
 
   ipcMain.handle(
     'codex:interrupt',
-    (_event, input: { threadId: string; turnId: string }) =>
-      getCodexAppServer().interrupt(input.threadId, input.turnId),
+    async (_event, input: { threadId: string; turnId: string }) =>
+      (await codexServer()).interrupt(input.threadId, input.turnId),
   );
 
   ipcMain.handle(
     'codex:approval',
-    (
+    async (
       _event,
       input: { approvalId: string | number; decision: CodexApprovalDecision },
-    ) => getCodexAppServer().respondToApproval(input.approvalId, input.decision),
+    ) => (await codexServer()).respondToApproval(input.approvalId, input.decision),
   );
+
+  ipcMain.handle('runtime-pack:ensure', () => ensureRuntimePack());
 }
 
 function createWindow(): void {
@@ -2301,6 +2426,9 @@ void app.whenReady().then(async () => {
   });
   setupAutoUpdate();
   void memberBoot();
+  // O download do pacote de ferramentas comeca imediatamente, antes mesmo do
+  // login: no primeiro boot ele e o caminho critico de tudo.
+  void ensureRuntimePack();
   // Servidor de mídia com suporte a Range. Sem 206/Accept-Ranges o <video>
   // não consegue posicionar a agulha em arquivos grandes: o clique na
   // timeline era ignorado ou o vídeo reiniciava do zero.

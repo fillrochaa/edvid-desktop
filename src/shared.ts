@@ -151,6 +151,16 @@ export type AppUpdateState = {
   version?: string;
 };
 
+// Pacote de runtimes sob demanda: o instalador magro nao embarca as
+// ferramentas (FFmpeg, Python/WhisperX, Node, Codex...); o aplicativo baixa
+// o pacote uma vez no primeiro boot e a cada mudanca de versao do manifest.
+export type RuntimePackState = {
+  status: 'unknown' | 'checking' | 'downloading' | 'extracting' | 'ready' | 'error';
+  downloadedBytes?: number;
+  totalBytes?: number;
+  error?: string;
+};
+
 // Login do aluno (Creator Factory / Supabase). "unconfigured" = app sem as
 // chaves publicas do projeto: o gate fica desligado e tudo funciona como
 // antes. "no-access" = login valido, mas sem matricula ativa no curso.
@@ -251,6 +261,8 @@ export type EdvidDesktopApi = {
     model: TimelineModel,
     loadStamp: string,
   ) => Promise<void>;
+  ensureRuntimePack: () => Promise<RuntimePackState>;
+  onRuntimePackState: (listener: (state: RuntimePackState) => void) => () => void;
   ensureWhisperModel: () => Promise<WhisperModelState>;
   onWhisperModelState: (listener: (state: WhisperModelState) => void) => () => void;
   ensureRemotionRuntime: () => Promise<RemotionRuntimeState>;

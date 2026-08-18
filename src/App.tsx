@@ -20,6 +20,7 @@ import type {
   MemberAuthState,
   Phase2RenderState,
   ProjectSummary,
+  RuntimePackState,
   ProjectWorkspace,
   RemotionRuntimeState,
   RuntimeCheck,
@@ -1860,6 +1861,7 @@ export function App() {
   const [phase2Render, setPhase2Render] = useState<Phase2RenderState>({ status: 'idle' });
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({ status: 'idle' });
   const [memberAuth, setMemberAuth] = useState<MemberAuthState>({ status: 'unconfigured' });
+  const [runtimePack, setRuntimePack] = useState<RuntimePackState>({ status: 'unknown' });
   const [jcutApplied, setJcutApplied] = useState(false);
   const phase2StatusRef = useRef<Phase2RenderState['status']>('idle');
   const messageListRef = useRef<HTMLDivElement | null>(null);
@@ -2292,6 +2294,13 @@ export function App() {
     const unsubscribeUpdate = window.edvidDesktop.onAppUpdateState(setAppUpdate);
     const unsubscribeMember = window.edvidDesktop.onMemberAuthState(setMemberAuth);
     void window.edvidDesktop.getMemberAuth().then(setMemberAuth);
+    const unsubscribePack = window.edvidDesktop.onRuntimePackState((state) => {
+      setRuntimePack(state);
+      // Com as ferramentas instaladas, a lista de dependências da rail deixa
+      // de acusar ausências.
+      if (state.status === 'ready') void refreshRuntimes();
+    });
+    void window.edvidDesktop.ensureRuntimePack().then(setRuntimePack);
     if (!booted.current) {
       booted.current = true;
       void window.edvidDesktop.getDesktopInfo().then(setDesktopInfo);
@@ -2319,6 +2328,7 @@ export function App() {
       unsubscribePhase2();
       unsubscribeUpdate();
       unsubscribeMember();
+      unsubscribePack();
     };
   }, []);
 
@@ -2472,7 +2482,7 @@ export function App() {
                   <h2>O que vamos editar?</h2>
                   <p>O corte limpo vem primeiro. Depois da aprovação, os estilos aparecem visualmente na aba ao lado.</p>
                   <div className="prompt-examples">
-                    <button type="button" onClick={() => void dispatchMessage('Inicie a edição do vídeo e prepare o corte limpo.', 'Iniciar o corte limpo')} disabled={sending || whisperModel.status === 'downloading'}>Iniciar corte limpo</button>
+                    <button type="button" onClick={() => void dispatchMessage('Inicie a edição do vídeo e prepare o corte limpo.', 'Iniciar o corte limpo')} disabled={sending || whisperModel.status === 'downloading' || (runtimePack.status !== 'ready' && runtimePack.status !== 'unknown')}>Iniciar corte limpo</button>
                     <button type="button" onClick={() => void dispatchMessage('Analise os vídeos e imagens da pasta assets.')} disabled={sending}>Analisar assets</button>
                   </div>
                   {whisperModel.status === 'downloading' && (
@@ -2484,6 +2494,33 @@ export function App() {
                   {whisperModel.status === 'error' && (
                     <div className="model-status error">
                       Não foi possível preparar a transcrição. Verifique a conexão e reabra o Edvid.
+                    </div>
+                  )}
+                </div>
+              )}
+              {(runtimePack.status === 'downloading' || runtimePack.status === 'extracting' || runtimePack.status === 'error') && (
+                <div className="phase2-render-banner" role="status">
+                  <span className="phase2-render-orb" />
+                  <div className="phase2-render-copy">
+                    <strong>
+                      {runtimePack.status === 'error' ? 'Falha ao preparar as ferramentas' : 'Preparando o Edvid'}
+                    </strong>
+                    <small>
+                      {runtimePack.status === 'error'
+                        ? `${runtimePack.error ?? 'Erro no download.'} `
+                        : runtimePack.status === 'extracting'
+                          ? 'Instalando as ferramentas de edição. Falta pouco.'
+                          : runtimePack.totalBytes
+                            ? `Baixando as ferramentas de edição · ${Math.round(((runtimePack.downloadedBytes ?? 0) / runtimePack.totalBytes) * 100)}% (${Math.round((runtimePack.downloadedBytes ?? 0) / 1e6)}/${Math.round(runtimePack.totalBytes / 1e6)} MB). Acontece uma única vez.`
+                            : 'Baixando as ferramentas de edição. Acontece uma única vez.'}
+                      {runtimePack.status === 'error' && (
+                        <button type="button" className="link-button" onClick={() => void window.edvidDesktop.ensureRuntimePack().then(setRuntimePack)}>Tentar de novo</button>
+                      )}
+                    </small>
+                  </div>
+                  {runtimePack.status === 'downloading' && runtimePack.totalBytes && (
+                    <div className="phase2-render-track">
+                      <span style={{ width: `${Math.min(100, Math.round(((runtimePack.downloadedBytes ?? 0) / runtimePack.totalBytes) * 100))}%` }} />
                     </div>
                   )}
                 </div>

@@ -24,9 +24,11 @@ const config: ForgeConfig = {
     appCategoryType: 'public.app-category.video',
     icon: path.resolve('src/brand/edvid-icon'),
     asar: true,
+    // Instalador magro: as ferramentas (resources/runtimes, 1,8 GB) NAO vao
+    // no pacote — o aplicativo baixa o runtime pack sob demanda no primeiro
+    // boot (scripts/pack-runtimes.mjs gera; publish-runtimes.mjs publica).
     extraResource: [
       'resources/runtime-manifest.json',
-      'resources/runtimes',
       'resources/remotion-template',
       'resources/helpers',
     ],
