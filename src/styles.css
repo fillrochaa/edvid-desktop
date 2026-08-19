@@ -236,6 +236,7 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .studio-track-label.orange { color: #e98c4d; border-color: rgba(255,119,19,.18); background: rgba(255,119,19,.045); }
 .studio-track-label.teal { color: #5ec3c5; border-color: rgba(9,181,183,.18); background: rgba(9,181,183,.045); }
 .studio-track-label.olive { color: #a5bb3b; border-color: rgba(168,194,43,.18); background: rgba(168,194,43,.045); }
+.studio-track-label.green { color: #4fd08b; border-color: rgba(56,199,124,.2); background: rgba(56,199,124,.05); }
 .studio-lane { position: relative; height: 38px; border: 1px solid rgba(255,255,255,.045); border-radius: 8px; overflow: hidden; background: rgba(0,0,0,.22); }
 .timeline-clip, .timeline-chip { position: absolute; top: 3px; bottom: 3px; display: flex; align-items: center; padding: 0 7px; border-radius: 6px; overflow: hidden; color: rgba(255,255,255,.75); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
 .video-clip { border: 1px solid rgba(255,119,19,.36); background: linear-gradient(135deg, rgba(255,119,19,.2), rgba(255,119,19,.08)); }
@@ -245,6 +246,9 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .captions-chip { border: 1px solid rgba(9,181,183,.34); color: #85e5e7; background: rgba(9,181,183,.12); }
 .headline-chip, .asset-chip { border: 1px solid rgba(255,119,19,.36); color: #ffc08e; background: rgba(255,119,19,.12); }
 .music-chip { border: 1px solid rgba(168,194,43,.34); color: #d2e673; background: repeating-linear-gradient(-45deg, rgba(168,194,43,.12) 0 8px, rgba(168,194,43,.19) 8px 16px); }
+.animation-chip { border: 1px solid rgba(168,194,43,.34); color: #d2e673; background: rgba(168,194,43,.12); }
+/* Verde do design system: tracks de imagem e video inseridas pela edicao. */
+.image-chip { border: 1px solid rgba(56,199,124,.36); color: #8fe7b4; background: rgba(56,199,124,.13); }
 .timeline-playhead { position: absolute; top: 27px; bottom: 6px; left: var(--timeline-playhead-left); z-index: 8; width: 1px; background: var(--orange); box-shadow: 0 0 8px rgba(255,119,19,.35); pointer-events: none; }
 .timeline-playhead::before { content: ''; position: absolute; top: 0; left: -4px; width: 9px; height: 7px; border-radius: 2px 2px 5px 5px; background: var(--orange); }
 .timeline-correction-range { position: absolute; top: 27px; bottom: 6px; left: var(--correction-left); width: max(4px, var(--correction-width)); z-index: 10; border-right: 1px solid rgba(9,181,183,.68); border-left: 1px solid rgba(9,181,183,.68); background: repeating-linear-gradient(135deg, rgba(9,181,183,.13) 0 5px, rgba(9,181,183,.035) 5px 10px); }

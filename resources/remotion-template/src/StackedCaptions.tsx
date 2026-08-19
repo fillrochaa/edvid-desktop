@@ -27,6 +27,7 @@ import {
 import {PLAYFAIR, POPPINS, loadEdvidFonts} from './fonts';
 import cues from '../public/caption-cues.json';
 import editData from '../public/edit-data.json';
+import {activeSplitAt} from './Main';
 import {PencilOutline} from './PencilOutline';
 
 loadEdvidFonts();
@@ -92,7 +93,9 @@ const Cue: React.FC<{cue: CueData; cueDurationFrames: number}> = ({cue, cueDurat
 
   const scale = (width / 1080) * FONT_SCALE;
   const avail = width - 180;
-  const baseY = Math.round(height * OFFSET_Y);
+  // Tela dividida: o bloco abandona o offset e se centra na divisa (H/2).
+  const globalFrame = Math.round((cue.startMs / 1000) * fps) + frame;
+  const baseY = activeSplitAt(globalFrame, fps) ? 0 : Math.round(height * OFFSET_Y);
 
   const ENTER = Math.max(3, Math.min(8, Math.floor(cueDurationFrames * 0.45)));
   const EXIT = Math.max(2, Math.min(7, Math.floor(cueDurationFrames * 0.35)));

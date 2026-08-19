@@ -20,6 +20,7 @@ import {BASKERVILLE, INTER, POPPINS, loadEdvidFonts} from './fonts';
 import {measureText} from '@remotion/layout-utils';
 import captions from '../public/captions.json';
 import editData from '../public/edit-data.json';
+import {captionPaddingBottomAt} from './Main';
 
 loadEdvidFonts();
 
@@ -141,7 +142,7 @@ function splitTwo(words: Word[], V: Variant): Word[][] {
 
 export const SimpleCaptions: React.FC<{variant: string}> = ({variant}) => {
   const frame = useCurrentFrame();
-  const {fps, durationInFrames} = useVideoConfig();
+  const {fps, durationInFrames, height} = useVideoConfig();
   const V = SIMPLE_VARIANTS[variant] ?? SIMPLE_VARIANTS.simples;
   const cues = buildCues(captions as Word[], V);
 
@@ -157,8 +158,11 @@ export const SimpleCaptions: React.FC<{variant: string}> = ({variant}) => {
   if (frame >= end) return null;
 
   const lines = splitTwo(cues[idx], V);
+  // Tela dividida: a legenda se centra na divisa (o frame aqui e o GLOBAL —
+  // este componente nao vive dentro de Sequence).
+  const paddingBottom = captionPaddingBottomAt(frame, fps, height, V.bottom, Math.round(V.size * V.lines * 0.62));
   return (
-    <AbsoluteFill style={{justifyContent: 'flex-end', alignItems: 'center', paddingBottom: V.bottom}}>
+    <AbsoluteFill style={{justifyContent: 'flex-end', alignItems: 'center', paddingBottom}}>
       <div
         style={{
           textAlign: 'center',

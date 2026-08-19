@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-19 (0.11.1 — continuação automática após a geração de imagens fecha o ciclo pedido→gerar→aplicar)
+Atualizado em: 2026-08-19 (0.12.0 — tela dividida oficial no template, legenda na divisa em todos os estilos e tracks reais de overlay na timeline)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -885,6 +885,20 @@ Arquitetura (`src/gemini-agent.ts`):
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.12.0: tela dividida oficial + tracks reais. O split vira DADO
+  (EditData.splits {kind image|video, src, start, end, position, bandTop}):
+  o Main.tsx monta a divisão sozinho (mídia numa metade, faixa bandTop do
+  vídeo na outra, fade + whoosh) e o agente fica PROIBIDO de montar split
+  no CustomGraphics. A legenda se centra sozinha na divisa em TODOS os
+  estilos (karaokê/simples via captionPaddingBottomAt exportado do Main;
+  empilhada zera o stackedOffsetY; dispersa força OFFSET_Y 0.5) — provado
+  com stills renderizados no template real (karaokê e empilhada, dentro e
+  fora do split; cuidado: still no frame EXATO do início de linha pega
+  opacidade 0 do fade e parece sumida). Na timeline, a track Assets FALSA
+  (chips fixos) morreu: ProjectWorkspace.overlays parseia o edit-data.json
+  (splits/inserts/behind/hook) e alimenta tracks reais na ordem Legendas,
+  Texto (largura real do hook), Animações, Imagem e Vídeo (verde novo
+  #4fd08b/.green), acima das bases Vídeo/Voz/Trilha.
 - 0.11.1: continuação automática das imagens. Em uso real o ciclo não
   fechava: o agente pedia a imagem e encerrava o turno, o app gerava, e a
   aplicação só viria se o aluno mandasse outra mensagem. Agora o Edvid

@@ -55,6 +55,7 @@ import type {
   GeminiAccountState,
   ImageGenState,
   MemberAuthState,
+  OverlayClip,
   Phase2RenderState,
   ProjectSummary,
   RuntimePackState,
@@ -540,6 +541,21 @@ function EditorWorkspace({
   const effectiveDuration = mapped ? modelDuration : duration || timelineDuration || modelDuration;
   const fps = model?.fps ?? media?.fps ?? 30;
   const phase = media?.kind === 'final' || styleApplied ? 2 : 1;
+  const overlays = workspace?.overlays ?? null;
+  // Chip de overlay (imagem/video/animacao) posicionado pelos ranges reais.
+  const renderOverlayChip = (clip: OverlayClip, index: number, className: string) => (
+    <div
+      key={`${className}:${index}:${clip.start}`}
+      className={`timeline-chip ${className}`}
+      style={{
+        left: `${effectiveDuration > 0 ? (clip.start / effectiveDuration) * 100 : 0}%`,
+        width: `${effectiveDuration > 0 ? Math.max(1.5, ((clip.end - clip.start) / effectiveDuration) * 100) : 0}%`,
+      }}
+      title={`${clip.label} · ${formatTime(clip.end - clip.start)}`}
+    >
+      {clip.label}
+    </div>
+  );
   const progress = effectiveDuration > 0 ? Math.min(1, currentTime / effectiveDuration) : 0;
   const activeSource = activeSourceId ? sourceById.get(activeSourceId) ?? null : null;
   const videoSrc = mapped ? activeSource?.url ?? undefined : media?.url;
@@ -1500,20 +1516,37 @@ function EditorWorkspace({
                 </span>
               ))}
             </div>
-            {phase === 2 && style.headline !== 'none' && (
-              <TimelineTrack icon="text" label="Headline" tone="orange">
-                <div className="timeline-chip headline-chip" style={{ width: '31%' }}>Headline · {style.headline}</div>
-              </TimelineTrack>
-            )}
+            {/* Ordem das tracks de estilo: Legendas, Texto, Animações e por
+                fim Imagem/Vídeo (verde) — as bases Vídeo/Voz ficam abaixo. Os
+                chips vêm dos ranges REAIS do edit-data.json (overlays). */}
             {phase === 2 && style.captions !== 'none' && (
               <TimelineTrack icon="captions" label="Legendas" tone="teal">
                 <div className="timeline-chip captions-chip" style={{ left: '2%', width: '96%' }}>Legendas</div>
               </TimelineTrack>
             )}
-            {phase === 2 && style.edit !== 'limpa' && (
-              <TimelineTrack icon="image" label="Assets" tone="orange">
-                <div className="timeline-chip asset-chip" style={{ left: '8%', width: '22%' }}>Insert 01</div>
-                <div className="timeline-chip asset-chip" style={{ left: '48%', width: '28%' }}>Insert 02</div>
+            {phase === 2 && style.headline !== 'none' && (
+              <TimelineTrack icon="text" label="Texto" tone="orange">
+                <div
+                  className="timeline-chip headline-chip"
+                  style={{ width: overlays?.hookEnd && effectiveDuration > 0 ? `${Math.min(100, (overlays.hookEnd / effectiveDuration) * 100)}%` : '31%' }}
+                >
+                  Headline · {style.headline}
+                </div>
+              </TimelineTrack>
+            )}
+            {overlays && overlays.animations.length > 0 && (
+              <TimelineTrack icon="sparkles" label="Animações" tone="olive">
+                {overlays.animations.map((clip, index) => renderOverlayChip(clip, index, 'animation-chip'))}
+              </TimelineTrack>
+            )}
+            {overlays && overlays.images.length > 0 && (
+              <TimelineTrack icon="image" label="Imagem" tone="green">
+                {overlays.images.map((clip, index) => renderOverlayChip(clip, index, 'image-chip'))}
+              </TimelineTrack>
+            )}
+            {overlays && overlays.videos.length > 0 && (
+              <TimelineTrack icon="video" label="Vídeo" tone="green">
+                {overlays.videos.map((clip, index) => renderOverlayChip(clip, index, 'image-chip'))}
               </TimelineTrack>
             )}
             <TimelineTrack icon="video" label="Vídeo" tone="orange">

@@ -113,6 +113,21 @@ export type ProjectStyleState = {
   note: string;
 };
 
+// Overlays REAIS da Fase 2, lidos do edit-data.json que o agente escreve:
+// alimentam as tracks de Legendas/Texto/Animacoes/Imagem/Video da timeline.
+export type OverlayClip = {
+  start: number;
+  end: number;
+  label: string;
+};
+
+export type ProjectOverlays = {
+  hookEnd: number | null;
+  images: OverlayClip[];
+  videos: OverlayClip[];
+  animations: OverlayClip[];
+};
+
 export type ProjectWorkspace = {
   project: ProjectSummary;
   media: ProjectMedia | null;
@@ -122,6 +137,7 @@ export type ProjectWorkspace = {
   timelineLoadStamp: string;
   sources: ProjectSource[];
   style: ProjectStyleState | null;
+  overlays: ProjectOverlays | null;
 };
 
 export type WhisperModelState = {

@@ -57,6 +57,13 @@ const qaWorkspace: ProjectWorkspace = {
     },
   ],
   style: null,
+  // Tracks de overlay no QA visual: um exemplar de cada tipo.
+  overlays: {
+    hookEnd: 3.2,
+    images: [{ start: 4.5, end: 9, label: 'produto.png' }],
+    videos: [{ start: 1.2, end: 3.4, label: 'broll.mp4' }],
+    animations: [{ start: 2, end: 4, label: 'Atrás do sujeito' }],
+  },
 };
 const listeners = new Set<(event: CodexEvent) => void>();
 let turnNumber = 0;

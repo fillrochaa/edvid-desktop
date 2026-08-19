@@ -27,6 +27,7 @@ import {LORA, loadEdvidFonts} from './fonts';
 import {measureText} from '@remotion/layout-utils';
 import captions from '../public/captions.json';
 import editData from '../public/edit-data.json';
+import {activeSplitAt} from './Main';
 
 loadEdvidFonts();
 const fontFamily = LORA;
@@ -168,7 +169,8 @@ const CueView: React.FC<{cue: Cue; endFrame: number}> = ({cue, endFrame}) => {
       <div
         style={{
           width: SAFE_W,
-          translate: `0px ${Math.round(height * (OFFSET_Y - 0.5)) + cue.drop}px`,
+          // Tela dividida: o bloco se centra na divisa (frame aqui e GLOBAL).
+          translate: `0px ${(activeSplitAt(frame, fps) ? 0 : Math.round(height * (OFFSET_Y - 0.5))) + cue.drop}px`,
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',

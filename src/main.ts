@@ -33,6 +33,8 @@ import type {
   GeminiAccountState,
   ImageGenState,
   MemberAuthState,
+  OverlayClip,
+  ProjectOverlays,
   Phase2RenderState,
   RuntimePackState,
   ProjectMedia,
@@ -1015,9 +1017,10 @@ async function openProject(directory: string, remember = true, name?: string): P
       };
   selectedProjectDirectories.add(resolvedDirectory);
   const inspectedMedia = await inspectProjectMedia(resolvedDirectory);
-  const [loaded, style] = await Promise.all([
+  const [loaded, style, overlays] = await Promise.all([
     loadProjectTimeline(resolvedDirectory, inspectedMedia),
     inspectProjectStyle(resolvedDirectory),
+    inspectProjectOverlays(resolvedDirectory),
   ]);
   return {
     project,
@@ -1028,7 +1031,47 @@ async function openProject(directory: string, remember = true, name?: string): P
     timelineLoadStamp: loaded.loadStamp,
     sources: loaded.sources,
     style,
+    overlays,
   };
+}
+
+// Overlays reais da Fase 2 para a timeline: splits (tela dividida), inserts
+// (cards), behind (atras do sujeito) e o fim do hook, direto do edit-data.json
+// que o agente escreve em edit/remotion/public/.
+async function inspectProjectOverlays(directory: string): Promise<ProjectOverlays | null> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(path.join(directory, 'edit', 'remotion', 'public', 'edit-data.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    const clip = (start: unknown, end: unknown, label: string): OverlayClip | null => {
+      const s = Number(start);
+      const e = Number(end);
+      return Number.isFinite(s) && Number.isFinite(e) && e > s ? { start: s, end: e, label } : null;
+    };
+    const images: OverlayClip[] = [];
+    const videos: OverlayClip[] = [];
+    const animations: OverlayClip[] = [];
+    const list = (value: unknown): Array<Record<string, unknown>> =>
+      Array.isArray(value) ? (value as Array<Record<string, unknown>>) : [];
+    for (const item of list(parsed.splits)) {
+      const built = clip(item.start, item.end, path.basename(asText(item.src)) || 'Tela dividida');
+      if (built) (item.kind === 'video' ? videos : images).push(built);
+    }
+    for (const item of list(parsed.inserts)) {
+      const built = clip(item.start, item.end, path.basename(asText(item.src)) || 'Insert');
+      if (built) images.push(built);
+    }
+    for (const item of list(parsed.behind)) {
+      const built = clip(item.start, Number(item.start) + Number(item.dur), item.kind === 'words' ? 'Palavras' : 'Atrás do sujeito');
+      if (built) animations.push(built);
+    }
+    const hook = parsed.hook as { enabled?: unknown; endSec?: unknown } | undefined;
+    const hookEnd = hook?.enabled === true && Number.isFinite(Number(hook.endSec)) ? Number(hook.endSec) : null;
+    if (!images.length && !videos.length && !animations.length && hookEnd === null) return null;
+    return { hookEnd, images, videos, animations };
+  } catch {
+    return null;
+  }
 }
 
 function broadcastCodexEvent(event: CodexEvent): void {

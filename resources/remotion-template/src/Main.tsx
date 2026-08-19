@@ -41,6 +41,17 @@ const fontFamily = POPPINS;
 // ============ TYPES + DATA ====================================================
 type Caption = {text: string; startMs: number; endMs: number};
 type Insert = {src: string; start: number; end: number};
+// Tela dividida OFICIAL: a midia ocupa uma metade e o video segue na outra.
+// kind "video" toca o arquivo (mudo) em loop de cover; bandTop escolhe qual
+// faixa vertical do video 9:16 aparece na metade dele (fracao do topo).
+export type Split = {
+  kind?: 'image' | 'video';
+  src: string;
+  start: number;
+  end: number;
+  position?: 'top' | 'bottom';
+  bandTop?: number;
+};
 type BehindImage = {kind: 'image'; src: string; matte: string; start: number; dur: number};
 type BehindWords = {kind: 'words'; words: {t: string; at: number}[]; matte: string; start: number; dur: number};
 type Behind = BehindImage | BehindWords;
@@ -100,10 +111,19 @@ export type EditData = {
   };
   inserts: Insert[];
   behind: Behind[];
+  splits?: Split[];
   soundtrack: {enabled: boolean; file: string; volume: number};
 };
 
 const D = editData as unknown as EditData;
+const SPLITS: Split[] = D.splits ?? [];
+
+// Divisa da tela dividida no frame GLOBAL. O +1 e o mesmo lag de video que a
+// CaptionShell e o CustomGraphics compensam (VIDEO_LAG).
+export const activeSplitAt = (globalFrame: number, fps: number): Split | null =>
+  SPLITS.find(
+    (s) => globalFrame >= Math.round(s.start * fps) + 1 && globalFrame < Math.round(s.end * fps) + 1,
+  ) ?? null;
 
 // Cor de destaque padrao do Edvid, usada quando o edit-data.json nao traz uma.
 // Antes ela estava literal dentro de cada estilo, e a escolha do usuario na
@@ -288,25 +308,45 @@ const Word: React.FC<{caption: Caption; lineFromFrame: number}> = ({caption, lin
   );
 };
 
-// captions.windows lets the caption sit somewhere else for part of the video —
-// the "tela dividida" style parks it on the seam between image and video. It is
-// resolved PER FRAME, not per line: a line that starts before a window and runs
-// into it has to move mid-line, otherwise it stays stuck at the bottom.
+// captions.windows lets the caption sit somewhere else for part of the video.
+// It is resolved PER FRAME, not per line: a line that starts before a window and
+// runs into it has to move mid-line, otherwise it stays stuck at the bottom.
+// A tela dividida OFICIAL (D.splits) dispensa windows manuais: durante um
+// split, qualquer estilo de legenda se centra sozinho na divisa. Janela
+// manual, quando existir, tem prioridade (ajuste fino do agente).
+// textHalfPx: metade da altura visual do bloco de texto, para centrar de fato.
+export const captionPaddingBottomAt = (
+  globalFrame: number,
+  fps: number,
+  height: number,
+  fallback: number,
+  textHalfPx: number,
+): number => {
+  const C = D.captions;
+  const w = (C.windows || []).find(
+    (x) => globalFrame >= Math.round(x.start * fps) + 1 && globalFrame < Math.round(x.end * fps) + 1,
+  );
+  if (w) return w.paddingBottom;
+  if (activeSplitAt(globalFrame, fps)) return height / 2 - textHalfPx;
+  return fallback;
+};
+
 const CaptionShell: React.FC<{fromFrame: number; children: React.ReactNode}> = ({fromFrame, children}) => {
-  const {fps} = useVideoConfig();
+  const {fps, height} = useVideoConfig();
   const local = useCurrentFrame();
   const C = D.captions;
   // Compared in FRAMES, never seconds: window bounds are rounded in the JSON, and
   // an epsilon comparison there lands a frame off. +1 is the same video lag the
   // split layout compensates for (see VIDEO_LAG in CustomGraphics).
-  const f = fromFrame + local;
-  const w = (C.windows || []).find(
-    (x) => f >= Math.round(x.start * fps) + 1 && f < Math.round(x.end * fps) + 1,
+  const paddingBottom = captionPaddingBottomAt(
+    fromFrame + local,
+    fps,
+    height,
+    C.paddingBottom,
+    Math.round(C.fontSize * 0.6),
   );
   return (
-    <AbsoluteFill
-      style={{justifyContent: 'flex-end', alignItems: 'center', paddingBottom: w ? w.paddingBottom : C.paddingBottom}}
-    >
+    <AbsoluteFill style={{justifyContent: 'flex-end', alignItems: 'center', paddingBottom}}>
       {children}
     </AbsoluteFill>
   );
@@ -398,6 +438,56 @@ const Inserts: React.FC = () => {
         );
       })}
     </>
+  );
+};
+
+// ============ TELA DIVIDIDA (midia numa metade, video na outra) ================
+// A base do video NAO some: durante um split ela encolhe para a metade oposta,
+// mostrando a faixa vertical bandTop..bandTop+0.5 do quadro original (0.22
+// default cobre o rosto num 9:16 de fala). A midia entra com fade curto.
+const SPLIT_BAND_DEFAULT = 0.22;
+
+const SplitMedia: React.FC<{split: Split; totalFrames: number}> = ({split, totalFrames}) => {
+  const f = useCurrentFrame();
+  const enter = interpolate(f, [0, 7], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic)});
+  const exit = interpolate(f, [totalFrames - 6, totalFrames], [1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  const style: React.CSSProperties = {width: '100%', height: '100%', objectFit: 'cover', opacity: Math.min(enter, exit)};
+  return (
+    <>
+      <Sfx src="whoosh.mp3" />
+      {split.kind === 'video'
+        ? <OffthreadVideo src={staticFile(split.src)} muted style={style} />
+        : <Img src={staticFile(split.src)} style={style} />}
+    </>
+  );
+};
+
+// Envolve a base: sem split ativo rende o DynamicVideo cheio; com split, o
+// mesmo DynamicVideo aparece recortado na metade dele. O recorte e feito por
+// container (overflow hidden) para a camera dinamica continuar valendo.
+const BaseWithSplits: React.FC = () => {
+  const frame = useCurrentFrame();
+  const {width, height, fps} = useVideoConfig();
+  const s = activeSplitAt(frame, fps);
+  if (!s) return <DynamicVideo />;
+  const mediaOnTop = (s.position ?? 'top') === 'top';
+  const half = height / 2;
+  const band = clamp01(s.bandTop ?? SPLIT_BAND_DEFAULT);
+  const from = Math.round(s.start * fps);
+  const duration = Math.max(1, Math.round((s.end - s.start) * fps));
+  return (
+    <AbsoluteFill style={{backgroundColor: 'black'}}>
+      <div style={{position: 'absolute', left: 0, width, height: half, top: mediaOnTop ? 0 : half, overflow: 'hidden'}}>
+        <Sequence from={from} durationInFrames={duration} layout="none">
+          <SplitMedia split={s} totalFrames={duration} />
+        </Sequence>
+      </div>
+      <div style={{position: 'absolute', left: 0, width, height: half, top: mediaOnTop ? half : 0, overflow: 'hidden'}}>
+        <div style={{position: 'absolute', left: 0, top: 0, width, height, transform: `translateY(${(-band * height).toFixed(1)}px)`}}>
+          <DynamicVideo />
+        </div>
+      </div>
+    </AbsoluteFill>
   );
 };
 
@@ -610,7 +700,7 @@ export const Main: React.FC = () => {
   return (
     <AbsoluteFill style={{backgroundColor: 'black'}}>
       {D.soundtrack.enabled ? <Soundtrack /> : null}
-      <DynamicVideo />
+      <BaseWithSplits />
       <BehindSubject />
       <Inserts />
       <CustomGraphics />
