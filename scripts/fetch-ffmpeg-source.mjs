@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import {
   access,
+  cp,
   mkdir,
   mkdtemp,
   readFile,
@@ -162,7 +163,14 @@ async function extractVerifiedSource() {
 
     const extractedPath = path.join(temporaryDirectory, `ffmpeg-${version}`);
     await rm(sourcePath, { recursive: true, force: true });
-    await rename(extractedPath, sourcePath);
+    try {
+      await rename(extractedPath, sourcePath);
+    } catch (error) {
+      // Nos runners Windows o temp (C:) e o workspace (D:) sao drives
+      // diferentes; rename atravessando drives da EXDEV — copia e apaga.
+      if (error?.code !== 'EXDEV') throw error;
+      await cp(extractedPath, sourcePath, { recursive: true });
+    }
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
