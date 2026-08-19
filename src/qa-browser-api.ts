@@ -1,5 +1,7 @@
 import type {
   AiProvider,
+  AiRole,
+  AiRolesState,
   ClaudeAccountState,
   CodexEvent,
   EdvidDesktopApi,
@@ -64,7 +66,12 @@ let approvalPreviewScheduled = false;
 // onboarding); ?ia=manual força o fluxo de colar o código do Claude.
 const qaSearch = () => new URLSearchParams(window.location.search);
 let qaChatGptConnected = !qaSearch().has('ia');
-let qaProvider: AiProvider = 'chatgpt';
+let qaRoles: AiRolesState = { chat: 'chatgpt', image: null, chatPinned: false, imagePinned: false };
+const rolesListeners = new Set<(state: AiRolesState) => void>();
+
+function emitRoles(): void {
+  for (const listener of rolesListeners) listener(qaRoles);
+}
 let qaClaude: ClaudeAccountState = { status: 'signed-out', email: null };
 const claudeListeners = new Set<(state: ClaudeAccountState) => void>();
 let qaGemini: GeminiAccountState = { status: 'signed-out', maskedKey: null };
@@ -158,10 +165,36 @@ export function createQaBrowserApi(): EdvidDesktopApi {
       qaChatGptConnected = false;
       return { status: 'signed-out', account: null, requiresOpenaiAuth: true };
     },
-    getAiProvider: async () => qaProvider,
-    setAiProvider: async (provider) => {
-      qaProvider = provider;
-      return provider;
+    getAiRoles: async () => qaRoles,
+    setAiRole: async (role: AiRole, provider: AiProvider | null, pinned: boolean) => {
+      if (role === 'chat') {
+        if (provider) qaRoles = { ...qaRoles, chat: provider, chatPinned: pinned };
+      } else {
+        qaRoles = { ...qaRoles, image: provider, imagePinned: provider ? pinned : false };
+      }
+      emitRoles();
+      return qaRoles;
+    },
+    onAiRoles: (listener) => {
+      rolesListeners.add(listener);
+      return () => rolesListeners.delete(listener);
+    },
+    fulfillImageRequests: async () => ({ status: 'idle' }),
+    onImageGenState: (listener) => {
+      // QA da geracao de imagens: ?imagens simula uma fila de tres pedidos.
+      if (qaSearch().has('imagens')) {
+        let done = 0;
+        const timer = window.setInterval(() => {
+          done += 1;
+          if (done >= 3) {
+            window.clearInterval(timer);
+            listener({ status: 'ready', total: 3, done: 3 });
+          } else {
+            listener({ status: 'generating', total: 3, done });
+          }
+        }, 900);
+      }
+      return () => {};
     },
     getClaudeAccount: async () => qaClaude,
     loginWithClaude: async () => {

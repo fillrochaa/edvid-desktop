@@ -1,10 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  AiRolesState,
   AppUpdateState,
   ClaudeAccountState,
   CodexEvent,
   EdvidDesktopApi,
   GeminiAccountState,
+  ImageGenState,
   MemberAuthState,
   Phase2RenderState,
   RemotionRuntimeState,
@@ -28,8 +30,19 @@ const api: EdvidDesktopApi = {
   loginWithChatGPT: () => ipcRenderer.invoke('codex:login'),
   cancelChatGPTLogin: () => ipcRenderer.invoke('codex:login-cancel'),
   logoutCodex: () => ipcRenderer.invoke('codex:logout'),
-  getAiProvider: () => ipcRenderer.invoke('ai:provider-get'),
-  setAiProvider: (provider) => ipcRenderer.invoke('ai:provider-set', { provider }),
+  getAiRoles: () => ipcRenderer.invoke('ai:roles-get'),
+  setAiRole: (role, provider, pinned) => ipcRenderer.invoke('ai:role-set', { role, provider, pinned }),
+  onAiRoles: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: AiRolesState) => listener(state);
+    ipcRenderer.on('ai:roles', handler);
+    return () => ipcRenderer.removeListener('ai:roles', handler);
+  },
+  fulfillImageRequests: (directory) => ipcRenderer.invoke('image:fulfill', { directory }),
+  onImageGenState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: ImageGenState) => listener(state);
+    ipcRenderer.on('image-gen:state', handler);
+    return () => ipcRenderer.removeListener('image-gen:state', handler);
+  },
   loginCodexWithApiKey: (apiKey) => ipcRenderer.invoke('codex:login-api-key', { apiKey }),
   getClaudeAccount: () => ipcRenderer.invoke('claude:account'),
   loginWithClaude: () => ipcRenderer.invoke('claude:login'),

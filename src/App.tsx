@@ -45,6 +45,7 @@ import claudeMark from './brand/ai/claude-mark.svg';
 import geminiMark from './brand/ai/gemini-mark.svg';
 import type {
   AiProvider,
+  AiRolesState,
   AppUpdateState,
   ClaudeAccountState,
   CodexAccountState,
@@ -52,6 +53,7 @@ import type {
   CodexEvent,
   DesktopInfo,
   GeminiAccountState,
+  ImageGenState,
   MemberAuthState,
   Phase2RenderState,
   ProjectSummary,
@@ -1894,7 +1896,8 @@ export function App() {
   const [claudeLoaded, setClaudeLoaded] = useState(false);
   const [geminiAccount, setGeminiAccount] = useState<GeminiAccountState>({ status: 'signed-out', maskedKey: null });
   const [geminiLoaded, setGeminiLoaded] = useState(false);
-  const [aiProvider, setAiProviderState] = useState<AiProvider>('chatgpt');
+  const [aiRoles, setAiRoles] = useState<AiRolesState>({ chat: 'chatgpt', image: null, chatPinned: false, imagePinned: false });
+  const [imageGen, setImageGen] = useState<ImageGenState>({ status: 'idle' });
   const [aiOnboardingDismissed, setAiOnboardingDismissed] = useState(false);
   const [claudeCode, setClaudeCode] = useState('');
   // Entrada de chave de API: qual provedor esta com o campo aberto.
@@ -1928,8 +1931,17 @@ export function App() {
     claude: claudeConnected,
     gemini: geminiConnected,
   };
-  // O chat conversa com o provedor ATIVO; os outros podem ficar conectados
-  // em espera. A troca acontece nas Configurações (ou sozinha, abaixo).
+  const aiProvider = aiRoles.chat;
+  // Quem PODE gerar imagem: ChatGPT so por assinatura (a ferramenta do Codex
+  // e atrelada a conta), Gemini por chave; Claude nunca.
+  const imageCapable: Record<AiProvider, boolean> = {
+    chatgpt: chatgptConnected && account.account?.type === 'chatgpt',
+    claude: false,
+    gemini: geminiConnected,
+  };
+  // O chat conversa com o provedor do papel "chat"; os outros ficam
+  // conectados em espera. A troca acontece nos seletores do composer, nas
+  // Configurações, ou sozinha (regras automáticas abaixo).
   const activeAiConnected = aiConnected[aiProvider];
   const canChat = Boolean(projectDirectory) && activeAiConnected;
   const readyRuntimes = runtimes.filter((runtime) => runtime.available).length;
@@ -2114,6 +2126,13 @@ export function App() {
     void window.edvidDesktop.renderPhase2(directory).catch(() => {});
   }
 
+  function requestImageFulfillment() {
+    const directory = activeProjectDirectoryRef.current;
+    if (!directory) return;
+    // O andamento chega por onImageGenState; sem pedidos o main devolve idle.
+    void window.edvidDesktop.fulfillImageRequests(directory).catch(() => {});
+  }
+
   function handlePhase2RenderState(state: Phase2RenderState) {
     const previous = phase2StatusRef.current;
     phase2StatusRef.current = state.status;
@@ -2194,8 +2213,12 @@ export function App() {
     }
   }
 
-  function switchAiProvider(provider: AiProvider) {
-    void window.edvidDesktop.setAiProvider(provider).then(setAiProviderState);
+  function switchAiProvider(provider: AiProvider, pinned = true) {
+    void window.edvidDesktop.setAiRole('chat', provider, pinned).then(setAiRoles);
+  }
+
+  function switchImageProvider(provider: AiProvider | null, pinned = true) {
+    void window.edvidDesktop.setAiRole('image', provider, pinned).then(setAiRoles);
   }
 
   function openKeyEntry(provider: AiProvider) {
@@ -2291,10 +2314,30 @@ export function App() {
         setActiveTurn(null);
         setSending(false);
         if (event.error) setMessages((current) => [...current, { id: `error:${event.turnId}`, role: 'system', text: event.error ?? '' }]);
+        // Turno falhou por LIMITE de uso e há outro chat conectado: troca o
+        // preferencial sozinha e avisa — mas nunca reenvia a mensagem, para
+        // não executar uma edição duas vezes.
+        if (event.status === 'failed' && event.error && /usage limit|rate.?limit|limite de uso|resource_exhausted|too many requests|\b429\b|quota|exceeded/iu.test(event.error)) {
+          const { roles, connected } = aiRuntimeRef.current;
+          const names: Record<AiProvider, string> = { chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini' };
+          const fallback = (['claude', 'chatgpt', 'gemini'] as AiProvider[])
+            .find((provider) => provider !== roles.chat && connected[provider]);
+          if (fallback) {
+            const previous = names[roles.chat];
+            switchAiProvider(fallback, false);
+            setMessages((current) => [...current, {
+              id: `system:${Date.now()}`,
+              role: 'system',
+              text: `O ${previous} atingiu o limite de uso. Troquei o chat para o ${names[fallback]} — reenvie a última mensagem para continuar do ponto atual.`,
+            }]);
+          }
+        }
         void refreshWorkspace();
         // Se o turno mudou os dados da Fase 2, o aplicativo renderiza fora do
-        // sandbox — sem dados novos o main devolve na hora, sem custo.
+        // sandbox — sem dados novos o main devolve na hora, sem custo. As
+        // imagens pedidas em edit/imagens/pedidos.json seguem o mesmo padrão.
         requestPhase2Render();
+        requestImageFulfillment();
       }
       return;
     }
@@ -2516,6 +2559,8 @@ export function App() {
     const unsubscribeMember = window.edvidDesktop.onMemberAuthState(setMemberAuth);
     const unsubscribeClaude = window.edvidDesktop.onClaudeAccount(setClaudeAccount);
     const unsubscribeGemini = window.edvidDesktop.onGeminiAccount(setGeminiAccount);
+    const unsubscribeRoles = window.edvidDesktop.onAiRoles(setAiRoles);
+    const unsubscribeImageGen = window.edvidDesktop.onImageGenState(setImageGen);
     void window.edvidDesktop.getMemberAuth().then(setMemberAuth);
     const unsubscribePack = window.edvidDesktop.onRuntimePackState((state) => {
       setRuntimePack(state);
@@ -2536,7 +2581,7 @@ export function App() {
         setGeminiAccount(state);
         setGeminiLoaded(true);
       });
-      void window.edvidDesktop.getAiProvider().then(setAiProviderState);
+      void window.edvidDesktop.getAiRoles().then(setAiRoles);
       void refreshRuntimes();
       // O modelo de transcricao e preparado pelo aplicativo, antes de o
       // usuario pedir o corte: assim a edicao nunca para para baixar nada.
@@ -2563,6 +2608,8 @@ export function App() {
       unsubscribePack();
       unsubscribeClaude();
       unsubscribeGemini();
+      unsubscribeRoles();
+      unsubscribeImageGen();
     };
   }, []);
 
@@ -2584,19 +2631,34 @@ export function App() {
     } satisfies StoredChat));
   }, [messages, handledCutApprovalId, jcutApplied, projectDirectory]);
 
-  // Se o provedor ativo está desconectado (com o estado dele já resolvido)
-  // e algum outro está pronto, a troca é automática: o aluno nunca fica com
-  // o chat travado por uma escolha antiga.
+  // Regras automáticas dos papéis. Escolha explícita do aluno (pinned) só é
+  // desfeita quando o provedor escolhido deixa de estar conectado/capaz.
+  // - Chat: se o preferencial está desconectado (estado já resolvido) e outro
+  //   está pronto, troca sozinho — o aluno nunca fica com o chat travado.
+  // - Imagem: segue a capacidade (ChatGPT assinatura > Gemini chave > nada),
+  //   exatamente as regras combinadas: só Claude conectado = sem imagem até
+  //   entrar uma chave do Gemini.
   useEffect(() => {
-    const resolved: Record<AiProvider, boolean> = {
+    const resolvedDisconnected: Record<AiProvider, boolean> = {
       chatgpt: account.status === 'signed-out' || account.status === 'error',
       claude: claudeLoaded && claudeAccount.status === 'signed-out',
       gemini: geminiLoaded && geminiAccount.status !== 'signed-in',
     };
-    if (aiConnected[aiProvider] || !resolved[aiProvider]) return;
-    const fallback = (['chatgpt', 'claude', 'gemini'] as AiProvider[]).find((provider) => aiConnected[provider]);
-    if (fallback) switchAiProvider(fallback);
-  }, [aiProvider, chatgptConnected, claudeConnected, geminiConnected, claudeLoaded, geminiLoaded, account.status, claudeAccount.status, geminiAccount.status]);
+    if (!aiConnected[aiRoles.chat] && resolvedDisconnected[aiRoles.chat]) {
+      const fallback = (['chatgpt', 'claude', 'gemini'] as AiProvider[]).find((provider) => aiConnected[provider]);
+      if (fallback) switchAiProvider(fallback, false);
+    }
+    const imageAuto = imageCapable.chatgpt ? 'chatgpt' : imageCapable.gemini ? 'gemini' : null;
+    if (aiRoles.imagePinned && aiRoles.image && imageCapable[aiRoles.image]) return;
+    if (aiRoles.image !== imageAuto) switchImageProvider(imageAuto, false);
+  }, [aiRoles, chatgptConnected, claudeConnected, geminiConnected, claudeLoaded, geminiLoaded, account.status, account.account?.type, claudeAccount.status, geminiAccount.status]);
+
+  // O fallback de limite e o pedido de imagens pós-turno precisam dos valores
+  // atuais dentro do handleCodexEvent (registrado uma única vez no boot).
+  const aiRuntimeRef = useRef({ roles: aiRoles, connected: aiConnected });
+  useEffect(() => {
+    aiRuntimeRef.current = { roles: aiRoles, connected: aiConnected };
+  }, [aiRoles, chatgptConnected, claudeConnected, geminiConnected]);
 
   // Onboarding da conexão de IA: logo depois do login do aluno, se nenhuma
   // IA estiver conectada, o Edvid oferece ChatGPT, Claude e Gemini. O clique
@@ -2937,6 +2999,18 @@ export function App() {
                   </div>
                 </div>
               )}
+              {imageGen.status === 'generating' && (
+                <div className="phase2-render-banner" role="status">
+                  <span className="phase2-render-orb" />
+                  <div className="phase2-render-copy">
+                    <strong>Gerando {imageGen.total === 1 ? 'a imagem pedida' : 'as imagens pedidas'}</strong>
+                    <small>{imageGen.done ?? 0}/{imageGen.total ?? 0} prontas · elas entram em edit/imagens/</small>
+                  </div>
+                  <div className="phase2-render-track">
+                    <span style={{ width: `${imageGen.total ? Math.round(((imageGen.done ?? 0) / imageGen.total) * 100) : 0}%` }} />
+                  </div>
+                </div>
+              )}
             </div>
             {!followingOutput && <button type="button" className="scroll-to-latest" onClick={() => { setFollowingOutput(true); const element = messageListRef.current; if (element) element.scrollTop = element.scrollHeight; }}><Icon name="arrowDown" /> Ir para o fim</button>}
             <form className="chat-composer" onSubmit={sendMessage}>
@@ -2944,6 +3018,51 @@ export function App() {
               {activeTurn
                 ? <button className="composer-inline stop" type="button" onClick={interruptTurn} title="Parar"><Icon name="stop" /></button>
                 : <button className="composer-inline send" type="submit" disabled={!canChat || !composer.trim() || sending} title="Enviar (Enter)"><Icon name="enter" /></button>}
+              {/* Preferenciais rápidos: trocam chat/imagem sem abrir as
+                  Configurações. Só listam provedores conectados e capazes. */}
+              <div className="composer-roles">
+                <label className="role-select" title="IA que conduz a conversa">
+                  <span>Chat</span>
+                  <select
+                    value={aiProvider}
+                    onChange={(event) => switchAiProvider(event.target.value as AiProvider)}
+                  >
+                    {(['chatgpt', 'claude', 'gemini'] as AiProvider[])
+                      .filter((provider) => aiConnected[provider] || provider === aiProvider)
+                      .map((provider) => (
+                        <option key={provider} value={provider} disabled={!aiConnected[provider]}>
+                          {provider === 'chatgpt' ? 'ChatGPT' : provider === 'claude' ? 'Claude' : 'Gemini'}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label className="role-select" title="IA que gera as imagens pedidas pela edição">
+                  <span>Imagem</span>
+                  <select
+                    value={aiRoles.image ?? ''}
+                    onChange={(event) => {
+                      if (event.target.value === '__conectar') {
+                        setSettingsTab('conexoes');
+                        setSettingsOpen(true);
+                        return;
+                      }
+                      switchImageProvider((event.target.value || null) as AiProvider | null);
+                    }}
+                  >
+                    {!aiRoles.image && <option value="">Nenhuma</option>}
+                    {(['chatgpt', 'gemini'] as AiProvider[])
+                      .filter((provider) => imageCapable[provider])
+                      .map((provider) => (
+                        <option key={provider} value={provider}>
+                          {provider === 'chatgpt' ? 'ChatGPT' : 'Gemini'}
+                        </option>
+                      ))}
+                    {!imageCapable.chatgpt || !imageCapable.gemini
+                      ? <option value="__conectar">Conectar…</option>
+                      : null}
+                  </select>
+                </label>
+              </div>
             </form>
           </section>
 
@@ -3111,9 +3230,10 @@ export function App() {
                       <div><strong>ChatGPT</strong><small>{accountLabel}</small></div>
                     </div>
                     <div className="settings-row-actions">
-                      {chatgptConnected && (aiProvider === 'chatgpt'
-                        ? <span className="ai-active-badge">Em uso</span>
-                        : <button type="button" className="account-action" onClick={() => switchAiProvider('chatgpt')}>Usar</button>)}
+                      {chatgptConnected && aiProvider === 'chatgpt' && <span className="ai-active-badge">Chat</span>}
+                      {aiRoles.image === 'chatgpt' && <span className="ai-active-badge">Imagem</span>}
+                      {chatgptConnected && aiProvider !== 'chatgpt' &&
+                        <button type="button" className="account-action" onClick={() => switchAiProvider('chatgpt')}>Usar no chat</button>}
                       {chatgptConnected
                         ? <button type="button" className="account-action" onClick={logout}>Sair</button>
                         : (
@@ -3131,9 +3251,9 @@ export function App() {
                       <div><strong>Claude</strong><small>{claudeLabel}</small></div>
                     </div>
                     <div className="settings-row-actions">
-                      {claudeConnected && (aiProvider === 'claude'
-                        ? <span className="ai-active-badge">Em uso</span>
-                        : <button type="button" className="account-action" onClick={() => switchAiProvider('claude')}>Usar</button>)}
+                      {claudeConnected && aiProvider === 'claude' && <span className="ai-active-badge">Chat</span>}
+                      {claudeConnected && aiProvider !== 'claude' &&
+                        <button type="button" className="account-action" onClick={() => switchAiProvider('claude')}>Usar no chat</button>}
                       {claudeConnected
                         ? <button type="button" className="account-action" onClick={() => void claudeLogout()}>Sair</button>
                         : (
@@ -3163,9 +3283,10 @@ export function App() {
                       <div><strong>Gemini</strong><small>{geminiLabel}</small></div>
                     </div>
                     <div className="settings-row-actions">
-                      {geminiConnected && (aiProvider === 'gemini'
-                        ? <span className="ai-active-badge">Em uso</span>
-                        : <button type="button" className="account-action" onClick={() => switchAiProvider('gemini')}>Usar</button>)}
+                      {geminiConnected && aiProvider === 'gemini' && <span className="ai-active-badge">Chat</span>}
+                      {aiRoles.image === 'gemini' && <span className="ai-active-badge">Imagem</span>}
+                      {geminiConnected && aiProvider !== 'gemini' &&
+                        <button type="button" className="account-action" onClick={() => switchAiProvider('gemini')}>Usar no chat</button>}
                       {geminiConnected
                         ? <button type="button" className="account-action" onClick={() => void window.edvidDesktop.disconnectGemini().then(setGeminiAccount)}>Sair</button>
                         : <button type="button" className="account-action" onClick={() => openKeyEntry('gemini')}>Chave</button>}

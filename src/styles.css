@@ -543,4 +543,13 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .ai-ident { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .ai-ident img { width: 22px; height: 22px; flex: none; }
 .ai-active-badge { padding: 3px 7px; border: 1px solid rgba(64,204,180,.4); border-radius: 999px; color: #57d9c1; font-size: 7.5px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase; }
+
+/* Preferenciais rapidos sob o campo de texto: Chat e Imagem. */
+.composer-roles { display: flex; gap: 10px; margin-top: 6px; padding: 0 2px; }
+.role-select { display: flex; align-items: center; gap: 5px; }
+.role-select span { color: #6d7684; font-size: 7.5px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; }
+.role-select select { padding: 3px 5px; border: 1px solid transparent; border-radius: 7px; outline: none; color: #97a1ad; background: transparent; font-size: 8.5px; font-weight: 700; cursor: pointer; -webkit-appearance: none; appearance: none; }
+.role-select select:hover { border-color: var(--stroke); color: var(--text); background: rgba(255,255,255,.04); }
+.role-select select:focus { border-color: rgba(255,119,19,.45); color: var(--text); }
+.role-select option { color: #1c222b; }
 .style-thumb { display: block; width: 100%; height: auto; border-radius: 8px; background: #0c1015; user-select: none; }

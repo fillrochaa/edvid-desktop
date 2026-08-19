@@ -19,6 +19,8 @@ import type {
 const GEMINI_CLI_VERSION = '0.55.1';
 const GEMINI_PACKAGE = '@google/gemini-cli';
 const GEMINI_MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+// Nano Banana: modelo de imagem com free tier na chave do AI Studio.
+const GEMINI_IMAGE_MODEL = 'gemini-2.5-flash-image';
 
 const GEMINI_EXTRA_INSTRUCTIONS = `
 Regras especificas desta integracao:
@@ -195,6 +197,43 @@ export class GeminiAgent {
     this.deps.emitAccount(state);
     void this.ensureRuntime().catch(() => {});
     return state;
+  }
+
+  // Gera uma imagem com o Nano Banana e devolve o PNG. A proporcao vai no
+  // imageConfig; se a API recusar o campo, tenta de novo sem ele.
+  async generateImage(prompt: string, aspectRatio: string | null): Promise<Buffer> {
+    const stored = await this.readStored();
+    if (!stored) throw new Error('Conecte sua chave do Gemini para gerar imagens.');
+    const url = `${GEMINI_MODELS_URL}/${GEMINI_IMAGE_MODEL}:generateContent?key=${encodeURIComponent(stored.apiKey)}`;
+    const call = (withAspect: boolean): Promise<Response> =>
+      this.deps.fetchImpl(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseModalities: ['TEXT', 'IMAGE'],
+            ...(withAspect && aspectRatio ? { imageConfig: { aspectRatio } } : {}),
+          },
+        }),
+      });
+    let response: Response;
+    try {
+      response = await call(Boolean(aspectRatio));
+      if (!response.ok && aspectRatio) response = await call(false);
+    } catch {
+      throw new Error('Sem conexão para gerar a imagem no Gemini.');
+    }
+    const payload = (await response.json().catch(() => ({}))) as {
+      candidates?: Array<{ content?: { parts?: Array<{ inlineData?: { data?: string } }> } }>;
+      error?: { message?: string };
+    };
+    if (!response.ok) {
+      throw new Error(unwrapErrorMessage(payload.error?.message ?? `O Gemini recusou a geração (HTTP ${response.status}).`));
+    }
+    const data = payload.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData?.data;
+    if (!data) throw new Error('O Gemini respondeu sem imagem. Tente reformular o pedido.');
+    return Buffer.from(data, 'base64');
   }
 
   async disconnect(): Promise<GeminiAccountState> {

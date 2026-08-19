@@ -24,12 +24,14 @@ import { mediaKind, mediaMimeType, mediaTier, pickPreviewMedia, resolveByteRange
 import { resolveRuntime, runtimePackKey, type RuntimeResolution } from './runtime';
 import type {
   AiProvider,
+  AiRolesState,
   AppUpdateState,
   ClaudeAccountState,
   CodexApprovalDecision,
   CodexEvent,
   CodexSendMessageInput,
   GeminiAccountState,
+  ImageGenState,
   MemberAuthState,
   Phase2RenderState,
   RuntimePackState,
@@ -1831,12 +1833,15 @@ function getCodexAppServer(): CodexAppServer {
   return codexAppServer;
 }
 
-// --- Provedor de IA ativo e agente Claude ----------------------------------
-// O aluno conecta a propria conta (ChatGPT ou Claude) e escolhe qual conduz a
-// conversa. O provedor fica em settings.json; os eventos de conversa dos dois
-// agentes saem pelo MESMO canal (codex:event) e o chat nao sabe a diferenca.
+// --- Papeis de IA e agente Claude ------------------------------------------
+// O aluno conecta as proprias contas e cada PAPEL tem um provedor: "chat"
+// conduz a conversa, "image" gera as imagens pedidas pela edicao. As regras
+// automaticas moram no renderer (que enxerga todas as contas); o main guarda,
+// persiste e roteia. Os eventos de conversa dos tres agentes saem pelo MESMO
+// canal (codex:event) e o chat nao sabe a diferenca.
 
-let aiProvider: AiProvider = 'chatgpt';
+const AI_PROVIDERS = new Set(['chatgpt', 'claude', 'gemini']);
+let aiRoles: AiRolesState = { chat: 'chatgpt', image: null, chatPinned: false, imagePinned: false };
 let claudeAgent: ClaudeAgent | null = null;
 
 function appSettingsFile(): string {
@@ -1845,19 +1850,51 @@ function appSettingsFile(): string {
 
 async function loadAppSettings(): Promise<void> {
   try {
-    const parsed = JSON.parse(await readFile(appSettingsFile(), 'utf8')) as { aiProvider?: unknown };
-    if (parsed.aiProvider === 'claude' || parsed.aiProvider === 'chatgpt') {
-      aiProvider = parsed.aiProvider;
+    const parsed = JSON.parse(await readFile(appSettingsFile(), 'utf8')) as Record<string, unknown>;
+    // "aiProvider" e o nome antigo (0.9.x-0.10.x), quando so havia o chat.
+    const chat = parsed.chatProvider ?? parsed.aiProvider;
+    if (typeof chat === 'string' && AI_PROVIDERS.has(chat)) aiRoles.chat = chat as AiProvider;
+    if (typeof parsed.imageProvider === 'string' && AI_PROVIDERS.has(parsed.imageProvider)) {
+      aiRoles.image = parsed.imageProvider as AiProvider;
     }
+    aiRoles.chatPinned = parsed.chatPinned === true;
+    aiRoles.imagePinned = parsed.imagePinned === true;
   } catch {
-    // Sem settings ainda: fica o padrao.
+    // Sem settings ainda: ficam os padroes.
   }
 }
 
-async function setAiProvider(provider: AiProvider): Promise<AiProvider> {
-  aiProvider = provider;
-  await writeFile(appSettingsFile(), `${JSON.stringify({ aiProvider: provider }, null, 2)}\n`).catch(() => {});
-  return aiProvider;
+function broadcastAiRoles(): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('ai:roles', aiRoles);
+  }
+}
+
+async function setAiRole(
+  role: 'chat' | 'image',
+  provider: AiProvider | null,
+  pinned: boolean,
+): Promise<AiRolesState> {
+  if (role === 'chat') {
+    if (provider) aiRoles = { ...aiRoles, chat: provider, chatPinned: pinned };
+  } else {
+    aiRoles = { ...aiRoles, image: provider, imagePinned: provider ? pinned : false };
+  }
+  await writeFile(
+    appSettingsFile(),
+    `${JSON.stringify(
+      {
+        chatProvider: aiRoles.chat,
+        imageProvider: aiRoles.image,
+        chatPinned: aiRoles.chatPinned,
+        imagePinned: aiRoles.imagePinned,
+      },
+      null,
+      2,
+    )}\n`,
+  ).catch(() => {});
+  broadcastAiRoles();
+  return aiRoles;
 }
 
 function broadcastClaudeAccount(state: ClaudeAccountState): void {
@@ -1922,6 +1959,133 @@ function getGeminiAgent(): GeminiAgent {
 async function geminiAgentReady(): Promise<GeminiAgent> {
   await requireRuntimePack();
   return getGeminiAgent();
+}
+
+// --- Geracao de imagens pedidas pelo agente --------------------------------
+// O agente de chat escreve edit/imagens/pedidos.json; depois do turno o
+// aplicativo gera cada imagem fora do sandbox com a IA de imagem do aluno
+// (ChatGPT por assinatura via ferramenta do Codex, ou Gemini por chave) e
+// salva em edit/imagens/. Mesmo padrao do render da Fase 2.
+
+const IMAGE_ASPECTS = new Set(['9:16', '1:1', '16:9']);
+let imageGenJob: { directory: string; promise: Promise<ImageGenState> } | null = null;
+let imageGenState: ImageGenState = { status: 'idle' };
+
+function broadcastImageGenState(state: ImageGenState): void {
+  imageGenState = state;
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('image-gen:state', state);
+  }
+}
+
+type ImageRequestEntry = { arquivo: string; prompt: string; proporcao: string | null };
+
+async function readImageRequests(projectDirectory: string): Promise<ImageRequestEntry[]> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(path.join(projectDirectory, 'edit', 'imagens', 'pedidos.json'), 'utf8'),
+    ) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((entry) => {
+      const item = entry as { arquivo?: unknown; prompt?: unknown; proporcao?: unknown };
+      const prompt = asText(item.prompt).trim();
+      // Nome sempre achatado para dentro de edit/imagens (nada de ../).
+      let arquivo = path.basename(asText(item.arquivo).trim());
+      if (!prompt || !arquivo || arquivo.startsWith('.')) return [];
+      if (!/\.(png|jpg|jpeg|webp)$/iu.test(arquivo)) arquivo = `${arquivo}.png`;
+      const proporcao = asText(item.proporcao).trim();
+      return [{ arquivo, prompt, proporcao: IMAGE_ASPECTS.has(proporcao) ? proporcao : null }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function fulfillImageRequests(projectDirectory: string): Promise<ImageGenState> {
+  if (imageGenJob?.directory === projectDirectory) return imageGenJob.promise;
+  const job = (async (): Promise<ImageGenState> => {
+    const imagesDirectory = path.join(projectDirectory, 'edit', 'imagens');
+    const requestsFile = path.join(imagesDirectory, 'pedidos.json');
+    const requests = await readImageRequests(projectDirectory);
+    if (!requests.length) return imageGenState.status === 'generating' ? imageGenState : { status: 'idle' };
+
+    const pending = [] as ImageRequestEntry[];
+    for (const request of requests) {
+      try {
+        await stat(path.join(imagesDirectory, request.arquivo));
+      } catch {
+        pending.push(request);
+      }
+    }
+    if (!pending.length) {
+      await rm(requestsFile, { force: true });
+      return { status: 'idle' };
+    }
+
+    const provider = aiRoles.image;
+    if (!provider) {
+      broadcastCodexEvent({
+        type: 'error',
+        message: `A edição pediu ${pending.length === 1 ? 'uma imagem' : `${pending.length} imagens`}, mas nenhuma IA de imagem está conectada. Conecte o ChatGPT (assinatura) ou uma chave do Gemini em Configurações → Conexões.`,
+      });
+      return { status: 'error', error: 'Nenhuma IA de imagem conectada.' };
+    }
+
+    const failures: string[] = [];
+    let done = 0;
+    broadcastImageGenState({ status: 'generating', total: pending.length, done });
+    for (const request of pending) {
+      const target = path.join(imagesDirectory, request.arquivo);
+      try {
+        if (provider === 'gemini') {
+          const image = await (await geminiAgentReady()).generateImage(request.prompt, request.proporcao);
+          await mkdir(imagesDirectory, { recursive: true });
+          await writeFile(target, image);
+        } else {
+          await (await codexServer()).runUtilityTurn(
+            projectDirectory,
+            [
+              'Use a ferramenta de geração de imagens (skill imagegen) para gerar exatamente esta imagem:',
+              request.prompt,
+              request.proporcao ? `Proporção: ${request.proporcao}.` : '',
+              `Salve o resultado EXATAMENTE em edit/imagens/${request.arquivo} e não crie nem modifique nenhum outro arquivo.`,
+              'Responda com uma única frase curta.',
+            ].filter(Boolean).join('\n'),
+          );
+          await stat(target);
+        }
+        done += 1;
+        broadcastImageGenState({ status: 'generating', total: pending.length, done });
+      } catch (error) {
+        failures.push(`${request.arquivo}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    // Pedidos atendidos saem da fila; os que falharam ficam para a proxima.
+    const remaining = requests.filter((request) => failures.some((failure) => failure.startsWith(`${request.arquivo}:`)));
+    if (remaining.length) {
+      await writeFile(requestsFile, `${JSON.stringify(remaining, null, 2)}\n`).catch(() => {});
+    } else {
+      await rm(requestsFile, { force: true });
+    }
+
+    if (failures.length) {
+      broadcastCodexEvent({
+        type: 'error',
+        message: `Não consegui gerar ${failures.length === 1 ? 'uma imagem' : `${failures.length} imagens`}: ${failures[0]}`,
+      });
+      return { status: 'error', total: pending.length, done, error: failures[0] };
+    }
+    return { status: 'ready', total: pending.length, done };
+  })();
+  const tracked = job.then((state) => {
+    broadcastImageGenState(state);
+    return state;
+  }).finally(() => {
+    if (imageGenJob?.promise === tracked) imageGenJob = null;
+  });
+  imageGenJob = { directory: projectDirectory, promise: tracked };
+  return tracked;
 }
 
 // Valida a chave da OpenAI antes de entregar ao Codex: o app-server aceita
@@ -2194,10 +2358,10 @@ function registerIpcHandlers(): void {
       throw new Error('Escolha a pasta do projeto pelo seletor do Edvid.');
     }
     if (!text) throw new Error('Escreva uma mensagem para o Edvid.');
-    if (aiProvider === 'claude') {
+    if (aiRoles.chat === 'claude') {
       return (await claudeAgentReady()).sendMessage(resolvedProjectDirectory, text);
     }
-    if (aiProvider === 'gemini') {
+    if (aiRoles.chat === 'gemini') {
       return (await geminiAgentReady()).sendMessage(resolvedProjectDirectory, text);
     }
     return (await codexServer()).sendMessage(resolvedProjectDirectory, text);
@@ -2232,10 +2396,27 @@ function registerIpcHandlers(): void {
     },
   );
 
-  ipcMain.handle('ai:provider-get', () => aiProvider);
+  ipcMain.handle('ai:roles-get', () => aiRoles);
 
-  ipcMain.handle('ai:provider-set', (_event, input: { provider?: unknown }) =>
-    setAiProvider(input.provider === 'claude' ? 'claude' : 'chatgpt'));
+  ipcMain.handle(
+    'ai:role-set',
+    (_event, input: { role?: unknown; provider?: unknown; pinned?: unknown }) => {
+      const role = input.role === 'image' ? 'image' : 'chat';
+      const provider =
+        typeof input.provider === 'string' && AI_PROVIDERS.has(input.provider)
+          ? (input.provider as AiProvider)
+          : null;
+      return setAiRole(role, provider, input.pinned === true);
+    },
+  );
+
+  ipcMain.handle('image:fulfill', (_event, input: { directory?: string }) => {
+    const directory = path.resolve(asText(input.directory));
+    if (!selectedProjectDirectories.has(directory)) {
+      throw new Error('Escolha a pasta do projeto pelo seletor do Edvid.');
+    }
+    return fulfillImageRequests(directory);
+  });
 
   ipcMain.handle('claude:account', () => getClaudeAgent().readAccount());
 

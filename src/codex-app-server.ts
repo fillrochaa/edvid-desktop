@@ -71,6 +71,9 @@ Fase 2 — o visual e renderizado pelo Remotion, nunca improvisado:
 - O segments.json tambem tem gerador oficial, e somar os segundos do EDL dessincroniza o zoom dos cortes: use python3 "$EDVID_HELPERS/segments_for_remotion.py" <clipes por corte, em ordem> -o public/segments.json quando existirem clipes separados, ou python3 "$EDVID_HELPERS/segments_for_remotion.py" --edl edit/edl.json --fps <fps do cut> -o public/segments.json quando o corte for um arquivo unico. Nunca edite src/Main.tsx.
 - Os nomes de estilo do briefing sao os mesmos do template: headline outline, card, realce ou misto; legenda karaoke, stacked, scatter, simples, serifada ou classica. Copie a cor escolhida para hook.accent e captions.accent — sao esses campos que pintam realce, misto e a linha serifada da empilhada.
 - Nunca execute remotion render, nem inteiro nem em partes: o Chromium do render nao inicia dentro do sandbox e cada tentativa pediria aprovacao ao usuario. Quando os arquivos de public/ estiverem prontos, encerre o turno com um resumo curto da edicao. O Edvid detecta os dados novos, renderiza sozinho fora do sandbox, mostra o progresso na interface e publica o resultado em edicao/fase_2/. Nao crie renders em out/, nao concatene partes e nao copie arquivos de video para as pastas de saida.
+
+Imagens geradas por IA:
+- Quando a edicao precisar de uma imagem criada do zero (fundo, thumbnail, elemento grafico), NAO tente gerar ou desenhar voce mesmo: escreva o arquivo edit/imagens/pedidos.json com uma lista [{"arquivo": "nome.png", "prompt": "descricao detalhada em ingles", "proporcao": "9:16"}] (proporcao aceita 9:16, 1:1 ou 16:9) e encerre o turno avisando que as imagens foram pedidas. O Edvid gera fora do sandbox com a IA de imagem conectada pelo aluno e salva os arquivos em edit/imagens/. No turno seguinte os arquivos ja estarao la; se nao estiverem, o aluno pode nao ter IA de imagem conectada — siga sem a imagem e avise.
 - Explique apenas o resultado da edicao de forma curta; detalhes tecnicos de execucao pertencem a interface de permissao, nao a conversa.`;
 
 export class CodexAppServer {
@@ -83,6 +86,13 @@ export class CodexAppServer {
   private threadsByProject = new Map<string, string>();
   private activeTurns = new Map<string, string>();
   private activeLoginId: string | null = null;
+  // Threads utilitarias (geracao de imagem): eventos nao chegam ao chat e
+  // aprovacoes sao recusadas na hora — o fluxo sondado nao precisa de nenhuma.
+  private utilityThreads = new Set<string>();
+  private utilityWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+  // Percentual de uso da janela da conta (account/rateLimits/updated): e o
+  // sinal honesto de "limite atingido" para o fallback de provedor.
+  lastRateLimitUsedPercent: number | null = null;
 
   constructor(
     private readonly executable: string,
@@ -170,6 +180,9 @@ export class CodexAppServer {
     this.approvals.clear();
     this.threadsByProject.clear();
     this.activeTurns.clear();
+    for (const waiter of this.utilityWaiters.values()) waiter.reject(error);
+    this.utilityWaiters.clear();
+    this.utilityThreads.clear();
     this.emit({ type: 'error', message: error.message });
   }
 
@@ -217,6 +230,11 @@ export class CodexAppServer {
       method === 'item/commandExecution/requestApproval' ||
       method === 'item/fileChange/requestApproval'
     ) {
+      // Turno utilitario nunca pede nada ao usuario: recusa e segue.
+      if (this.utilityThreads.has(String(params.threadId ?? ''))) {
+        this.send({ id, result: { decision: 'decline' } });
+        return;
+      }
       const kind = method.includes('commandExecution') ? 'command' : 'file-change';
       this.approvals.set(id, { kind });
       const command = typeof params.command === 'string' ? params.command : null;
@@ -245,6 +263,24 @@ export class CodexAppServer {
 
   private handleNotification(method: string, params: Record<string, unknown>): void {
     const threadId = String(params.threadId ?? '');
+    if (method === 'account/rateLimits/updated') {
+      const used = (params.rateLimits as { primary?: { usedPercent?: number } } | undefined)?.primary?.usedPercent;
+      if (typeof used === 'number') this.lastRateLimitUsedPercent = used;
+      return;
+    }
+    if (this.utilityThreads.has(threadId)) {
+      if (method === 'turn/completed') {
+        const turn = params.turn as { status?: string; error?: { message?: string } | null } | undefined;
+        const waiter = this.utilityWaiters.get(threadId);
+        if (!waiter) return;
+        if (turn?.status === 'failed' || turn?.status === 'interrupted') {
+          waiter.reject(new Error(turn?.error?.message || 'O turno de imagem falhou.'));
+        } else {
+          waiter.resolve();
+        }
+      }
+      return;
+    }
     if (method === 'item/agentMessage/delta') {
       this.emit({
         type: 'assistant-delta',
@@ -474,6 +510,46 @@ export class CodexAppServer {
       throw new Error('Este turno nao esta mais ativo.');
     }
     await this.request('turn/interrupt', { threadId, turnId });
+  }
+
+  // Turno unico numa thread propria, invisivel para o chat. E o motor da
+  // geracao de imagens via assinatura do ChatGPT (ferramenta imagegen).
+  async runUtilityTurn(
+    projectDirectory: string,
+    instruction: string,
+    timeoutMs = 300_000,
+  ): Promise<void> {
+    await this.start();
+    const started = await this.request<ThreadStartResponse>('thread/start', {
+      cwd: projectDirectory,
+      approvalPolicy: 'on-request',
+      sandbox: 'workspace-write',
+      serviceName: 'edvid_desktop_imagens',
+    });
+    const threadId = started.thread.id;
+    this.utilityThreads.add(threadId);
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.utilityWaiters.set(threadId, { resolve, reject });
+        timer = setTimeout(() => {
+          reject(new Error('A geração da imagem demorou demais e foi interrompida.'));
+          const turnId = this.activeTurns.get(threadId);
+          if (turnId) void this.request('turn/interrupt', { threadId, turnId }).catch(() => {});
+        }, timeoutMs);
+        this.request<TurnStartResponse>('turn/start', {
+          threadId,
+          input: [{ type: 'text', text: instruction, text_elements: [] }],
+        }).then((response) => {
+          this.activeTurns.set(threadId, response.turn.id);
+        }).catch(reject);
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.utilityThreads.delete(threadId);
+      this.utilityWaiters.delete(threadId);
+      this.activeTurns.delete(threadId);
+    }
   }
 
   async respondToApproval(id: RpcId, decision: CodexApprovalDecision): Promise<void> {

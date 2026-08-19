@@ -184,10 +184,33 @@ export type Phase2RenderState = {
   error?: string;
 };
 
-// Provedor de IA que conduz a conversa. Cada aluno conecta a propria conta
-// (assinatura OU chave de API); o Edvid guarda qual provedor esta ativo e as
-// credenciais de cada um.
+// Provedor de IA. Cada aluno conecta a propria conta (assinatura OU chave de
+// API); o Edvid guarda as credenciais de cada um e QUAL provedor cumpre cada
+// PAPEL: "chat" conduz a conversa; "image" gera as imagens pedidas pela
+// edicao. Claude nao gera imagem; ChatGPT so gera com login de ASSINATURA (a
+// ferramenta do Codex e atrelada a conta ChatGPT, nao a chave de API).
 export type AiProvider = 'chatgpt' | 'claude' | 'gemini';
+
+export type AiRole = 'chat' | 'image';
+
+// "Pinned" = escolha explicita do aluno: as regras automaticas nao mexem em
+// papel fixado enquanto o provedor fixado continuar conectado e capaz.
+export type AiRolesState = {
+  chat: AiProvider;
+  image: AiProvider | null;
+  chatPinned: boolean;
+  imagePinned: boolean;
+};
+
+// Geracao das imagens pedidas pelo agente em edit/imagens/pedidos.json,
+// executada pelo aplicativo fora do sandbox depois do turno (mesmo padrao do
+// render da Fase 2).
+export type ImageGenState = {
+  status: 'idle' | 'generating' | 'ready' | 'error';
+  total?: number;
+  done?: number;
+  error?: string;
+};
 
 // Conta Claude: assinatura Pro/Max (OAuth do proprio Claude Code) ou chave
 // de API da Anthropic. No OAuth o login abre o navegador; "manual" indica
@@ -285,8 +308,11 @@ export type EdvidDesktopApi = {
   loginWithChatGPT: () => Promise<CodexAccountState>;
   cancelChatGPTLogin: () => Promise<CodexAccountState>;
   logoutCodex: () => Promise<CodexAccountState>;
-  getAiProvider: () => Promise<AiProvider>;
-  setAiProvider: (provider: AiProvider) => Promise<AiProvider>;
+  getAiRoles: () => Promise<AiRolesState>;
+  setAiRole: (role: AiRole, provider: AiProvider | null, pinned: boolean) => Promise<AiRolesState>;
+  onAiRoles: (listener: (state: AiRolesState) => void) => () => void;
+  fulfillImageRequests: (directory: string) => Promise<ImageGenState>;
+  onImageGenState: (listener: (state: ImageGenState) => void) => () => void;
   loginCodexWithApiKey: (apiKey: string) => Promise<CodexAccountState>;
   getClaudeAccount: () => Promise<ClaudeAccountState>;
   loginWithClaude: () => Promise<ClaudeAccountState>;

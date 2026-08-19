@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-18 (0.10.0 — três provedores de IA: Gemini via ACP + chave de API nos três)
+Atualizado em: 2026-08-19 (0.11.0 — papéis de IA chat/imagem, geração de imagens pelo app e fallback de limite)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -775,6 +775,45 @@ Arquitetura (`src/claude-agent.ts`, tudo em um módulo):
   `?ia=manual` força o fluxo de colar código ("codigo-errado" simula
   recusa). Chaves com "errada" no texto simulam recusa nos três provedores.
 
+### 13g. Papéis chat/imagem + geração de imagens pelo app (0.11.0)
+
+Papéis (`AiRolesState` em settings.json: chatProvider/imageProvider +
+chatPinned/imagePinned; "aiProvider" antigo migra para chatProvider):
+- As REGRAS AUTOMÁTICAS moram no renderer (que enxerga todas as contas):
+  chat cai para outro provedor conectado quando o preferencial desconecta
+  (estado resolvido primeiro — nunca por corrida de boot); imagem segue a
+  capacidade: ChatGPT por ASSINATURA > Gemini por chave > nada. Escolha
+  explícita (pinned) só é desfeita se o provedor escolhido desconectar.
+  Capacidade de imagem: ChatGPT só com login de assinatura (a ferramenta do
+  Codex é atrelada à conta; chave de API não serve); Claude nunca.
+- Seletores rápidos sob o composer (Chat/Imagem) trocam preferenciais sem
+  abrir Configurações; a aba Conexões mostra chips "Chat"/"Imagem" por
+  provedor e "Usar no chat".
+- Fallback de limite: turno que FALHA com erro de limite/cota (regex sobre a
+  mensagem) e outro chat conectado → troca automática + mensagem de sistema;
+  NUNCA reenvia a mensagem (evita edição dupla). O app-server também emite
+  account/rateLimits/updated (usedPercent) — capturado em
+  lastRateLimitUsedPercent para uso futuro.
+
+Geração de imagens (mesmo padrão da Fase 2 — dados no projeto, app executa
+fora do sandbox):
+- O agente de chat (qualquer provedor) escreve edit/imagens/pedidos.json
+  [{arquivo, prompt, proporcao 9:16|1:1|16:9}] — contrato nas
+  EDVID_INSTRUCTIONS. Depois de cada turno o renderer chama image:fulfill;
+  o main gera as pendentes com a IA de imagem e salva em edit/imagens/;
+  pedidos atendidos saem da fila, falhas ficam e vão ao chat.
+- Backend ChatGPT: runUtilityTurn no CodexAppServer — thread própria
+  invisível ao chat (eventos suprimidos, aprovações auto-recusadas) que
+  instrui a skill imagegen (gpt-image-2, cota da assinatura). SONDADO com o
+  login real: item imageGeneration in_progress→completed, zero aprovações,
+  arquivo salvo. Nomes de arquivo achatados com path.basename (nada de ../).
+- Backend Gemini: generateImage no GeminiAgent — REST
+  models/gemini-2.5-flash-image:generateContent com responseModalities
+  [TEXT,IMAGE] e imageConfig.aspectRatio (retry sem o campo se recusar);
+  inlineData base64 → PNG. Free tier do Nano Banana cobre; validar com
+  chave real na primeira utilização.
+- QA: ?imagens simula a fila (banner de progresso no chat).
+
 ### 13f. Gemini via ACP + chave de API (0.10.0)
 
 Arquitetura (`src/gemini-agent.ts`):
@@ -826,6 +865,14 @@ Arquitetura (`src/gemini-agent.ts`):
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.11.0: papéis de IA e imagens. Papel "chat" e papel "imagem" com regras
+  automáticas (assinatura ChatGPT > chave Gemini para imagem; Claude só
+  chat), pins de escolha manual, seletores rápidos sob o composer e chips
+  por papel nas Conexões. Geração de imagens pelo app fora do sandbox via
+  edit/imagens/pedidos.json: ChatGPT pela skill imagegen do Codex (thread
+  utilitária invisível, sondada com login real) e Gemini pelo Nano Banana
+  (REST). Fallback de limite de uso: turno falhou por cota + outro chat
+  conectado = troca automática com aviso, sem reenvio.
 - 0.10.0: três provedores + chaves de API. Adaptador Gemini sobre o modo ACP
   do CLI oficial (processo longo, sessões por projeto, autoEdit + aprovações
   pela interface, instruções no primeiro turno); chave de API como segundo
