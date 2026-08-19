@@ -82,15 +82,34 @@ async function sha256(filePath) {
   return hash.digest('hex');
 }
 
+// No Windows os gpg de runtime MSYS que aparecem no PATH mutilam caminhos
+// com letra de drive ("/d/a/...C:\\Users\\..."). Usamos DETERMINISTICAMENTE
+// o gpg do MSYS2 (instalado pelo workflow; C:\msys64) com os caminhos
+// convertidos para a forma /c/... que ele entende.
+const isWindowsHost = process.platform === 'win32';
+const windowsGpg = process.env.EDVID_MSYS2_GPG || 'C:\\msys64\\usr\\bin\\gpg.exe';
+
+function gpgPath(value) {
+  if (!isWindowsHost) return value;
+  return value
+    .replace(/^([A-Za-z]):[\\/]/u, (_match, drive) => `/${drive.toLowerCase()}/`)
+    .replaceAll('\\', '/');
+}
+
 function runGpg(homeDirectory, args, options = {}) {
-  return spawnSync('gpg', ['--homedir', homeDirectory, '--batch', ...args], {
+  const command = isWindowsHost ? windowsGpg : 'gpg';
+  const fixedArgs = args.map((argument) =>
+    /^[A-Za-z]:[\\/]/u.test(argument) ? gpgPath(argument) : argument,
+  );
+  return spawnSync(command, ['--homedir', gpgPath(homeDirectory), '--batch', ...fixedArgs], {
     encoding: 'utf8',
     ...options,
   });
 }
 
 function isGpgAvailable() {
-  const result = spawnSync('gpg', ['--version'], { stdio: 'ignore' });
+  const command = isWindowsHost ? windowsGpg : 'gpg';
+  const result = spawnSync(command, ['--version'], { stdio: 'ignore' });
   return result.status === 0;
 }
 

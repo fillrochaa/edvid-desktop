@@ -124,6 +124,14 @@ function checksumFor(checksums, filename) {
 }
 
 async function verifySignedChecksums() {
+  if (process.platform === 'win32') {
+    // O gpg dos runners Windows (MSYS) mutila caminhos com letra de drive
+    // ("/d/a/...C:\\Users\\..."). No Windows o EXECUTAVEL baixado e
+    // verificado pela attestation do GitHub (gh attestation verify, como o
+    // uv) logo apos o download — confianca equivalente, sem gpg.
+    console.log('Windows: verificacao da release via attestation do GitHub (sem gpg).');
+    return;
+  }
   const gpgAvailable = spawnSync('gpg', ['--version'], { stdio: 'ignore' }).status === 0;
   if (!gpgAvailable) {
     throw new Error('GnuPG ausente. Instale `gpg` para verificar a release do yt-dlp.');
@@ -243,6 +251,12 @@ const artifactHash = await ensureVerifiedDownload(
   artifactExpectedHash,
   `yt-dlp ${version} para ${target}`,
 );
+if (process.platform === 'win32') {
+  run('gh', ['attestation', 'verify', artifactPath, '--repo', 'yt-dlp/yt-dlp'], {
+    capture: true,
+  });
+  console.log('Attestation do GitHub verificada para o executavel yt-dlp.');
+}
 const sourceArchiveHash = await ensureVerifiedDownload(
   sourceArchiveName,
   sourceArchivePath,

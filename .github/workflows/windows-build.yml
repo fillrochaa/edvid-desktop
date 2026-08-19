@@ -38,8 +38,8 @@ jobs:
 
       # O FFmpeg compartilhado do TorchCodec compila da fonte 7.1.5 (GPG
       # verificada) com o MSYS2 que ja vem no runner.
-      - name: Toolchain MSYS2 (FFmpeg compartilhado)
-        run: C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-toolchain make diffutils
+      - name: Toolchain MSYS2 (FFmpeg compartilhado + gpg)
+        run: C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-toolchain make diffutils gnupg
 
       # Fontes do FFmpeg e caches do Python/uv sao os passos mais lentos;
       # a chave muda junto com o manifest dos runtimes.
