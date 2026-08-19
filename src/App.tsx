@@ -2361,11 +2361,13 @@ export function App() {
       } else {
         setActiveTurn(null);
         setSending(false);
-        if (event.error) setMessages((current) => [...current, { id: `error:${event.turnId}`, role: 'system', text: event.error ?? '' }]);
-        // Turno falhou por LIMITE de uso e há outro chat conectado: troca o
-        // preferencial sozinha e avisa — mas nunca reenvia a mensagem, para
-        // não executar uma edição duas vezes.
-        if (event.status === 'failed' && event.error && /usage limit|rate.?limit|limite de uso|resource_exhausted|too many requests|\b429\b|quota|exceeded/iu.test(event.error)) {
+        // Limite de uso: o erro cru do provedor (em inglês) nunca chega ao
+        // aluno. Com outro chat conectado, troca o preferencial sozinha e
+        // avisa — mas nunca reenvia a mensagem, para não executar uma edição
+        // duas vezes. Sem alternativa, mostra a mensagem padrão em PT-BR.
+        const hitLimit = event.status === 'failed' && Boolean(event.error)
+          && /usage limit|rate.?limit|limite de uso|resource_exhausted|too many requests|\b429\b|quota|exceeded/iu.test(event.error ?? '');
+        if (hitLimit) {
           const { roles, connected } = aiRuntimeRef.current;
           const names: Record<AiProvider, string> = { chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini' };
           const fallback = (['claude', 'chatgpt', 'gemini'] as AiProvider[])
@@ -2378,7 +2380,15 @@ export function App() {
               role: 'system',
               text: `O ${previous} atingiu o limite de uso. Troquei o chat para o ${names[fallback]} — reenvie a última mensagem para continuar do ponto atual.`,
             }]);
+          } else {
+            setMessages((current) => [...current, {
+              id: `error:${event.turnId}`,
+              role: 'system',
+              text: 'Você chegou ao limite de uso da IA. Tente novamente mais tarde ou conecte outra IA.',
+            }]);
           }
+        } else if (event.error) {
+          setMessages((current) => [...current, { id: `error:${event.turnId}`, role: 'system', text: event.error ?? '' }]);
         }
         void refreshWorkspace();
         // Se o turno mudou os dados da Fase 2, o aplicativo renderiza fora do

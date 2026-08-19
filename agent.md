@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-19 (0.12.2 — timeline imune a improviso de schema: campos desconhecidos com janelas de tempo viram chips de Animações)
+Atualizado em: 2026-08-19 (0.12.3 — login do Claude nos endpoints atuais da Anthropic e mensagem de limite de uso em PT-BR)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -754,23 +754,40 @@ Arquitetura (`src/claude-agent.ts`, tudo em um módulo):
   import() para require() e quebraria o ESM). A instalação dispara em
   segundo plano no login e no boot (conta conectada), para a primeira
   mensagem não esperar npm install.
-- Login OAuth: fluxo PKCE público do próprio Claude Code
-  (claude.ai/oauth/authorize → console.anthropic.com/v1/oauth/token,
-  client_id público 9d1c250a…, escopos org:create_api_key user:profile
-  user:inference). Callback local em `http://localhost:54545/callback`
-  (porta registrada do CLI); porta ocupada → fluxo manual com `code=true`
-  (o site mostra `código#estado` e o aluno cola no app). Refresh
-  automático com margem de 5 min; sessão expirada limpa o arquivo e volta
-  a signed-out. O endpoint de token responde erros ora como OAuth
-  (error_description) ora como API (`{error:{message}}`) — os dois são
-  tratados.
+- Login OAuth: fluxo PKCE público do próprio Claude Code, nos endpoints
+  ATUAIS extraídos das strings do CLI 2.1.235 embutido no SDK:
+  claude.com/cai/oauth/authorize → platform.claude.com/v1/oauth/token
+  (redirect manual platform.claude.com/oauth/code/callback; client_id
+  público 9d1c250a…, escopos org:create_api_key user:profile
+  user:inference). Os endereços legados (claude.ai/oauth/authorize +
+  console.anthropic.com/v1/oauth/token) ainda RENDERIZAM a página de
+  login, mas a troca do código parou de completar — na 0.9.0–0.12.2 o
+  aluno autorizava no site e a conta nunca conectava. Callback local em
+  `http://localhost:54545/callback` (porta registrada do CLI; o servidor
+  do authorize aceita qualquer porta de loopback); porta ocupada → fluxo
+  manual com `code=true` (o site mostra `código#estado` e o aluno cola no
+  app). A página local só anuncia "Login concluído" DEPOIS da troca do
+  token (antes anunciava na hora e mascarava falha de troca); o
+  encerramento derruba conexões keep-alive (closeAllConnections) para a
+  porta 54545 não ficar presa numa nova tentativa. Refresh automático com
+  margem de 5 min; só um refresh RECUSADO (HTTP 400/401) desloga — 429,
+  5xx e falta de rede são transitórios e mantêm os tokens. O endpoint de
+  token responde erros ora como OAuth (error_description) ora como API
+  (`{error:{message}}`) — os dois são tratados. Diário sanitizado em
+  `userData/claude-login.log` (etapas e status HTTP, nunca códigos,
+  tokens ou verifier) para diagnosticar um login que falha à distância.
 - Provas executadas no desenvolvimento (sem conta real): instalação com o
   npm empacotado ok; probe do query com token falso passou TODA a
   validação de opções (init com session e claude-sonnet-5) e falhou
   exatamente na autenticação (401) — com token real é um turno vivo. A
-  página de autorização renderiza o fluxo real no navegador. Lição: o SDK
-  LANÇA depois de um result com erro — extrair a mensagem do result e não
-  deixar o catch sobrescrever.
+  página de autorização renderiza o fluxo real no navegador (nos dois
+  domínios; a diferença dos endpoints aparece só DEPOIS do authorize).
+  Sonda com servidor de token FALSO (fetchImpl injetado) cobre o fluxo
+  inteiro sem conta: URL do authorize, callback com state, corpo da
+  troca, gravação 0600, página verdadeira de sucesso/falha, fluxo manual
+  e semântica do refresh — 24 verificações. Lição: o SDK LANÇA depois de
+  um result com erro — extrair a mensagem do result e não deixar o catch
+  sobrescrever.
 - QA visual: `?ia` abre o app sem nenhuma IA conectada (onboarding);
   `?ia=manual` força o fluxo de colar código ("codigo-errado" simula
   recusa). Chaves com "errada" no texto simulam recusa nos três provedores.
@@ -792,9 +809,12 @@ chatPinned/imagePinned; "aiProvider" antigo migra para chatProvider):
   provedor e "Usar no chat".
 - Fallback de limite: turno que FALHA com erro de limite/cota (regex sobre a
   mensagem) e outro chat conectado → troca automática + mensagem de sistema;
-  NUNCA reenvia a mensagem (evita edição dupla). O app-server também emite
-  account/rateLimits/updated (usedPercent) — capturado em
-  lastRateLimitUsedPercent para uso futuro.
+  NUNCA reenvia a mensagem (evita edição dupla). O erro cru do provedor (em
+  inglês) nunca chega ao aluno: sem alternativa conectada o chat mostra
+  "Você chegou ao limite de uso da IA. Tente novamente mais tarde ou conecte
+  outra IA." (0.12.3; "simular limite" no QA exercita os dois caminhos). O
+  app-server também emite account/rateLimits/updated (usedPercent) —
+  capturado em lastRateLimitUsedPercent para uso futuro.
 
 Geração de imagens (mesmo padrão da Fase 2 — dados no projeto, app executa
 fora do sandbox):
@@ -885,6 +905,19 @@ Arquitetura (`src/gemini-agent.ts`):
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.12.3: dois consertos de uso real. (1) Login do Claude não conectava
+  mesmo com o site dizendo sucesso: os endpoints OAuth da 0.9.0 eram os
+  legados (claude.ai + console.anthropic.com); os atuais foram extraídos
+  das strings do binário do CLI 2.1.235 (claude.com/cai +
+  platform.claude.com) e migrados. A página local agora só diz "Login
+  concluído" depois da troca real do token, a porta 54545 é liberada com
+  closeAllConnections (keep-alive prendia a porta na tentativa seguinte),
+  o refresh só desloga em 400/401 (429/5xx/sem rede mantêm os tokens) e
+  userData/claude-login.log grava as etapas sem segredos. Sonda com
+  servidor de token falso cobre o fluxo de ponta a ponta (24
+  verificações). (2) Limite de uso falava inglês: com outra IA conectada
+  o chat troca sozinho e avisa; sem alternativa mostra "Você chegou ao
+  limite de uso da IA. Tente novamente mais tarde ou conecte outra IA."
 - 0.12.2: timeline imune a improviso de schema. Mesmo com o campo oficial
   animations existindo, um agente registrou a animação num campo INVENTADO
   (creatorInfographics) e a track sumiu de novo — instrução não garante

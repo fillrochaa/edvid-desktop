@@ -20,14 +20,20 @@ import type {
 // segredo). O aluno entra com a conta Claude dele; o token vai para o SDK
 // via CLAUDE_CODE_OAUTH_TOKEN — o caminho documentado para ambientes sem
 // terminal. Nada disso e segredo: e o mesmo fluxo do "claude /login".
-const OAUTH_AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
-const OAUTH_TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
+// Enderecos extraidos do proprio CLI 2.1.235 (o embutido no SDK pinado):
+// com o rebrand Console -> Claude Platform, o authorize de contas Claude.ai
+// mudou para claude.com/cai e o token para platform.claude.com. Os enderecos
+// antigos (claude.ai/oauth/authorize + console.anthropic.com/v1/oauth/token)
+// ainda renderizam a pagina de login, mas a troca do codigo por token parou
+// de completar — o aluno "logava" no site e a conta nunca conectava.
+const OAUTH_AUTHORIZE_URL = 'https://claude.com/cai/oauth/authorize';
+const OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 // Porta de callback registrada do Claude Code. Se estiver ocupada, caimos
 // para o fluxo manual: o site mostra o codigo e o aluno cola no Edvid.
 const OAUTH_CALLBACK_PORT = 54545;
 const OAUTH_REDIRECT_URI = `http://localhost:${OAUTH_CALLBACK_PORT}/callback`;
-const OAUTH_MANUAL_REDIRECT_URI = 'https://console.anthropic.com/oauth/code/callback';
+const OAUTH_MANUAL_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback';
 const OAUTH_SCOPES = 'org:create_api_key user:profile user:inference';
 const OAUTH_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
@@ -61,6 +67,17 @@ const ANTHROPIC_MODELS_URL = 'https://api.anthropic.com/v1/models';
 function maskKey(apiKey: string): string {
   if (apiKey.length <= 10) return `${apiKey.slice(0, 3)}…`;
   return `${apiKey.slice(0, 10)}…${apiKey.slice(-4)}`;
+}
+
+// Erro do endpoint OAuth com o status HTTP anexado: o refresh precisa
+// distinguir "grant recusado" (derruba a sessao) de 429/5xx (transitorio).
+class OauthHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
 }
 
 type PendingLogin = {
@@ -215,6 +232,18 @@ export class ClaudeAgent {
     this.deps.emitAccount(state);
   }
 
+  // Diario do login em userData/claude-login.log, so com etapas e status
+  // HTTP — nunca codigos, tokens ou verifier. E o que permite diagnosticar
+  // um "loguei no site mas nao conectou" sem acesso a maquina do aluno.
+  private loginLog: string[] = [];
+
+  private logLogin(step: string): void {
+    this.loginLog.push(`${new Date().toISOString()} ${step}`);
+    if (this.loginLog.length > 200) this.loginLog.splice(0, this.loginLog.length - 200);
+    const file = path.join(path.dirname(this.deps.authFile), 'claude-login.log');
+    void writeFile(file, `${this.loginLog.join('\n')}\n`).catch(() => {});
+  }
+
   async readAccount(): Promise<ClaudeAccountState> {
     if (this.pendingLogin) return this.lastAccount;
     const stored = await this.readStored();
@@ -268,6 +297,11 @@ export class ClaudeAgent {
 
     login.server = await this.bindCallbackServer(login);
     login.manual = !login.server;
+    this.logLogin(
+      login.manual
+        ? `inicio do login: porta ${OAUTH_CALLBACK_PORT} ocupada, fluxo manual (colar codigo)`
+        : `inicio do login: aguardando navegador em localhost:${OAUTH_CALLBACK_PORT}`,
+    );
     login.timer = setTimeout(() => {
       if (this.pendingLogin === login) {
         this.closeLogin();
@@ -295,6 +329,10 @@ export class ClaudeAgent {
   }
 
   private bindCallbackServer(login: PendingLogin): Promise<Server | null> {
+    const escapeHtml = (text: string): string =>
+      text.replace(/[&<>"']/gu, (char) => `&#${char.charCodeAt(0)};`);
+    const page = (title: string, detail: string): string =>
+      `<meta charset="utf-8"><body style="font-family:sans-serif;background:#0d1117;color:#e6e8ec;display:grid;place-items:center;height:100vh"><div style="text-align:center;max-width:32rem;padding:0 1rem"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(detail)}</p></div>`;
     return new Promise((resolve) => {
       const server = createServer((request, response) => {
         const url = new URL(request.url ?? '/', OAUTH_REDIRECT_URI);
@@ -304,16 +342,34 @@ export class ClaudeAgent {
         }
         const code = url.searchParams.get('code') ?? '';
         const returnedState = url.searchParams.get('state') ?? '';
-        const ok = Boolean(code) && returnedState === login.state;
-        response.writeHead(ok ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8' });
-        response.end(
-          ok
-            ? '<meta charset="utf-8"><body style="font-family:sans-serif;background:#0d1117;color:#e6e8ec;display:grid;place-items:center;height:100vh"><div style="text-align:center"><h2>Login concluído</h2><p>Pode fechar esta aba e voltar para o Edvid.</p></div>'
-            : '<meta charset="utf-8"><body style="font-family:sans-serif">Requisição de login inválida. Volte ao Edvid e tente de novo.',
-        );
-        if (ok && this.pendingLogin === login) {
-          void this.completeLogin(code, login.state, OAUTH_REDIRECT_URI, login.verifier);
+        const valid = Boolean(code) && returnedState === login.state && this.pendingLogin === login;
+        if (!valid) {
+          this.logLogin(
+            `callback invalido (codigo ${code ? 'presente' : 'ausente'}, state ${returnedState === login.state ? 'confere' : 'diverge'}, login ${this.pendingLogin === login ? 'ativo' : 'encerrado'})`,
+          );
+          response.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+          response.end(page('Requisição de login inválida', 'Volte ao Edvid e tente de novo.'));
+          return;
         }
+        this.logLogin('callback do navegador recebido (state confere); trocando codigo por token');
+        // A pagina so anuncia sucesso DEPOIS da troca do token: antes ela
+        // dizia "Login concluído" na hora e, se a troca falhasse em seguida,
+        // o aluno via sucesso no navegador com a conta ainda desconectada.
+        // O login so e encerrado quando a resposta chega ao navegador — o
+        // closeAllConnections do encerramento derrubaria esta propria resposta.
+        void this.completeLogin(code, login.state, OAUTH_REDIRECT_URI, login.verifier).then((result) => {
+          if (result.ok) {
+            response.once('close', () => {
+              if (this.pendingLogin === login) this.closeLogin();
+            });
+          }
+          response.writeHead(result.ok ? 200 : 502, { 'Content-Type': 'text/html; charset=utf-8', Connection: 'close' });
+          response.end(
+            result.ok
+              ? page('Login concluído', 'Pode fechar esta aba e voltar para o Edvid.')
+              : page('O login não terminou', `${result.error ?? 'Erro inesperado.'} Volte ao Edvid e tente de novo.`),
+          );
+        });
       });
       server.once('error', () => resolve(null));
       server.listen(OAUTH_CALLBACK_PORT, '127.0.0.1', () => resolve(server));
@@ -329,7 +385,9 @@ export class ClaudeAgent {
       this.broadcast({ ...this.lastAccount, status: 'waiting-for-browser', manual: login.manual, error: 'Cole o código completo mostrado no site.' });
       return this.lastAccount;
     }
-    await this.completeLogin(code, pastedState || login.state, OAUTH_MANUAL_REDIRECT_URI, login.verifier);
+    this.logLogin('codigo manual colado; trocando codigo por token');
+    const result = await this.completeLogin(code, pastedState || login.state, OAUTH_MANUAL_REDIRECT_URI, login.verifier);
+    if (result.ok) this.closeLogin();
     return this.lastAccount;
   }
 
@@ -338,7 +396,7 @@ export class ClaudeAgent {
     state: string,
     redirectUri: string,
     verifier: string,
-  ): Promise<void> {
+  ): Promise<{ ok: boolean; error?: string }> {
     const manual = this.pendingLogin?.manual ?? false;
     try {
       const tokens = await this.exchangeToken({
@@ -350,18 +408,21 @@ export class ClaudeAgent {
         code_verifier: verifier,
       });
       await this.writeStored(tokens);
-      this.closeLogin();
+      this.logLogin(`login concluido: tokens gravados (conta ${tokens.email ? 'com e-mail' : 'sem e-mail no retorno'})`);
       this.broadcast({ status: 'signed-in', email: tokens.email, mode: 'oauth' });
       // Deixa o motor pronto em segundo plano: a primeira mensagem do aluno
       // nao deveria esperar um npm install.
       void this.ensureRuntime().catch(() => {});
+      return { ok: true };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       this.broadcast({
         status: 'waiting-for-browser',
         email: null,
         manual,
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
       });
+      return { ok: false, error: message };
     }
   }
 
@@ -376,6 +437,7 @@ export class ClaudeAgent {
         body: JSON.stringify(body),
       });
     } catch {
+      this.logLogin(`troca de token (${body.grant_type}): sem conexao com ${OAUTH_TOKEN_URL}`);
       throw new Error('Sem conexão para concluir o login do Claude. Tente de novo.');
     }
     const payload = (await response.json().catch(() => ({}))) as {
@@ -394,8 +456,10 @@ export class ClaudeAgent {
         (typeof payload.error === 'string' && payload.error) ||
         (payload.error && typeof payload.error === 'object' && typeof payload.error.message === 'string' && payload.error.message) ||
         'O Claude recusou o login. Tente de novo.';
-      throw new Error(detail);
+      this.logLogin(`troca de token (${body.grant_type}): HTTP ${response.status} — ${detail}`);
+      throw new OauthHttpError(detail, response.status);
     }
+    this.logLogin(`troca de token (${body.grant_type}): HTTP ${response.status} ok`);
     const previousEmail = this.stored && this.stored.mode !== 'api-key' ? this.stored.email : null;
     return {
       mode: 'oauth',
@@ -411,6 +475,9 @@ export class ClaudeAgent {
     this.pendingLogin = null;
     if (!login) return;
     if (login.timer) clearTimeout(login.timer);
+    // Sem derrubar as conexoes keep-alive do navegador, a porta 54545 fica
+    // presa e a PROXIMA tentativa de login cairia para o fluxo manual.
+    login.server?.closeAllConnections();
     login.server?.close();
   }
 
@@ -421,6 +488,7 @@ export class ClaudeAgent {
 
   async logout(): Promise<ClaudeAccountState> {
     this.closeLogin();
+    this.logLogin('logout: tokens removidos');
     await this.writeStored(null);
     this.sessionsByProject.clear();
     this.threadsByProject.clear();
@@ -451,13 +519,18 @@ export class ClaudeAgent {
           await this.writeStored(tokens);
           return tokens.accessToken;
         } catch (error) {
-          const network = error instanceof Error && error.message.startsWith('Sem conexão');
-          if (!network) {
+          // So um refresh de fato RECUSADO (400/401) derruba a sessao; um
+          // 429/5xx ou queda de rede e transitorio e mantem os tokens para a
+          // proxima tentativa — deslogar o aluno por um soluço do servidor
+          // custaria um novo login inteiro.
+          const rejected =
+            error instanceof OauthHttpError && (error.status === 400 || error.status === 401);
+          if (rejected) {
             await this.writeStored(null);
             this.broadcast({ status: 'signed-out', email: null });
             throw new Error('Sua sessão do Claude expirou. Entre de novo em Configurações.');
           }
-          throw error;
+          throw error instanceof Error ? error : new Error(String(error));
         } finally {
           this.refreshJob = null;
         }

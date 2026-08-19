@@ -335,6 +335,19 @@ export function createQaBrowserApi(): EdvidDesktopApi {
       turnNumber += 1;
       const threadId = 'qa-thread';
       const turnId = `qa-turn-${turnNumber}`;
+      // "simular limite" reproduz o erro cru de cota (em inglês) que o
+      // provedor devolve, para validar a mensagem PT-BR e o fallback.
+      if (/simular limite/iu.test(text)) {
+        window.setTimeout(() => emit({ type: 'turn-state', threadId, turnId, status: 'started' }), 20);
+        window.setTimeout(() => emit({
+          type: 'turn-state',
+          threadId,
+          turnId,
+          status: 'failed',
+          error: 'RESOURCE_EXHAUSTED: You exceeded your current quota, please check your plan and billing details.',
+        }), 90);
+        return { threadId, turnId };
+      }
       const response = /inicie a edição|corte limpo/iu.test(text) &&
         !/oficialmente aprovado|j-cut/iu.test(text)
         ? cleanCutQaResponse

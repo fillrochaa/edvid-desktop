@@ -2564,7 +2564,8 @@ function registerIpcHandlers(): void {
   ipcMain.handle('claude:login', async () => {
     const login = await getClaudeAgent().startLogin();
     const authUrl = new URL(login.authUrl);
-    if (authUrl.protocol !== 'https:' || authUrl.origin !== 'https://claude.ai') {
+    // claude.com/cai e o authorize atual de contas Claude.ai (CLI 2.1.x).
+    if (authUrl.protocol !== 'https:' || authUrl.origin !== 'https://claude.com') {
       throw new Error('Endereço de login do Claude inesperado.');
     }
     await shell.openExternal(login.authUrl);
