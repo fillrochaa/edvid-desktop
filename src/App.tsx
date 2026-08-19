@@ -77,6 +77,7 @@ import {
   deleteClipLeaveGap,
   deriveSegments,
   edlRangesFromModel,
+  modelRemovesMaterial,
   modelsEqual,
   nextProgrammeIndexAfter,
   playbackProgramme,
@@ -262,6 +263,25 @@ function Icon({ name }: { name: IconName }) {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// Erro de turno vindo do provedor: nunca mostrar JSON cru nem inglês no chat.
+// Extrai a mensagem interna quando o texto é um corpo de erro da API e traduz
+// os casos conhecidos; o resto passa adiante como veio.
+function friendlyAiError(raw: string): string {
+  let text = raw.trim();
+  if (text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text) as { error?: { message?: string }; message?: string };
+      text = parsed.error?.message ?? parsed.message ?? text;
+    } catch {
+      // Não era JSON completo: segue com o texto original.
+    }
+  }
+  if (/model is not supported|unsupported model|model_not_found|invalid model/iu.test(text)) {
+    return 'O modelo de IA desta conta mudou e esta versão do Edvid ainda não o acompanha. Atualize o Edvid e tente de novo.';
+  }
+  return text;
 }
 
 function formatTime(seconds: number): string {
@@ -544,7 +564,12 @@ function EditorWorkspace({
 
   // Com edições pendentes o render deixa de corresponder ao modelo; o preview
   // passa a mapear a timeline para os arquivos-fonte, sem render completo.
-  const mapped = dirty && programme.length > 0;
+  // O espelho pré-corte de pasta com vários vídeos também é mapeado: o
+  // media.url é só um dos arquivos, e a sequência inteira vive nas fontes.
+  const sourceMirror =
+    media?.kind === 'source' &&
+    programme.some((segment) => segment.sourceId !== PREVIEW_SOURCE_ID);
+  const mapped = (dirty || sourceMirror) && programme.length > 0;
   mappedRef.current = mapped;
   programmeRef.current = programme;
   const effectiveDuration = mapped ? modelDuration : duration || timelineDuration || modelDuration;
@@ -1506,7 +1531,9 @@ function EditorWorkspace({
 
       <section className="timeline-section">
         <div className="timeline-toolbar slim">
-          {mapped && <span className="mapped-badge" title="O preview mostra as edições ainda não renderizadas">Prévia das edições</span>}
+          {mapped && (dirty
+            ? <span className="mapped-badge" title="O preview mostra as edições ainda não renderizadas">Prévia das edições</span>
+            : <span className="mapped-badge" title="O preview toca os vídeos da pasta em sequência, na ordem da limpeza">Vídeos em sequência</span>)}
           <div className="history-buttons" aria-label="Histórico de edições">
             <button
               type="button"
@@ -2045,14 +2072,28 @@ export function App() {
     ? `Chave ${geminiAccount.maskedKey} conectada`
     : 'Gemini desconectado';
   const activeApproval = approvals[0] ?? null;
+  // Evidência de corte REAL, verificada pelo aplicativo — nenhum gate de
+  // aprovação (nem o ancorado em mensagem, nem o fixo) aparece sem ela. Três
+  // condições: o preview toca um render de edit/ (clean-cut), o modelo vem de
+  // EDL com fontes reais e o corte removeu material de fato. Um texto do
+  // agente dizendo "aprova o corte?" com a transcrição quebrada (aconteceu no
+  // mac e no Windows) não abre mais botões de Aprovado/J-Cut.
+  const realCleanCutReady = useMemo(() => {
+    const model = workspace?.timelineModel;
+    if (workspace?.media?.kind !== 'clean-cut' || !model) return false;
+    const durations = Object.fromEntries(
+      (workspace.sources ?? []).map((source) => [source.id, source.duration]),
+    );
+    return modelRemovesMaterial(model, durations);
+  }, [workspace]);
   const pendingCutApprovalId = useMemo(
-    () => (styleApplied ? null : [...messages].reverse().find((message) => (
+    () => (styleApplied || !realCleanCutReady ? null : [...messages].reverse().find((message) => (
       message.role === 'assistant' &&
       message.id !== handledCutApprovalId &&
       !message.id.startsWith('style-gate:') &&
       asksForCleanCutApproval(message.text)
     ))?.id ?? null),
-    [handledCutApprovalId, messages, styleApplied],
+    [handledCutApprovalId, messages, styleApplied, realCleanCutReady],
   );
   // Rede de segurança: se o preview já é um corte limpo não aprovado mas
   // NENHUMA mensagem casou com a detecção (o agente fraseia como quiser), o
@@ -2061,12 +2102,7 @@ export function App() {
     !pendingCutApprovalId &&
     !handledCutApprovalId &&
     !styleApplied &&
-    workspace?.media?.kind === 'clean-cut' &&
-    // So um corte de VERDADE abre o gate: o modelo migrado do EDL referencia
-    // os arquivos-fonte reais. Um video solto em edit/ sem EDL (ex.: turno em
-    // que o corte FALHOU) nao pode oferecer "Aprovado" — aconteceu no Windows
-    // com o WhisperX indisponivel.
-    workspace?.timelineModel?.clips.some((clip) => clip.sourceId !== PREVIEW_SOURCE_ID) &&
+    realCleanCutReady &&
     !activeTurn &&
     !sending &&
     messages.some((message) => message.role === 'assistant'),
@@ -2469,7 +2505,7 @@ export function App() {
             }]);
           }
         } else if (event.error) {
-          setMessages((current) => [...current, { id: `error:${event.turnId}`, role: 'system', text: event.error ?? '' }]);
+          setMessages((current) => [...current, { id: `error:${event.turnId}`, role: 'system', text: friendlyAiError(event.error ?? '') }]);
         }
         void refreshWorkspace();
         // Se o turno mudou os dados da Fase 2, o aplicativo renderiza fora do
@@ -2499,7 +2535,7 @@ export function App() {
     }
     if (event.type === 'error') {
       setSending(false);
-      setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: event.message }]);
+      setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: friendlyAiError(event.message) }]);
     }
   }
 

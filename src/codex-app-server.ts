@@ -51,6 +51,14 @@ type LoginStartResponse =
 type ThreadStartResponse = { thread: { id: string } };
 type TurnStartResponse = { turn: { id: string } };
 
+// Modelo fixo do chat. O default do CLI 0.147.0 e gpt-5.6-sol (isDefault no
+// model/list), que o backend recusa com 400 em contas ChatGPT. O catalogo do
+// proprio binario aponta gpt-5.6-terra como sucessor do antigo padrao
+// (upgrade de gpt-5.4), e a sonda confirmou no rollout que tanto o config.toml
+// quanto o parametro de thread/start cravam o modelo. allowProviderModelFallback
+// deixa o CLI degradar para o default se um dia o terra for aposentado.
+const CODEX_CHAT_MODEL = 'gpt-5.6-terra';
+
 // Compartilhadas com o adaptador Claude: o contrato com a interface e o
 // mesmo seja qual for o provedor de IA que conduz a conversa.
 export const EDVID_INSTRUCTIONS = `Voce e o agente de edicao do Edvid Desktop. Converse em portugues do Brasil e trate a pasta do projeto como a unica area de trabalho do video. Preserve sempre os arquivos originais. Antes de uma edicao completa, faca primeiro o corte limpo guiado pelo audio e obtenha aprovacao do usuario; depois aplique visuais, legendas, trilha e acabamento.
@@ -59,6 +67,8 @@ Contrato obrigatorio com a interface do Edvid:
 - O preview reproduz automaticamente o render mais recente que estiver dentro de edit/ ou edicao/. Grave todo resultado nessas pastas e nunca inclua no chat caminhos absolutos, URLs file:// ou links Markdown para arquivos locais.
 - Arquivos intermediarios (sem estilo, temporarios, partes) devem ter no nome uma dessas marcas: tmp, temp, parte, chunk, raw ou sem_estilo. Sem isso o preview pode exibir um rascunho no lugar do resultado.
 - Depois de qualquer render que altere cortes ou duracao, crie ou atualize edit/edl.json antes de responder. Use ranges com um item para cada cena mantida (beat, start e end nos tempos da fonte). Esse EDL e o que permite a timeline desenhar blocos e cortes reais.
+- CORTE LIMPO exige transcricao real: rode o WhisperX antes de cortar e derive os ranges dela. Se a transcricao falhar, PARE — explique o problema em uma frase e nao crie edit/edl.json, nao renderize corte nenhum e nao peca aprovacao. Um EDL que devolve o video inteiro sem remover nada NAO e corte limpo e nunca deve ser apresentado como pronto: a interface so mostra o botao de Aprovado quando material foi removido de verdade.
+- Quando a pasta tiver mais de um video-fonte, o corte limpo cobre TODOS eles, na ordem alfabetica natural dos nomes (a mesma da timeline): transcreva cada arquivo, corte cada um e concatene tudo num render unico, com edit/edl.json declarando o mapa sources e um range por cena mantida de cada arquivo.
 - J-CUT NAO E TAREFA SUA: o Edvid aplica e reaplica o J-cut sozinho, fora do sandbox, remontando apenas o audio do corte (o video fica intacto). Nunca antecipe audio por conta propria, nao escreva o campo jcut_timeline no EDL e nao apague edit/jcut.json nem arquivos *-sem-jcut-tmp* — sao o estado e o backup dessa aplicacao.
 - Node, npm, FFmpeg, FFprobe, uv, yt-dlp, Python e WhisperX ja estao empacotados e disponiveis no PATH. Nunca crie uma .venv e nunca execute pip install. No Windows os mesmos comandos valem (python3 existe no PATH); referencie a pasta de helpers com a variavel de ambiente EDVID_HELPERS na sintaxe do seu shell (PowerShell: $env:EDVID_HELPERS).
 - Para transcrever use python3 -m whisperx com o modelo indicado em EDVID_WHISPER_MODEL. Esse modelo ja esta baixado no cache do aplicativo e o ambiente roda offline: nao baixe modelos, nao mude o cache e nao defina HF_HOME, XDG_CACHE_HOME nem MPLCONFIGDIR, que ja vem configurados. Se um modelo diferente for necessario, explique ao usuario em vez de tentar baixar.
@@ -116,6 +126,9 @@ export class CodexAppServer {
       .join(', ');
     const config = [
       '# Gerado pelo Edvid Desktop. Alteracoes manuais sao sobrescritas.',
+      // Chave de topo: precisa vir ANTES de qualquer [secao], senao o TOML a
+      // engole como chave da secao e o pin nao vale.
+      `model = ${JSON.stringify(CODEX_CHAT_MODEL)}`,
       '[sandbox_workspace_write]',
       'network_access = false',
       `writable_roots = [${roots}]`,
@@ -356,6 +369,9 @@ export class CodexAppServer {
     }
 
     if (method === 'error') {
+      // Com turno ativo o mesmo erro chega de novo em turn/completed; emitir
+      // aqui tambem duplicaria a mensagem no chat.
+      if (threadId && this.activeTurns.has(threadId)) return;
       const error = params.error as { message?: string } | undefined;
       this.emit({ type: 'error', message: error?.message ?? 'O Codex encontrou um erro.' });
     }
@@ -495,6 +511,8 @@ export class CodexAppServer {
         sandbox: 'workspace-write',
         serviceName: 'edvid_desktop',
         developerInstructions: EDVID_INSTRUCTIONS,
+        model: CODEX_CHAT_MODEL,
+        allowProviderModelFallback: true,
       });
       threadId = started.thread.id;
       this.threadsByProject.set(projectDirectory, threadId);
@@ -529,6 +547,8 @@ export class CodexAppServer {
       approvalPolicy: 'on-request',
       sandbox: 'workspace-write',
       serviceName: 'edvid_desktop_imagens',
+      model: CODEX_CHAT_MODEL,
+      allowProviderModelFallback: true,
     });
     const threadId = started.thread.id;
     this.utilityThreads.add(threadId);

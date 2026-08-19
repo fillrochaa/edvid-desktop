@@ -36,6 +36,8 @@ try {
     edlRangesFromModel,
     migrateEdlToModel,
     modelFromSegments,
+    modelFromSourceFiles,
+    modelRemovesMaterial,
     modelsEqual,
     playbackProgramme,
     programmeIndexAt,
@@ -273,7 +275,58 @@ try {
   near(clipEnd(sortedTrackClips(fallback, VIDEO_TRACK_ID)[1]), 7.3);
   near(clipDuration(sortedTrackClips(fallback, VIDEO_TRACK_ID)[0]), 3.2);
 
-  console.log('test:timeline-model ok — migração, razor, trim, delete, programa e ranges validados.');
+  // --- Espelho pré-corte de pasta com vários vídeos ---
+  const mirror = modelFromSourceFiles(
+    [
+      { id: 'IMG_0001.MOV', label: 'IMG_0001.MOV', duration: 16.13 },
+      { id: 'IMG_0002.MOV', label: 'IMG_0002.MOV', duration: 12.4 },
+    ],
+    30,
+  );
+  assert.ok(mirror);
+  const mirrorClips = sortedTrackClips(mirror, VIDEO_TRACK_ID);
+  assert.equal(mirrorClips.length, 2);
+  assert.equal(mirrorClips[0].sourceId, 'IMG_0001.MOV');
+  assert.equal(mirrorClips[1].sourceId, 'IMG_0002.MOV');
+  near(mirrorClips[1].timelineStart, 16.13);
+  near(timelineModelDuration(mirror), 28.53);
+  const mirrorProgramme = playbackProgramme(mirror);
+  assert.equal(mirrorProgramme[0].sourceId, 'IMG_0001.MOV');
+  assert.equal(mirrorProgramme.at(-1).sourceId, 'IMG_0002.MOV');
+  near(mirrorProgramme.at(-1).sourceIn, 0);
+  assert.ok(modelFromSourceFiles([], 30) === null);
+  assert.ok(modelFromSourceFiles([{ id: 'A.MOV', label: 'A.MOV', duration: 0 }], 30) === null);
+
+  // --- Evidência de corte real (gate de aprovação) ---
+  const durations = { 'IMG_0001.MOV': 16.13, 'IMG_0002.MOV': 12.4 };
+  // Corte de verdade: mantém 10,7 s de 16,13 s.
+  const realCut = modelFromSegments(
+    [
+      { label: 'HOOK', start: 0.7, duration: 3.2 },
+      { label: 'SOLUÇÃO', start: 6.2, duration: 7.5 },
+    ],
+    30,
+  );
+  realCut.clips = realCut.clips.map((clip) => ({ ...clip, sourceId: 'IMG_0001.MOV' }));
+  assert.equal(modelRemovesMaterial(realCut, durations), true);
+  // Corte inventado: devolve os vídeos inteiros — nada foi removido.
+  assert.equal(modelRemovesMaterial(mirror, durations), false);
+  // Clipes no preview (corte falhou): sem fonte real, sem evidência.
+  const previewOnly = modelFromSegments([{ label: 'Cena', start: 0, duration: 9 }], 30);
+  assert.equal(modelRemovesMaterial(previewOnly, durations), false);
+  // Fonte sem duração conhecida nunca vira evidência.
+  assert.equal(modelRemovesMaterial(realCut, {}), false);
+  // Multi-fonte: manter um arquivo inteiro e cortar o outro conta como corte.
+  const multiCut = modelFromSourceFiles(
+    [
+      { id: 'IMG_0001.MOV', label: 'IMG_0001.MOV', duration: 16.13 },
+      { id: 'IMG_0002.MOV', label: 'IMG_0002.MOV', duration: 11.0 },
+    ],
+    30,
+  );
+  assert.equal(modelRemovesMaterial(multiCut, durations), true);
+
+  console.log('test:timeline-model ok — migração, razor, trim, delete, programa, espelho multi-fonte, evidência de corte e ranges validados.');
 } finally {
   rmSync(outDir, { recursive: true, force: true });
 }

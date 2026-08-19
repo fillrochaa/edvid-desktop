@@ -281,6 +281,80 @@ export function modelFromSegments(
   return { version: 1, fps: Math.max(1, Math.round(fps || 30)), tracks: defaultTracks(), clips };
 }
 
+// Espelho pré-corte de uma pasta com vários vídeos: um clipe por arquivo, em
+// sequência, cada um referenciando a própria fonte. É o que a timeline mostra
+// antes do corte limpo existir — todos os vídeos, na ordem em que serão
+// limpos, e o preview mapeado toca um após o outro.
+export function modelFromSourceFiles(
+  files: { id: string; label: string; duration: number }[],
+  fps: number,
+): TimelineModel | null {
+  const valid = files.filter((file) => (
+    file.id.length > 0 && Number.isFinite(file.duration) && file.duration > MIN_CLIP_DURATION
+  ));
+  if (valid.length === 0 || valid.length > MAX_CLIPS / 2) return null;
+  const clips: TimelineClip[] = [];
+  let cursor = 0;
+  valid.forEach((file, index) => {
+    const ordinal = String(index + 1).padStart(3, '0');
+    const linkId = `link-${ordinal}`;
+    const start = round3(cursor);
+    clips.push(
+      makeClip({
+        id: `v-${ordinal}`,
+        trackId: VIDEO_TRACK_ID,
+        linkId,
+        label: file.label,
+        sourceId: file.id,
+        sourceIn: 0,
+        sourceOut: round3(file.duration),
+        timelineStart: start,
+      }),
+      makeClip({
+        id: `a-${ordinal}`,
+        trackId: VOICE_TRACK_ID,
+        linkId,
+        label: file.label,
+        sourceId: file.id,
+        sourceIn: 0,
+        sourceOut: round3(file.duration),
+        timelineStart: start,
+      }),
+    );
+    cursor += file.duration;
+  });
+  return { version: 1, fps: Math.max(1, Math.round(fps || 30)), tracks: defaultTracks(), clips };
+}
+
+// Evidência de corte de verdade: o modelo mantém MENOS material do que as
+// fontes têm. Um EDL que devolve os vídeos inteiros (o "corte" inventado
+// quando a transcrição falha) não passa aqui — e fonte sem duração conhecida
+// também não conta como evidência.
+export function modelRemovesMaterial(
+  model: TimelineModel,
+  sourceDurations: Record<string, number>,
+  toleranceSeconds = 0.5,
+): boolean {
+  const videoClips = sortedTrackClips(model, VIDEO_TRACK_ID).filter(
+    (clip) => clip.enabled && clip.sourceId !== PREVIEW_SOURCE_ID,
+  );
+  if (videoClips.length === 0) return false;
+  const keptBySource = new Map<string, number>();
+  for (const clip of videoClips) {
+    const span = Math.max(0, clip.sourceOut - clip.sourceIn);
+    keptBySource.set(clip.sourceId, (keptBySource.get(clip.sourceId) ?? 0) + span);
+  }
+  let total = 0;
+  let kept = 0;
+  for (const [sourceId, keptSpan] of keptBySource) {
+    const duration = sourceDurations[sourceId];
+    if (!Number.isFinite(duration) || (duration as number) <= 0) return false;
+    total += duration as number;
+    kept += Math.min(keptSpan, duration as number);
+  }
+  return kept < total - toleranceSeconds;
+}
+
 // Segmentos derivados para consumidores legados (marcadores de corte, resumo).
 export function deriveSegments(model: TimelineModel): ProjectTimelineSegment[] {
   return sortedTrackClips(model, VIDEO_TRACK_ID)

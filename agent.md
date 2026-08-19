@@ -180,6 +180,22 @@ ChatGPT (Codex App Server):
 - O Codex usa um `CODEX_HOME` próprio dentro dos dados do Edvid.
 - O fluxo já suporta `account/login/start`, cancelamento, logout, criação de
   thread, envio de turnos, streaming e interrupção.
+- MODELO FIXO (0.13.6): o default do CLI 0.147.0 é `gpt-5.6-sol` (`isDefault`
+  no `model/list`), que o backend recusa com 400 em conta ChatGPT ("The
+  'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT
+  account" — visto na máquina de aluno). O Edvid crava `gpt-5.6-terra`
+  (`CODEX_CHAT_MODEL`), o sucessor oficial do antigo padrão (o catálogo do
+  binário aponta upgrade de `gpt-5.4` → terra), em DOIS níveis: `model = "…"`
+  no topo do config.toml gerado (chave de topo tem de vir ANTES de qualquer
+  `[secao]`, senão o TOML a engole como chave da seção — esse era o bug da
+  primeira sonda) e `model` + `allowProviderModelFallback: true` no
+  `thread/start` (chat e thread utilitária de imagem). Sonda comprovou nos
+  rollouts (`CODEX_HOME/sessions/**/rollout-*.jsonl`, gravados no primeiro
+  turno) que sem pin a sessão usa sol e com qualquer um dos pins usa terra.
+  Erros de turno agora passam por `friendlyAiError` no App (extrai a message
+  do JSON cru e traduz "model is not supported" para PT-BR) e a notificação
+  `error` com turno ativo não vira mais mensagem duplicada no chat (o mesmo
+  texto chega de novo em `turn/completed`).
 
 Claude (Agent SDK — detalhes na seção 13e):
 - Login OAuth PKCE do próprio Claude Code (cliente público, porta de callback
@@ -286,6 +302,18 @@ Não depender do volume externo em builds futuros.
 - O usuário não precisa copiar o texto do botão para o chat e enviar
   manualmente.
 - “Analisar assets” inicia a análise dos vídeos e imagens da pasta de assets.
+- PASTA COM VÁRIOS VÍDEOS (0.13.6): antes do corte existir, a timeline
+  espelha TODOS os vídeos-fonte em sequência, na ordem alfabética natural dos
+  nomes (`deriveSourceMirror` no main → `modelFromSourceFiles` no módulo
+  puro; ids = caminho relativo com `/`, a mesma forma dos sources do EDL). O
+  preview entra em modo mapeado mesmo sem edição pendente (`sourceMirror` em
+  App.tsx: `media.kind === 'source'` + clipes com fonte real) e toca um
+  arquivo após o outro — o motor de troca de src por segmento já existia. O
+  selo da barra vira “Vídeos em sequência” nesse estado (só diz “Prévia das
+  edições” quando há edição de verdade). As instruções mandam o agente
+  transcrever e cortar todos os arquivos e concatenar num render único, com o
+  mapa `sources` no EDL. O J-Cut já resolvia fonte por segmento
+  (`resolveJcutSource` por range), então funciona com corte multi-fonte.
 
 ### Aprovação da Fase 1
 
@@ -941,6 +969,24 @@ Fase 2:
   aprovação registrada (aprovar ali usa id sintético pinned:…). Gate some
   quando styleApplied. .clean-cut-gate ganhou flex-wrap para caber na coluna
   do chat.
+- EVIDÊNCIA DE CORTE REAL (0.13.6, de uso real nas duas plataformas): o gate
+  ancorado em mensagem disparava só pelo texto — no mac apareceu sob uma
+  mensagem que explicava que o corte FALHOU ("…não existe nenhum corte
+  renderizado… para sua aprovação" contém corte+aprovação) e no Windows sob
+  um corte INVENTADO (transcrição quebrada pelo VC++ → o agente escreveu EDL
+  com o vídeo inteiro e pediu aprovação). Agora NENHUM gate (nem o de
+  mensagem, nem o fixo) aparece sem `realCleanCutReady`: media.kind ===
+  'clean-cut' + modelo EDL com fontes reais + `modelRemovesMaterial` (módulo
+  puro, testado) provando que o corte manteve MENOS material do que as fontes
+  têm (tolerância 0,5 s; fonte sem duração conhecida nunca é evidência; só a
+  faixa de vídeo conta — as pistas Voz A/B do J-Cut não interferem). Caso
+  legítimo raríssimo de zero remoção: o aluno aprova digitando no chat. As
+  instruções ganharam a contrapartida: transcrição real obrigatória antes do
+  corte, transcrição falhou → parar sem criar EDL nem pedir aprovação, e EDL
+  que devolve o vídeo inteiro nunca é "corte pronto". QA:
+  `?qa` (gate aparece), `?qa&semcorte` (clipes no preview → sem gate),
+  `?qa&cortefake` (EDL sem remoção → sem gate), `?qa&espelho` (pasta
+  multi-vídeo pré-corte → sem gate, selo "Vídeos em sequência").
 - Instruções: J-CUT NÃO É TAREFA DO AGENTE — não antecipar áudio, não
   escrever jcut_timeline, não apagar edit/jcut.json nem `*-sem-jcut-tmp*`.
 
@@ -1086,6 +1132,20 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.13.6: três defeitos de uso real (mac do aluno + Windows do fill). (1)
+  Modelo do ChatGPT fixado em `gpt-5.6-terra`: o codex-app-server 0.147.0
+  passou a ter `gpt-5.6-sol` como default e conta ChatGPT recebe 400 ("not
+  supported when using Codex with a ChatGPT account") — pin em dois níveis
+  (config.toml de topo + `model`/`allowProviderModelFallback` no
+  thread/start), comprovado por sonda nos rollouts; erro de modelo agora
+  vira mensagem PT-BR (friendlyAiError) e a notificação `error` duplicada
+  com turno ativo foi silenciada. (2) Corte fantasma: gates de aprovação
+  (mensagem + fixo) agora exigem evidência de corte real
+  (`modelRemovesMaterial`) — o texto do agente sozinho não abre mais
+  Aprovado/J-Cut; instruções proíbem corte sem transcrição e EDL de vídeo
+  inteiro. (3) Pasta com vários vídeos: timeline espelha todos em sequência
+  (ordem natural de nomes), preview mapeado toca um após o outro, selo
+  "Vídeos em sequência", instruções mandam limpar todos e concatenar.
 - 0.13.5: login do Claude resiliente ao rate limit da Anthropic. Em uso
   real a troca do código chegou a falhar com "Rate limited" — o endpoint
   de token limita por IP com facilidade (poucas tentativas bastam). O

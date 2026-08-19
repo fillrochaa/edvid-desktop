@@ -62,6 +62,7 @@ import {
   deriveSegments,
   migrateEdlToModel,
   modelFromSegments,
+  modelFromSourceFiles,
   modelsEqual,
   sanitizeTimelineModel,
   type EdlDocument,
@@ -855,6 +856,37 @@ async function buildProjectSources(
   return sources;
 }
 
+// Pasta com mais de um vídeo-fonte: antes do corte limpo existir, a timeline
+// espelha TODOS os vídeos em sequência — na ordem natural dos nomes, a mesma
+// em que a limpeza deve percorrê-los — e o preview mapeado toca um após o
+// outro. Com um vídeo só, o espelho clássico (clipe único) continua valendo.
+async function deriveSourceMirror(directory: string, fps: number): Promise<TimelineModel | null> {
+  const candidates: MediaCandidate[] = [];
+  await collectMedia(directory, directory, 0, candidates);
+  const sourceCandidates = candidates.filter(
+    (candidate) => mediaKind(candidate.relativePath, candidate.tier) === 'source',
+  );
+  if (sourceCandidates.length < 2) return null;
+  sourceCandidates.sort((a, b) =>
+    a.relativePath.localeCompare(b.relativePath, 'pt-BR', { numeric: true, sensitivity: 'base' }),
+  );
+  const files: { id: string; label: string; duration: number }[] = [];
+  for (const candidate of sourceCandidates) {
+    const probe = await probeSourceFile(candidate.absolutePath);
+    const duration = Number(probe?.format?.duration) || 0;
+    if (duration <= 0.1) continue;
+    files.push({
+      // O id relativo com "/" é a mesma forma que o EDL usa para fontes; o
+      // buildProjectSources resolve contra a pasta do projeto.
+      id: candidate.relativePath.split(path.sep).join('/'),
+      label: path.basename(candidate.relativePath),
+      duration,
+    });
+  }
+  if (files.length < 2) return null;
+  return modelFromSourceFiles(files, fps);
+}
+
 type LoadedTimeline = {
   model: TimelineModel | null;
   synced: boolean;
@@ -887,7 +919,11 @@ async function loadProjectTimeline(
       ?? null;
     if (segments) {
       derived = modelFromSegments(segments, fps);
-    } else if (inspectedMedia && inspectedMedia.media.duration > 0.1) {
+    }
+    if (!derived && inspectedMedia?.media.kind === 'source') {
+      derived = await deriveSourceMirror(directory, fps);
+    }
+    if (!derived && inspectedMedia && inspectedMedia.media.duration > 0.1) {
       derived = modelFromSegments(
         [{ label: inspectedMedia.media.name, start: 0, duration: inspectedMedia.media.duration }],
         fps,

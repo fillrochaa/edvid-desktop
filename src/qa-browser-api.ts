@@ -11,7 +11,7 @@ import type {
   RuntimeCheck,
   RuntimeName,
 } from './shared';
-import { PREVIEW_SOURCE_ID, deriveSegments, modelFromSegments } from './timeline-model';
+import { PREVIEW_SOURCE_ID, deriveSegments, modelFromSegments, modelFromSourceFiles } from './timeline-model';
 
 const qaProject: ProjectSummary = {
   directory: '/tmp/edvid-interface-qa',
@@ -19,7 +19,22 @@ const qaProject: ProjectSummary = {
   lastOpenedAt: new Date().toISOString(),
 };
 
-const qaTimelineModel = modelFromSegments(
+// Cenários de corte no QA visual:
+// - padrão: corte real respaldado por EDL (gate de aprovação aparece);
+// - "?semcorte": clipes seguem no preview — corte FALHOU, gate não aparece;
+// - "?cortefake": EDL devolve o vídeo inteiro sem remover nada (o corte
+//   inventado quando a transcrição quebra) — gate não pode aparecer;
+// - "?espelho": pasta com dois vídeos-fonte antes do corte — timeline mostra
+//   os dois em sequência e nenhum gate aparece.
+const qaCutScenario = (() => {
+  const search = new URLSearchParams(window.location.search);
+  if (search.has('semcorte')) return 'semcorte';
+  if (search.has('cortefake')) return 'cortefake';
+  if (search.has('espelho')) return 'espelho';
+  return 'corte';
+})();
+
+let qaTimelineModel = modelFromSegments(
   [
     { label: 'HOOK', start: 0, duration: 3.2, audioStart: 0, audioDuration: 3.2 },
     { label: 'PROBLEMA', start: 3.2, duration: 4.1, audioStart: 3.03, audioDuration: 4.27 },
@@ -27,28 +42,37 @@ const qaTimelineModel = modelFromSegments(
   ],
   30,
 );
-// O gate fixo de aprovação exige um corte respaldado por EDL (sourceId real,
-// não o preview); o QA simula isso apontando os clipes para o arquivo-fonte.
-// "?semcorte" mantém os clipes no preview (cenário do corte que FALHOU: o
-// gate não pode aparecer).
-if (qaTimelineModel && !new URLSearchParams(window.location.search).has('semcorte')) {
+if (qaTimelineModel && (qaCutScenario === 'corte' || qaCutScenario === 'cortefake')) {
   qaTimelineModel.clips = qaTimelineModel.clips.map((clip) => ({
     ...clip,
     sourceId: 'IMG_0001.MOV',
   }));
 }
+if (qaCutScenario === 'espelho') {
+  qaTimelineModel = modelFromSourceFiles(
+    [
+      { id: 'IMG_0001.MOV', label: 'IMG_0001.MOV', duration: 16.13 },
+      { id: 'IMG_0002.MOV', label: 'IMG_0002.MOV', duration: 12.4 },
+    ],
+    30,
+  );
+}
+
+// No cortefake a fonte tem praticamente a duração mantida pelos clipes
+// (10,7 s de 10,9 s): nada foi removido, então não há corte para aprovar.
+const qaSourceDuration = qaCutScenario === 'cortefake' ? 10.9 : 16.13;
 
 const qaWorkspace: ProjectWorkspace = {
   project: qaProject,
   media: {
     url: 'data:video/mp4;base64,',
-    name: 'corte_limpo_qa.mp4',
+    name: qaCutScenario === 'espelho' ? 'IMG_0001.MOV' : 'corte_limpo_qa.mp4',
     width: 1080,
     height: 1920,
-    duration: 10.7,
+    duration: qaCutScenario === 'espelho' ? 16.13 : 10.7,
     fps: 30,
     orientation: 'vertical',
-    kind: 'clean-cut',
+    kind: qaCutScenario === 'espelho' ? 'source' : 'clean-cut',
   },
   timeline: qaTimelineModel ? { segments: deriveSegments(qaTimelineModel) } : null,
   timelineModel: qaTimelineModel,
@@ -69,7 +93,17 @@ const qaWorkspace: ProjectWorkspace = {
       id: 'IMG_0001.MOV',
       name: 'IMG_0001.MOV',
       url: 'data:video/mp4;base64,',
-      duration: 16.13,
+      duration: qaSourceDuration,
+      fps: 30,
+      width: 1080,
+      height: 1920,
+      available: true,
+    },
+    {
+      id: 'IMG_0002.MOV',
+      name: 'IMG_0002.MOV',
+      url: 'data:video/mp4;base64,',
+      duration: 12.4,
       fps: 30,
       width: 1080,
       height: 1920,
