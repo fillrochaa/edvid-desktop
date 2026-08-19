@@ -784,8 +784,9 @@ chatPinned/imagePinned; "aiProvider" antigo migra para chatProvider):
   (estado resolvido primeiro — nunca por corrida de boot); imagem segue a
   capacidade: ChatGPT por ASSINATURA > Gemini por chave > nada. Escolha
   explícita (pinned) só é desfeita se o provedor escolhido desconectar.
-  Capacidade de imagem: ChatGPT só com login de assinatura (a ferramenta do
-  Codex é atrelada à conta; chave de API não serve); Claude nunca.
+  Capacidade de imagem: ChatGPT em QUALQUER modo (assinatura usa a ferramenta
+  do Codex na cota do plano; chave usa a API de imagens da OpenAI, paga por
+  imagem — ~US$0,05 na qualidade media); Gemini por chave; Claude nunca.
 - Seletores rápidos sob o composer (Chat/Imagem) trocam preferenciais sem
   abrir Configurações; a aba Conexões mostra chips "Chat"/"Imagem" por
   provedor e "Usar no chat".
@@ -807,11 +808,24 @@ fora do sandbox):
   instrui a skill imagegen (gpt-image-2, cota da assinatura). SONDADO com o
   login real: item imageGeneration in_progress→completed, zero aprovações,
   arquivo salvo. Nomes de arquivo achatados com path.basename (nada de ../).
+- Backend ChatGPT por CHAVE: generateOpenAiImage no main — POST
+  api.openai.com/v1/images/generations { model gpt-image-2, size por
+  proporcao (1024x1536/1536x1024/1024x1024, retry 'auto' em 400),
+  quality medium } → b64_json. A chave e lida do auth.json que o proprio
+  app-server guarda no CODEX_HOME do Edvid (o app nunca teve copia
+  propria). Validar com chave real na primeira utilizacao.
 - Backend Gemini: generateImage no GeminiAgent — REST
   models/gemini-2.5-flash-image:generateContent com responseModalities
   [TEXT,IMAGE] e imageConfig.aspectRatio (retry sem o campo se recusar);
   inlineData base64 → PNG. Free tier do Nano Banana cobre; validar com
   chave real na primeira utilização.
+- Modelos padrao (nenhum fixado pelo Edvid, todos herdados dos motores):
+  chat ChatGPT = gpt-5-codex (padrao do app-server 0.147); chat Claude =
+  claude-sonnet-5 (padrao do Agent SDK com assinatura, visto no init da
+  sondagem); chat Gemini = 'auto' (gemini-3.1-pro-preview quando
+  disponivel, senao gemini-3.5-flash — com chave gratis fica no flash);
+  imagem = gpt-image-2 (ferramenta do Codex e API) e
+  gemini-2.5-flash-image (pinado no Edvid).
 - QA: ?imagens simula a fila (banner de progresso no chat).
 
 ### 13f. Gemini via ACP + chave de API (0.10.0)
@@ -866,13 +880,15 @@ Arquitetura (`src/gemini-agent.ts`):
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
 - 0.11.0: papéis de IA e imagens. Papel "chat" e papel "imagem" com regras
-  automáticas (assinatura ChatGPT > chave Gemini para imagem; Claude só
-  chat), pins de escolha manual, seletores rápidos sob o composer e chips
-  por papel nas Conexões. Geração de imagens pelo app fora do sandbox via
-  edit/imagens/pedidos.json: ChatGPT pela skill imagegen do Codex (thread
-  utilitária invisível, sondada com login real) e Gemini pelo Nano Banana
-  (REST). Fallback de limite de uso: turno falhou por cota + outro chat
-  conectado = troca automática com aviso, sem reenvio.
+  automáticas (ChatGPT > Gemini para imagem; Claude só chat), pins de
+  escolha manual, seletores rápidos sob o composer e chips por papel nas
+  Conexões. Geração de imagens pelo app fora do sandbox via
+  edit/imagens/pedidos.json com TRÊS backends: ChatGPT-assinatura pela
+  skill imagegen do Codex (thread utilitária invisível, sondada com login
+  real), ChatGPT-chave pela API de imagens da OpenAI (gpt-image-2, pago
+  por imagem) e Gemini pelo Nano Banana (REST). Fallback de limite de
+  uso: turno falhou por cota + outro chat conectado = troca automática
+  com aviso, sem reenvio.
 - 0.10.0: três provedores + chaves de API. Adaptador Gemini sobre o modo ACP
   do CLI oficial (processo longo, sessões por projeto, autoEdit + aprovações
   pela interface, instruções no primeiro turno); chave de API como segundo

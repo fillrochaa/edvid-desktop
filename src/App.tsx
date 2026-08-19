@@ -1932,10 +1932,11 @@ export function App() {
     gemini: geminiConnected,
   };
   const aiProvider = aiRoles.chat;
-  // Quem PODE gerar imagem: ChatGPT so por assinatura (a ferramenta do Codex
-  // e atrelada a conta), Gemini por chave; Claude nunca.
+  // Quem PODE gerar imagem: ChatGPT em qualquer modo (assinatura usa a
+  // ferramenta do Codex na cota do plano; chave usa a API de imagens, paga
+  // por imagem), Gemini por chave; Claude nunca.
   const imageCapable: Record<AiProvider, boolean> = {
-    chatgpt: chatgptConnected && account.account?.type === 'chatgpt',
+    chatgpt: chatgptConnected,
     claude: false,
     gemini: geminiConnected,
   };
@@ -3294,7 +3295,7 @@ export function App() {
                   </div>
                   {keyEntry === 'gemini' && keyEntryRow}
                   {(keyEntryError || claudeAccount.error) && <p className="settings-note error">{keyEntryError ?? claudeAccount.error}</p>}
-                  <p className="settings-note">Assinatura: ChatGPT e Claude entram pelo navegador com a conta que você já paga. Chave de API: cobrada por uso na plataforma de cada um; a do Gemini sai grátis no Google AI Studio com limite diário.</p>
+                  <p className="settings-note">Assinatura: ChatGPT e Claude entram pelo navegador com a conta que você já paga; imagens do ChatGPT saem da cota do plano. Chave de API: cobrada por uso na plataforma de cada um (imagens do ChatGPT por chave são pagas por imagem); a do Gemini sai grátis no Google AI Studio com limite diário. O Claude não gera imagens.</p>
                 </div>
                 <div className="settings-block">
                   <h3>MCPs</h3>

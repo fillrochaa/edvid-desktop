@@ -1980,6 +1980,57 @@ function broadcastImageGenState(state: ImageGenState): void {
 
 type ImageRequestEntry = { arquivo: string; prompt: string; proporcao: string | null };
 
+// ChatGPT conectado por CHAVE tambem gera imagem — pela API de imagens da
+// OpenAI (gpt-image-2, pago por imagem), chamada direta do app. A chave vive
+// no auth.json que o proprio app-server guarda no CODEX_HOME do Edvid.
+async function readCodexStoredApiKey(): Promise<string | null> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(path.join(app.getPath('userData'), 'codex', 'auth.json'), 'utf8'),
+    ) as { OPENAI_API_KEY?: unknown };
+    return typeof parsed.OPENAI_API_KEY === 'string' && parsed.OPENAI_API_KEY ? parsed.OPENAI_API_KEY : null;
+  } catch {
+    return null;
+  }
+}
+
+const OPENAI_IMAGE_SIZES: Record<string, string> = {
+  '9:16': '1024x1536',
+  '16:9': '1536x1024',
+  '1:1': '1024x1024',
+};
+
+async function generateOpenAiImage(
+  apiKey: string,
+  prompt: string,
+  proporcao: string | null,
+): Promise<Buffer> {
+  const call = (size: string): Promise<Response> =>
+    net.fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model: 'gpt-image-2', prompt, size, quality: 'medium' }),
+    });
+  let response: Response;
+  try {
+    response = await call(OPENAI_IMAGE_SIZES[proporcao ?? '1:1'] ?? '1024x1024');
+    // Formato de tamanho recusado (modelo mudou?): tenta o automatico.
+    if (response.status === 400) response = await call('auto');
+  } catch {
+    throw new Error('Sem conexão para gerar a imagem na OpenAI.');
+  }
+  const payload = (await response.json().catch(() => ({}))) as {
+    data?: Array<{ b64_json?: string }>;
+    error?: { message?: string };
+  };
+  if (!response.ok) {
+    throw new Error(payload.error?.message ?? `A OpenAI recusou a geração (HTTP ${response.status}).`);
+  }
+  const data = payload.data?.[0]?.b64_json;
+  if (!data) throw new Error('A OpenAI respondeu sem imagem. Tente reformular o pedido.');
+  return Buffer.from(data, 'base64');
+}
+
 async function readImageRequests(projectDirectory: string): Promise<ImageRequestEntry[]> {
   try {
     const parsed = JSON.parse(
@@ -2042,17 +2093,27 @@ function fulfillImageRequests(projectDirectory: string): Promise<ImageGenState> 
           await mkdir(imagesDirectory, { recursive: true });
           await writeFile(target, image);
         } else {
-          await (await codexServer()).runUtilityTurn(
-            projectDirectory,
-            [
-              'Use a ferramenta de geração de imagens (skill imagegen) para gerar exatamente esta imagem:',
-              request.prompt,
-              request.proporcao ? `Proporção: ${request.proporcao}.` : '',
-              `Salve o resultado EXATAMENTE em edit/imagens/${request.arquivo} e não crie nem modifique nenhum outro arquivo.`,
-              'Responda com uma única frase curta.',
-            ].filter(Boolean).join('\n'),
-          );
-          await stat(target);
+          // ChatGPT: assinatura usa a ferramenta do Codex (cota do plano);
+          // chave de API usa a API de imagens direto (pago por imagem).
+          const chatgptApiKey = await readCodexStoredApiKey();
+          const codexAccount = await (await codexServer()).readAccount();
+          if (codexAccount.account?.type === 'apiKey' && chatgptApiKey) {
+            const image = await generateOpenAiImage(chatgptApiKey, request.prompt, request.proporcao);
+            await mkdir(imagesDirectory, { recursive: true });
+            await writeFile(target, image);
+          } else {
+            await (await codexServer()).runUtilityTurn(
+              projectDirectory,
+              [
+                'Use a ferramenta de geração de imagens (skill imagegen) para gerar exatamente esta imagem:',
+                request.prompt,
+                request.proporcao ? `Proporção: ${request.proporcao}.` : '',
+                `Salve o resultado EXATAMENTE em edit/imagens/${request.arquivo} e não crie nem modifique nenhum outro arquivo.`,
+                'Responda com uma única frase curta.',
+              ].filter(Boolean).join('\n'),
+            );
+            await stat(target);
+          }
         }
         done += 1;
         broadcastImageGenState({ status: 'generating', total: pending.length, done });
