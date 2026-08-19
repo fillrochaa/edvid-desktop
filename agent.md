@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-19 (0.13.0 — J-Cut determinístico pelo aplicativo com duas faixas de Voz na timeline; tela dividida gera imagens com IA por padrão)
+Atualizado em: 2026-08-19 (0.13.1 — gate de aprovação/J-Cut à prova de fraseado: detecção por âncoras + gate fixo quando o preview é um corte limpo não aprovado)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -920,6 +920,17 @@ Fase 2:
   número de transições e o aviso de que o vídeo não foi reencodado. Com
   sobreposição de voz detectada (modelo ou segments), a track Voz vira DUAS
   faixas em xadrez (Voz A/Voz B) — é o que torna a sobreposição visível.
+- Gate à prova de fraseado (0.13.1, de uso real): a detecção antiga exigia
+  "aprova" a ≤80 caracteres de "corte" e a frase real do Codex ("Corte limpo
+  preparado com 16,3s… me diga se aprova") passava de 140 — nenhum gate
+  aparecia, nem o J-Cut. Agora asksForCleanCutApproval usa âncoras de palavra
+  sem limite de distância (corte + aprova/aprovar/aprove/aprovação; o
+  particípio "aprovado" fica de fora para a mensagem pós-aprovação não
+  recriar o gate) e, se NENHUMA mensagem casar, um gate FIXO aparece depois
+  da última mensagem sempre que workspace.media.kind === 'clean-cut' sem
+  aprovação registrada (aprovar ali usa id sintético pinned:…). Gate some
+  quando styleApplied. .clean-cut-gate ganhou flex-wrap para caber na coluna
+  do chat.
 - Instruções: J-CUT NÃO É TAREFA DO AGENTE — não antecipar áudio, não
   escrever jcut_timeline, não apagar edit/jcut.json nem `*-sem-jcut-tmp*`.
 
@@ -945,6 +956,12 @@ Fase 2:
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.13.1: o gate de aprovação (e com ele o J-Cut) não aparecia em uso real —
+  a frase do agente variou e a regex exigia proximidade de 80 caracteres.
+  Detecção reescrita por âncoras de palavra sem limite de distância + gate
+  fixo de reserva quando o preview é um corte limpo sem aprovação (o botão
+  deixou de depender do fraseado do agente). Validado com a frase exata do
+  print do usuário e QA do fluxo completo no navegador.
 - 0.13.0: J-Cut determinístico + tela dividida com imagens por padrão, os
   dois nascidos de uso real. (1) O botão "Aplicar J-Cut" não aparecia (só
   nascia no clique de Aprovado) e a aplicação via agente saiu do ar de

@@ -299,7 +299,11 @@ function cleanAssistantText(text: string): string {
 }
 
 function asksForCleanCutApproval(text: string): boolean {
-  return /(?:corte\s+limpo|corte).{0,80}(?:pronto\s+para\s+(?:sua\s+)?aprova|aprova(?:r|ção)|aprova\s+este\s+corte)/isu.test(text);
+  // Sem limite de distância entre as âncoras: a frase real do agente varia
+  // ("Corte limpo preparado com 16,3 segundos. … me diga se aprova") e o
+  // limite de 80 caracteres escondia o gate — e com ele o botão de J-Cut.
+  // "aprovado" (particípio, relato de aprovação já feita) fica de fora.
+  return /\bcorte\b/iu.test(text) && /\b(?:aprova|aprovar|aprove|aprovação)\b/iu.test(text);
 }
 
 function styleStorageKey(directory: string): string {
@@ -2016,12 +2020,25 @@ export function App() {
     : 'Gemini desconectado';
   const activeApproval = approvals[0] ?? null;
   const pendingCutApprovalId = useMemo(
-    () => [...messages].reverse().find((message) => (
+    () => (styleApplied ? null : [...messages].reverse().find((message) => (
       message.role === 'assistant' &&
       message.id !== handledCutApprovalId &&
+      !message.id.startsWith('style-gate:') &&
       asksForCleanCutApproval(message.text)
-    ))?.id ?? null,
-    [handledCutApprovalId, messages],
+    ))?.id ?? null),
+    [handledCutApprovalId, messages, styleApplied],
+  );
+  // Rede de segurança: se o preview já é um corte limpo não aprovado mas
+  // NENHUMA mensagem casou com a detecção (o agente fraseia como quiser), o
+  // gate aparece fixo depois da última mensagem — com o Aprovado e o J-Cut.
+  const showPinnedCutGate = Boolean(
+    !pendingCutApprovalId &&
+    !handledCutApprovalId &&
+    !styleApplied &&
+    workspace?.media?.kind === 'clean-cut' &&
+    !activeTurn &&
+    !sending &&
+    messages.some((message) => message.role === 'assistant'),
   );
 
   const missingRuntimeNames = useMemo(
@@ -3116,6 +3133,17 @@ export function App() {
                   </article>
                 );
               })}
+              {showPinnedCutGate && (
+                <div className="clean-cut-gate">
+                  <div><strong>Corte limpo pronto</strong><span>Assista no preview e confirme para escolher os estilos.</span></div>
+                  <button type="button" className="btn primary" onClick={() => void approveCleanCut(`pinned:${Date.now()}`)} disabled={sending || approvingCut}>
+                    <Icon name="check" /> {approvingCut ? 'Aprovando...' : 'Aprovado'}
+                  </button>
+                  <button type="button" className="btn ghost small" onClick={() => void applyJcut()} disabled={jcutBusy || jcutApplied}>
+                    <Icon name="waveform" /> {jcutApplied ? 'J-Cut aplicado' : jcutBusy ? 'Aplicando…' : 'Aplicar J-Cut'}
+                  </button>
+                </div>
+              )}
               {canChat && messages.length > 0 && (
                 <div className={`chat-status work-status ${activeTurn ? 'working' : 'ready'}`}>
                   <span />{activeTurn ? 'Trabalhando' : 'Pronto'}

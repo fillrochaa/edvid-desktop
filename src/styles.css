@@ -124,7 +124,8 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .chat-role { display: block; margin-bottom: 5px; color: #727b88; font-size: 7.5px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase; }
 .chat-message.assistant .chat-role { color: #5fd2d4; }
 .chat-message p { font-size: 10.5px; line-height: 1.68; white-space: pre-wrap; overflow-wrap: anywhere; }
-.clean-cut-gate { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 13px; padding: 10px; border: 1px solid rgba(9,181,183,.3); border-radius: 11px; background: linear-gradient(135deg, rgba(9,181,183,.1), rgba(9,181,183,.035)); }
+.clean-cut-gate { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 13px; padding: 10px; border: 1px solid rgba(9,181,183,.3); border-radius: 11px; background: linear-gradient(135deg, rgba(9,181,183,.1), rgba(9,181,183,.035)); }
+.clean-cut-gate > div { flex: 1 1 160px; }
 .clean-cut-gate > div { min-width: 0; display: flex; flex-direction: column; }
 .clean-cut-gate.jcut-gate { border-color: rgba(255,119,19,.24); background: linear-gradient(135deg, rgba(255,119,19,.09), rgba(255,119,19,.03)); }
 .clean-cut-gate.jcut-gate strong { color: #ffd8b8; }
