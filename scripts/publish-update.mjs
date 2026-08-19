@@ -155,6 +155,19 @@ if (isWindowsRelease) {
   const feedInfo = await stat(feedPath);
   await putObject('feed.json', feedPath, 'application/json', feedInfo.size);
 
+  // Instalador para alunos novos: versao arquivada + nome ESTAVEL para a
+  // pagina de download da Creator Factory (par do EdvidSetup.exe do Windows).
+  const dmgName = `Edvid-${version}-arm64.dmg`;
+  const dmgPath = path.join(projectRoot, 'out', 'make', dmgName);
+  const dmgInfo = await stat(dmgPath).catch(() => null);
+  if (!dmgInfo) {
+    console.error(`DMG da versao ${version} nao encontrado em out/make. Rode "npm run make:signed" antes.`);
+    process.exit(1);
+  }
+  await putObject(dmgName, dmgPath, 'application/x-apple-diskimage', dmgInfo.size);
+  await putObject('Edvid.dmg', dmgPath, 'application/x-apple-diskimage', dmgInfo.size);
+
   console.log(`\nRelease ${version} publicado.`);
   console.log(`Feed: ${baseUrl}/feed.json`);
+  console.log(`Instalador: ${baseUrl}/Edvid.dmg`);
 }

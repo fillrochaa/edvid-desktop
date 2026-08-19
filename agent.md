@@ -1004,7 +1004,10 @@ O que cada peça faz no win32-x64:
   pasta); publish-update.mjs detecta a plataforma do make: no win sobe
   nupkg → RELEASES sob win32/ e o instalador como
   win32/Edvid-Setup-<v>.exe + EdvidSetup.exe ESTÁVEL na raiz (link de
-  download da Creator Factory). O feed.json do mac fica intacto.
+  download da Creator Factory). O feed.json do mac fica intacto. No mac o
+  mesmo script também publica o DMG: Edvid-<v>-arm64.dmg (arquivado) +
+  Edvid.dmg ESTÁVEL na raiz — o par macOS do EdvidSetup.exe. Links de
+  download da página: <base>/Edvid.dmg e <base>/EdvidSetup.exe.
 - runtime.ts sempre foi parametrizado (.exe, npm-cli.js, python.exe);
   spawns usam binários absolutos ou `node script.js` (sem npx/.cmd);
   PATH usa path.delimiter; a extração do pack usa bsdtar (Windows 10+).
