@@ -1357,6 +1357,12 @@ function EditorWorkspace({
           audioStart: 0,
           audioDuration: effectiveDuration || 1,
         }];
+  // Com J-Cut os clipes de Voz se sobrepõem nas junções (o áudio da cena
+  // seguinte entra antes do corte); o xadrez em duas faixas Voz A/Voz B é o
+  // que torna a sobreposição visível na timeline.
+  const voiceOverlapping = model
+    ? voiceClips.some((clip, index) => index > 0 && clip.timelineStart < clipEnd(voiceClips[index - 1]) - 0.005)
+    : displayedSegments.some((segment) => (segment.audioStart ?? segment.start) < segment.start - 0.005);
   const rulerTicks = useMemo(() => {
     if (!(effectiveDuration > 0)) return [0];
     // Passo mínimo de 1s: formatTime não tem precisão sub-segundo.
@@ -1566,27 +1572,40 @@ function EditorWorkspace({
                     </div>
                   ))}
             </TimelineTrack>
-            <TimelineTrack icon="waveform" label="Voz" tone="teal">
-              {model
-                ? voiceClips.map((clip, index) => renderModelClip(clip, index, 'audio-clip'))
-                : displayedSegments.map((segment, index) => {
-                    const start = segment.audioStart ?? segment.start;
-                    const segmentDuration = segment.audioDuration ?? segment.duration;
-                    return (
-                      <div
-                        className={`timeline-clip audio-clip ${index % 2 ? 'alt' : ''}`}
-                        key={`audio:${segment.start}:${segment.label}`}
-                        style={{
-                          left: `${effectiveDuration > 0 ? (start / effectiveDuration) * 100 : 0}%`,
-                          width: `calc(${effectiveDuration > 0 ? (segmentDuration / effectiveDuration) * 100 : 100}% - 2px)`,
-                        }}
-                        title={`${segment.label} · ${formatTime(segmentDuration)}`}
-                      >
-                        <span>{segment.label}</span>
-                      </div>
-                    );
-                  })}
-            </TimelineTrack>
+            {(voiceOverlapping ? [0, 1] : [null]).map((lane) => (
+              <TimelineTrack
+                icon="waveform"
+                label={lane === null ? 'Voz' : lane === 0 ? 'Voz A' : 'Voz B'}
+                tone="teal"
+                key={`voz:${lane ?? 'unica'}`}
+              >
+                {model
+                  ? voiceClips
+                      .map((clip, index) => ({ clip, index }))
+                      .filter(({ index }) => lane === null || index % 2 === lane)
+                      .map(({ clip, index }) => renderModelClip(clip, index, 'audio-clip'))
+                  : displayedSegments
+                      .map((segment, index) => ({ segment, index }))
+                      .filter(({ index }) => lane === null || index % 2 === lane)
+                      .map(({ segment, index }) => {
+                        const start = segment.audioStart ?? segment.start;
+                        const segmentDuration = segment.audioDuration ?? segment.duration;
+                        return (
+                          <div
+                            className={`timeline-clip audio-clip ${index % 2 ? 'alt' : ''}`}
+                            key={`audio:${segment.start}:${segment.label}`}
+                            style={{
+                              left: `${effectiveDuration > 0 ? (start / effectiveDuration) * 100 : 0}%`,
+                              width: `calc(${effectiveDuration > 0 ? (segmentDuration / effectiveDuration) * 100 : 100}% - 2px)`,
+                            }}
+                            title={`${segment.label} · ${formatTime(segmentDuration)}`}
+                          >
+                            <span>{segment.label}</span>
+                          </div>
+                        );
+                      })}
+              </TimelineTrack>
+            ))}
             {phase === 2 && style.elements.musicAI && (
               <TimelineTrack icon="music" label="Trilha" tone="olive">
                 <div className="timeline-chip music-chip" style={{ left: '0%', width: '100%' }}>Trilha sonora · −15 dB</div>
@@ -1945,6 +1964,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'geral' | 'conexoes'>('geral');
   const [jcutApplied, setJcutApplied] = useState(false);
+  const [jcutBusy, setJcutBusy] = useState(false);
   const phase2StatusRef = useRef<Phase2RenderState['status']>('idle');
   const imageGenStatusRef = useRef<ImageGenState['status']>('idle');
   const messageListRef = useRef<HTMLDivElement | null>(null);
@@ -2167,6 +2187,19 @@ export function App() {
     if (!directory) return;
     // O andamento chega por onImageGenState; sem pedidos o main devolve idle.
     void window.edvidDesktop.fulfillImageRequests(directory).catch(() => {});
+  }
+
+  // Se o J-Cut ja foi aplicado e o agente re-renderizou o corte neste turno,
+  // o main reaplica sozinho; a timeline e a Fase 2 acompanham o arquivo novo.
+  function requestJcutSync() {
+    const directory = activeProjectDirectoryRef.current;
+    if (!directory) return;
+    void window.edvidDesktop.syncJcut(directory).then((result) => {
+      if (result?.changed) {
+        void refreshWorkspace();
+        requestPhase2Render();
+      }
+    }).catch(() => {});
   }
 
   function handleImageGenState(state: ImageGenState) {
@@ -2393,7 +2426,9 @@ export function App() {
         void refreshWorkspace();
         // Se o turno mudou os dados da Fase 2, o aplicativo renderiza fora do
         // sandbox — sem dados novos o main devolve na hora, sem custo. As
-        // imagens pedidas em edit/imagens/pedidos.json seguem o mesmo padrão.
+        // imagens pedidas em edit/imagens/pedidos.json seguem o mesmo padrão,
+        // e o J-Cut é reaplicado se o agente re-renderizou o corte.
+        requestJcutSync();
         requestPhase2Render();
         requestImageFulfillment();
       }
@@ -2480,6 +2515,19 @@ export function App() {
       `- Elementos incluídos: ${enabled}`,
       `- Elementos fora: ${disabled}`,
       `- Observação: ${style.note.trim() || 'nenhuma'}`,
+      // Tela dividida sem conteúdo definido fazia o agente improvisar (já
+      // duplicou o próprio vídeo nas duas metades). A regra padrão é gerar
+      // imagens com IA ilustrando a fala; a Observação pode apontar outra
+      // fonte (ex.: imagens da pasta do projeto).
+      ...(style.edit === 'split' || style.edit === 'split2'
+        ? [
+            '',
+            'Tela dividida — regra de conteúdo: por padrão, GERE IMAGENS com IA ilustrando o que está sendo dito em cada trecho da fala. Peça as imagens em edit/imagens/pedidos.json (o Edvid gera os arquivos em edit/imagens/) e use cada arquivo no campo splits do edit-data.json, cobrindo os principais trechos do vídeo com a imagem correspondente ao assunto daquele momento.',
+            `Posição da mídia na divisão: "${style.edit === 'split' ? 'top' : 'bottom'}" (${style.edit === 'split' ? 'imagem em cima, pessoa embaixo' : 'pessoa em cima, imagem embaixo'}).`,
+            'NUNCA use o próprio vídeo do aluno como mídia da outra metade da divisão.',
+            'Exceção: se a Observação acima indicar outra fonte (por exemplo, "insira as imagens que estão na pasta do projeto"), use a fonte indicada em vez de gerar imagens novas.',
+          ]
+        : []),
       '',
       'O Edvid já montou o projeto Remotion em edit/remotion, com as dependências instaladas.',
       'Prepare apenas os dados em edit/remotion/public/ (com os geradores oficiais), nunca legendas queimadas por FFmpeg nem imagens geradas em Python.',
@@ -2513,14 +2561,32 @@ export function App() {
     setApprovingCut(false);
   }
 
+  // O J-Cut é uma operação DETERMINÍSTICA do aplicativo (src/jcut.ts): o
+  // vídeo do corte é copiado byte a byte e só o áudio é remontado. O agente
+  // não participa — era o improviso dele que dessincronizava o vídeo.
   async function applyJcut() {
-    if (jcutApplied || sending) return;
-    const prompt = [
-      'Aplique J-cuts no corte limpo aprovado: nas transições adequadas, antecipe o áudio da cena seguinte em relação ao corte de vídeo (entre 60 e 200 ms, conforme a respiração da fala).',
-      'Re-renderize o corte com os J-cuts e atualize edit/edl.json mantendo os ranges nos tempos da fonte e preenchendo jcut_timeline com as posições reais no arquivo de saída.',
-      'Preserve o gate do corte aprovado e não faça perguntas de estilo no chat.',
-    ].join(' ');
-    if (await dispatchMessage(prompt, 'Aplicar J-Cut')) setJcutApplied(true);
+    if (jcutApplied || jcutBusy || !projectDirectory) return;
+    setJcutBusy(true);
+    try {
+      const result = await window.edvidDesktop.applyJcut(projectDirectory);
+      if (result.applied) {
+        setJcutApplied(true);
+        setMessages((current) => [...current, {
+          id: `system:${Date.now()}`,
+          role: 'system',
+          text: `J-Cut aplicado: o áudio da cena seguinte agora entra ~150 ms antes do corte em ${result.cuts} ${result.cuts === 1 ? 'transição' : 'transições'}. O vídeo não foi reencodado — só a trilha de áudio mudou.`,
+        }]);
+        await refreshWorkspace();
+        requestPhase2Render();
+      } else if (result.error) {
+        const failure = result.error;
+        setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: failure }]);
+      }
+    } catch (error) {
+      setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: errorMessage(error) }]);
+    } finally {
+      setJcutBusy(false);
+    }
   }
 
   function handleTimelineModelChange(model: TimelineModel, commit: boolean) {
@@ -3034,13 +3100,16 @@ export function App() {
                         <button type="button" className="btn primary" onClick={() => void approveCleanCut(message.id)} disabled={sending || approvingCut}>
                           <Icon name="check" /> {approvingCut ? 'Aprovando...' : 'Aprovado'}
                         </button>
+                        <button type="button" className="btn ghost small" onClick={() => void applyJcut()} disabled={jcutBusy || jcutApplied}>
+                          <Icon name="waveform" /> {jcutApplied ? 'J-Cut aplicado' : jcutBusy ? 'Aplicando…' : 'Aplicar J-Cut'}
+                        </button>
                       </div>
                     )}
                     {message.id.startsWith('style-gate:') && (
                       <div className="clean-cut-gate jcut-gate">
                         <div><strong>J-Cut opcional</strong><span>Antecipa o áudio da próxima cena nas transições do corte aprovado.</span></div>
-                        <button type="button" className="btn ghost small" onClick={() => void applyJcut()} disabled={sending || jcutApplied}>
-                          <Icon name="waveform" /> {jcutApplied ? 'J-Cut aplicado' : 'Aplicar J-Cut'}
+                        <button type="button" className="btn ghost small" onClick={() => void applyJcut()} disabled={jcutBusy || jcutApplied}>
+                          <Icon name="waveform" /> {jcutApplied ? 'J-Cut aplicado' : jcutBusy ? 'Aplicando…' : 'Aplicar J-Cut'}
                         </button>
                       </div>
                     )}

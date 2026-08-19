@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-19 (0.12.3 — login do Claude nos endpoints atuais da Anthropic e mensagem de limite de uso em PT-BR)
+Atualizado em: 2026-08-19 (0.13.0 — J-Cut determinístico pelo aplicativo com duas faixas de Voz na timeline; tela dividida gera imagens com IA por padrão)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -309,7 +309,12 @@ Não depender do volume externo em builds futuros.
 
 O usuário escolhe visualmente:
 
-- Tipo de edição: limpa, tela dividida ou tela dividida 2.
+- Tipo de edição: limpa, tela dividida ou tela dividida 2. Com tela
+  dividida, o briefing instrui por padrão a GERAR IMAGENS com IA ilustrando
+  o que está sendo dito (pedidos.json → splits, posição top no split e
+  bottom no split2; nunca duplicar o vídeo do aluno na outra metade) — a
+  não ser que a Observação aponte outra fonte (ex.: "insira as imagens que
+  estão na pasta do projeto"). Vídeos gerados ficam para quando houver MCP.
 - Estilo de headline: outline, card, realce, misto ou sem headline.
 - Estilo de legenda: karaokê, empilhada, dispersa, simples, serifada,
   clássica ou sem legenda.
@@ -338,8 +343,9 @@ Estado na versão 0.6.0:
   um modelo persistente próprio (ver seção 11).
 - Após qualquer corte, o agente é instruído a criar ou atualizar
   `edit/edl.json` com um `range` por cena mantida.
-- Quando existe J-cut, o EDL deve incluir `jcut_timeline` com posições reais do
-  arquivo final.
+- O `jcut_timeline` é escrito pelo APLICATIVO ao aplicar o J-Cut (0.13.0); o
+  agente é proibido de escrevê-lo ou de antecipar áudio por conta própria
+  (era o improviso dele que dessincronizava o vídeo).
 - Projetos antigos sem EDL usam detecção visual de cenas como fallback.
 - A detecção usa FFmpeg, escala reduzida e limiar de mudança de cena; ela é
   limitada a renders de até 15 minutos para evitar análise longa.
@@ -883,6 +889,40 @@ Arquitetura (`src/gemini-agent.ts`):
   `cancelled`. Streaming: `session/update` com
   `update.sessionUpdate === 'agent_message_chunk'`.
 
+### 13h. J-Cut determinístico pelo aplicativo (0.13.0)
+
+O J-Cut deixou de ser um pedido ao agente (que re-renderizava "com J-cuts" e
+dessincronizava o vídeo) e virou operação determinística do app, no padrão da
+Fase 2:
+
+- `src/jcut.ts` (módulo puro, testado em test:jcut): `planJcut(ranges)` calcula
+  a antecipação por junção (150 ms com clamps: material disponível antes do
+  in, no máx. 45% dos takes vizinhos, mínimo audível 30 ms; plano só vale com
+  TODOS os ranges válidos — o jcut_timeline é pareado 1:1 na migração) e gera
+  os comandos ffmpeg: extração das peças WAV (cada take começa "lead" antes do
+  in), mixagem única (afade in/out nas junções + adelay por posição + amix
+  normalize=0 + atrim no total) e remux com `-c:v copy` — o vídeo NUNCA é
+  reencodado, então a soma das peças fecha exatamente na duração do vídeo e
+  dessincronia é impossível por construção. Provado no test:jcut com o ffmpeg
+  empacotado: framemd5 do vídeo idêntico byte a byte, durações fechadas e a
+  janela pré-junção que era silêncio ganha a fala seguinte (RMS −120 → −13 dB).
+- No main: `applyJcutToProject` (single-flight) localiza o corte (candidato
+  clean-cut mais recente fora de remotion/public; espelha em
+  edit/remotion/public/cut.mp4 se existir — o que dispara o re-render da Fase
+  2 pela impressão digital), verifica duração com ffprobe antes de substituir,
+  guarda backup `-sem-jcut-tmp` (o preview ignora a marca), escreve o
+  jcut_timeline no edl.json e o marcador `edit/jcut.json` (arquivos + size +
+  mtime). `syncJcutForProject` roda no pós-turno: se o agente re-renderizou o
+  corte (stats divergem do marcador), reaplica em silêncio com o EDL atual.
+- UI: botão "Aplicar J-Cut" no gate "Corte limpo pronto" (aparece junto com o
+  Aprovado, sem depender do clique de aprovação) e no gate de estilos; chama
+  jcut:apply direto (sem turno de agente), mostra mensagem de sistema com o
+  número de transições e o aviso de que o vídeo não foi reencodado. Com
+  sobreposição de voz detectada (modelo ou segments), a track Voz vira DUAS
+  faixas em xadrez (Voz A/Voz B) — é o que torna a sobreposição visível.
+- Instruções: J-CUT NÃO É TAREFA DO AGENTE — não antecipar áudio, não
+  escrever jcut_timeline, não apagar edit/jcut.json nem `*-sem-jcut-tmp*`.
+
 ## 14. Windows
 
 - Existe configuração inicial com Electron Forge/Squirrel.
@@ -905,6 +945,18 @@ Arquitetura (`src/gemini-agent.ts`):
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.13.0: J-Cut determinístico + tela dividida com imagens por padrão, os
+  dois nascidos de uso real. (1) O botão "Aplicar J-Cut" não aparecia (só
+  nascia no clique de Aprovado) e a aplicação via agente saiu do ar de
+  sincronia. Agora o botão vive no próprio gate "Corte limpo pronto" e a
+  aplicação é do app: só o áudio é remontado (150 ms de antecipação com
+  clamps + crossfade), o vídeo segue byte a byte idêntico (provado com
+  framemd5 no test:jcut), edit/jcut.json marca o estado e o pós-turno
+  reaplica quando o agente re-renderiza o corte. Voz vira duas faixas em
+  xadrez (Voz A/Voz B) para a sobreposição ser visível. (2) Ao escolher
+  tela dividida o agente duplicava o próprio vídeo nas metades; o briefing
+  agora manda gerar imagens com IA ilustrando a fala por padrão, com a
+  Observação podendo apontar outra fonte.
 - 0.12.3: dois consertos de uso real. (1) Login do Claude não conectava
   mesmo com o site dizendo sucesso: os endpoints OAuth da 0.9.0 eram os
   legados (claude.ai + console.anthropic.com); os atuais foram extraídos

@@ -228,6 +228,19 @@ export type ImageGenState = {
   error?: string;
 };
 
+// J-Cut deterministico aplicado pelo aplicativo: o video do corte e copiado
+// byte a byte e so o audio e remontado (antecipacao + crossfade) a partir do
+// EDL. "sync" reaplica em silencio quando o agente re-renderiza o corte.
+export type JcutApplyResult = {
+  applied: boolean;
+  cuts: number;
+  error: string | null;
+};
+
+export type JcutSyncResult = {
+  changed: boolean;
+};
+
 // Conta Claude: assinatura Pro/Max (OAuth do proprio Claude Code) ou chave
 // de API da Anthropic. No OAuth o login abre o navegador; "manual" indica
 // que o callback local nao pode ser usado e o aluno cola o codigo do site.
@@ -329,6 +342,8 @@ export type EdvidDesktopApi = {
   onAiRoles: (listener: (state: AiRolesState) => void) => () => void;
   fulfillImageRequests: (directory: string) => Promise<ImageGenState>;
   onImageGenState: (listener: (state: ImageGenState) => void) => () => void;
+  applyJcut: (directory: string) => Promise<JcutApplyResult>;
+  syncJcut: (directory: string) => Promise<JcutSyncResult>;
   loginCodexWithApiKey: (apiKey: string) => Promise<CodexAccountState>;
   getClaudeAccount: () => Promise<ClaudeAccountState>;
   loginWithClaude: () => Promise<ClaudeAccountState>;

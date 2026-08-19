@@ -4,9 +4,11 @@ import { spawn } from 'node:child_process';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  copyFile,
   cp,
   lstat,
   mkdir,
+  mkdtemp,
   readFile,
   readdir,
   rename,
@@ -15,11 +17,13 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { ClaudeAgent } from './claude-agent';
 import { CodexAppServer } from './codex-app-server';
 import { GeminiAgent } from './gemini-agent';
+import { JCUT_LEAD_SECONDS, extractionArgs, mixArgs, muxArgs, planJcut } from './jcut';
 import { mediaKind, mediaMimeType, mediaTier, pickPreviewMedia, resolveByteRange } from './media-selection';
 import { resolveRuntime, runtimePackKey, type RuntimeResolution } from './runtime';
 import type {
@@ -32,6 +36,8 @@ import type {
   CodexSendMessageInput,
   GeminiAccountState,
   ImageGenState,
+  JcutApplyResult,
+  JcutSyncResult,
   MemberAuthState,
   OverlayClip,
   ProjectOverlays,
@@ -2041,6 +2047,225 @@ async function geminiAgentReady(): Promise<GeminiAgent> {
   return getGeminiAgent();
 }
 
+// --- J-Cut deterministico aplicado pelo aplicativo -------------------------
+// O video do corte NUNCA e tocado (c:v copy); so o audio e remontado com a
+// antecipacao e o crossfade calculados em src/jcut.ts a partir do proprio
+// EDL. O agente nao participa: era o improviso dele que dessincronizava o
+// video. edit/jcut.json marca o estado aplicado; quando o agente re-renderiza
+// o corte (timeline, correcoes), o pos-turno reaplica sozinho.
+
+const JCUT_MARKER_VERSION = 1;
+
+type JcutMarker = {
+  version: number;
+  lead: number;
+  cuts: number;
+  appliedAt: string;
+  files: Array<{ path: string; size: number; mtimeMs: number }>;
+};
+
+let jcutJob: { directory: string; promise: Promise<JcutApplyResult> } | null = null;
+
+function jcutMarkerPath(projectDirectory: string): string {
+  return path.join(projectDirectory, 'edit', 'jcut.json');
+}
+
+function runFfmpeg(command: string, argsPrefix: string[], args: string[], timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [...argsPrefix, ...args], {
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      if (stderr.length < 262_144) stderr += chunk;
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim().split(/\r?\n/u).at(-1) || `FFmpeg falhou (${code}).`));
+    });
+  });
+}
+
+// Resolve o arquivo-fonte de um range do EDL (id do mapa sources, nome de
+// arquivo direto ou a fonte unica do documento), sempre dentro do projeto.
+function resolveJcutSource(
+  projectDirectory: string,
+  document: EdlDocument,
+  sourceId: string,
+): string | null {
+  const sources = document.sources ?? {};
+  const fallback = Object.values(sources).map((value) => asText(value)).find(Boolean) ?? asText(document.source);
+  const mapped = asText(sources[sourceId]) || asText(sourceId) || fallback;
+  if (!mapped) return null;
+  const absolutePath = path.isAbsolute(mapped) ? path.resolve(mapped) : path.resolve(projectDirectory, mapped);
+  const relative = path.relative(projectDirectory, absolutePath);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  return absolutePath;
+}
+
+// O alvo primario e o corte limpo mais recente FORA de edit/remotion/public
+// (o arquivo que o preview da Fase 1 exibe); o espelho e o public/cut.mp4 que
+// alimenta a Fase 2, quando ja existir.
+async function findJcutTargets(projectDirectory: string): Promise<{ primary: string | null; mirror: string | null }> {
+  const candidates: MediaCandidate[] = [];
+  await collectMedia(projectDirectory, projectDirectory, 0, candidates);
+  const cleanCuts = candidates
+    .filter((candidate) => candidate.tier === 3
+      && mediaKind(candidate.relativePath, candidate.tier) === 'clean-cut'
+      && !/(^|\/)remotion\/public\//u.test(candidate.relativePath.replaceAll('\\', '/')))
+    .sort((a, b) => b.modifiedAt - a.modifiedAt);
+  const mirrorPath = path.join(projectDirectory, 'edit', 'remotion', 'public', 'cut.mp4');
+  const mirror = await stat(mirrorPath).then((info) => (info.isFile() ? mirrorPath : null), () => null);
+  return { primary: cleanCuts[0]?.absolutePath ?? null, mirror };
+}
+
+async function statOf(filePath: string): Promise<{ size: number; mtimeMs: number } | null> {
+  try {
+    const info = await stat(filePath);
+    return { size: info.size, mtimeMs: Math.round(info.mtimeMs) };
+  } catch {
+    return null;
+  }
+}
+
+function applyJcutToProject(projectDirectory: string): Promise<JcutApplyResult> {
+  if (jcutJob?.directory === projectDirectory) return jcutJob.promise;
+  const job = (async (): Promise<JcutApplyResult> => {
+    await requireRuntimePack();
+    const ffmpeg = resolveRuntime('ffmpeg', appRuntimeContext());
+    const ffprobe = resolveRuntime('ffprobe', appRuntimeContext());
+    if (!ffmpeg.command || !ffprobe.command) {
+      return { applied: false, cuts: 0, error: 'As ferramentas de vídeo do Edvid não estão disponíveis.' };
+    }
+    const edl = await readEdlDocument(projectDirectory);
+    const ranges = Array.isArray(edl?.document.ranges) ? edl.document.ranges : [];
+    if (!edl || ranges.length < 2) {
+      return { applied: false, cuts: 0, error: 'Ainda não há um corte com transições no EDL para aplicar o J-Cut.' };
+    }
+    const plan = planJcut(ranges);
+    if (!plan) {
+      return { applied: false, cuts: 0, error: 'As transições deste corte são curtas demais para antecipar o áudio.' };
+    }
+    const targets = await findJcutTargets(projectDirectory);
+    const primary = targets.primary ?? targets.mirror;
+    if (!primary) {
+      return { applied: false, cuts: 0, error: 'Não encontrei o vídeo do corte limpo em edit/ para aplicar o J-Cut.' };
+    }
+    const sourcePaths: string[] = [];
+    for (const segment of plan.segments) {
+      const resolved = resolveJcutSource(projectDirectory, edl.document, segment.sourceId);
+      if (!resolved || !(await statOf(resolved))) {
+        return { applied: false, cuts: 0, error: `O arquivo-fonte "${segment.sourceId || 'principal'}" do EDL não está na pasta do projeto.` };
+      }
+      sourcePaths.push(resolved);
+    }
+
+    const workDirectory = await mkdtemp(path.join(os.tmpdir(), 'edvid-jcut-'));
+    try {
+      const pieces: string[] = [];
+      for (const [index, segment] of plan.segments.entries()) {
+        const wav = path.join(workDirectory, `piece-${index}.wav`);
+        await runFfmpeg(ffmpeg.command, ffmpeg.argsPrefix, extractionArgs(segment, sourcePaths[index], wav), 120_000);
+        pieces.push(wav);
+      }
+      const mixed = path.join(workDirectory, 'mixed.wav');
+      await runFfmpeg(ffmpeg.command, ffmpeg.argsPrefix, mixArgs(plan, pieces, mixed), 120_000);
+
+      const extension = path.extname(primary) || '.mp4';
+      const rendered = path.join(workDirectory, `saida${extension}`);
+      await runFfmpeg(ffmpeg.command, ffmpeg.argsPrefix, muxArgs(primary, mixed, rendered), 300_000);
+
+      // Verificacao antes de substituir: duracoes de video e audio fechadas
+      // entre si e com o corte original. Qualquer divergencia aborta.
+      const probeOut = await inspectVideo(ffprobe.command, ffprobe.argsPrefix, rendered);
+      const probeOriginal = await inspectVideo(ffprobe.command, ffprobe.argsPrefix, primary);
+      const outDuration = Number(probeOut.format?.duration);
+      const originalDuration = Number(probeOriginal.format?.duration);
+      if (!Number.isFinite(outDuration) || !Number.isFinite(originalDuration) || Math.abs(outDuration - originalDuration) > 0.1) {
+        throw new Error('A verificação de duração do J-Cut falhou; o corte original foi mantido.');
+      }
+
+      // Backup com marca de intermediario (o preview ignora "-tmp") e troca
+      // atomica no mesmo diretorio.
+      const applyTo = async (target: string): Promise<void> => {
+        const directory = path.dirname(target);
+        const base = path.basename(target, path.extname(target));
+        const backup = path.join(directory, `${base}-sem-jcut-tmp${path.extname(target)}`);
+        await copyFile(target, backup);
+        const staged = path.join(directory, `${base}-jcut-staging-tmp${path.extname(target)}`);
+        await copyFile(rendered, staged);
+        await rename(staged, target);
+      };
+      await applyTo(primary);
+      if (targets.mirror && targets.mirror !== primary) await applyTo(targets.mirror);
+
+      // O jcut_timeline oficial passa a ser escrito pelo aplicativo.
+      const document = JSON.parse(await readFile(edl.path, 'utf8')) as EdlDocument;
+      document.jcut_timeline = plan.timeline;
+      await writeFile(edl.path, `${JSON.stringify(document, null, 2)}\n`);
+
+      const files: JcutMarker['files'] = [];
+      for (const target of [primary, targets.mirror].filter((value): value is string => Boolean(value))) {
+        const info = await statOf(target);
+        if (info) files.push({ path: path.relative(projectDirectory, target), ...info });
+      }
+      const marker: JcutMarker = {
+        version: JCUT_MARKER_VERSION,
+        lead: JCUT_LEAD_SECONDS,
+        cuts: plan.leadsApplied,
+        appliedAt: new Date().toISOString(),
+        files,
+      };
+      await mkdir(path.dirname(jcutMarkerPath(projectDirectory)), { recursive: true });
+      await writeFile(jcutMarkerPath(projectDirectory), `${JSON.stringify(marker, null, 2)}\n`);
+      return { applied: true, cuts: plan.leadsApplied, error: null };
+    } finally {
+      await rm(workDirectory, { recursive: true, force: true });
+    }
+  })().catch((error: unknown) => ({
+    applied: false,
+    cuts: 0,
+    error: error instanceof Error ? error.message : String(error),
+  }));
+  jcutJob = { directory: projectDirectory, promise: job };
+  void job.finally(() => {
+    if (jcutJob?.promise === job) jcutJob = null;
+  });
+  return job;
+}
+
+// Pos-turno: se o J-Cut ja foi aplicado neste projeto e o agente re-renderizou
+// o corte (arquivos mudaram), reaplica em silencio com o EDL atual.
+async function syncJcutForProject(projectDirectory: string): Promise<JcutSyncResult> {
+  let marker: JcutMarker | null = null;
+  try {
+    const parsed = JSON.parse(await readFile(jcutMarkerPath(projectDirectory), 'utf8')) as JcutMarker;
+    if (parsed?.version === JCUT_MARKER_VERSION && Array.isArray(parsed.files)) marker = parsed;
+  } catch {
+    marker = null;
+  }
+  if (!marker) return { changed: false };
+  let stale = false;
+  for (const file of marker.files) {
+    const info = await statOf(path.resolve(projectDirectory, file.path));
+    if (!info || info.size !== file.size || info.mtimeMs !== file.mtimeMs) {
+      stale = true;
+      break;
+    }
+  }
+  if (!stale) return { changed: false };
+  const result = await applyJcutToProject(projectDirectory);
+  return { changed: result.applied };
+}
+
 // --- Geracao de imagens pedidas pelo agente --------------------------------
 // O agente de chat escreve edit/imagens/pedidos.json; depois do turno o
 // aplicativo gera cada imagem fora do sandbox com a IA de imagem do aluno
@@ -2557,6 +2782,22 @@ function registerIpcHandlers(): void {
       throw new Error('Escolha a pasta do projeto pelo seletor do Edvid.');
     }
     return fulfillImageRequests(directory);
+  });
+
+  ipcMain.handle('jcut:apply', (_event, input: { directory?: string }) => {
+    const directory = path.resolve(asText(input.directory));
+    if (!selectedProjectDirectories.has(directory)) {
+      throw new Error('Escolha a pasta do projeto pelo seletor do Edvid.');
+    }
+    return applyJcutToProject(directory);
+  });
+
+  ipcMain.handle('jcut:sync', (_event, input: { directory?: string }) => {
+    const directory = path.resolve(asText(input.directory));
+    if (!selectedProjectDirectories.has(directory)) {
+      throw new Error('Escolha a pasta do projeto pelo seletor do Edvid.');
+    }
+    return syncJcutForProject(directory);
   });
 
   ipcMain.handle('claude:account', () => getClaudeAgent().readAccount());
