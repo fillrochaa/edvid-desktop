@@ -162,6 +162,7 @@ type IconName =
   | 'pause'
   | 'pin'
   | 'play'
+  | 'redo'
   | 'scissors'
   | 'send'
   | 'settings'
@@ -169,6 +170,7 @@ type IconName =
   | 'stop'
   | 'skipForward'
   | 'sparkles'
+  | 'undo'
   | 'text'
   | 'trash'
   | 'video'
@@ -241,6 +243,8 @@ function Icon({ name }: { name: IconName }) {
     scissors: <><circle cx="4.2" cy="4.4" r="1.9" /><circle cx="4.2" cy="11.6" r="1.9" /><path d="m5.7 5.6 8 6.6M5.7 10.4l8-6.6" /></>,
     send: <path d="M8 12.8V3.4M3.9 7.4 8 3.3l4.1 4.1" />,
     stop: <rect x="4.4" y="4.4" width="7.2" height="7.2" rx="1.6" />,
+    undo: <path d="M3.2 6.4h6.2a3.4 3.4 0 0 1 0 6.8H6.6M3.2 6.4l3-3M3.2 6.4l3 3" />,
+    redo: <path d="M12.8 6.4H6.6a3.4 3.4 0 0 0 0 6.8h2.8M12.8 6.4l-3-3M12.8 6.4l-3 3" />,
     settings: <g transform="scale(.6667)"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></g>,
     skipBack: <><path d="M4 3v10M12.8 3.2 5.4 8l7.4 4.8z" /></>,
     skipForward: <><path d="M12 3v10M3.2 3.2 10.6 8l-7.4 4.8z" /></>,
@@ -1502,6 +1506,38 @@ function EditorWorkspace({
       <section className="timeline-section">
         <div className="timeline-toolbar slim">
           {mapped && <span className="mapped-badge" title="O preview mostra as edições ainda não renderizadas">Prévia das edições</span>}
+          <div className="history-buttons" aria-label="Histórico de edições">
+            <button
+              type="button"
+              className="history-button"
+              onClick={undoTimelineAction}
+              disabled={!model || (actionOrderRef.current.length === 0 && markIn === null && !draftRange)}
+              title="Desfazer (⌘Z)"
+            >
+              <Icon name="undo" />
+            </button>
+            <button
+              type="button"
+              className="history-button"
+              onClick={redoModelEdit}
+              disabled={modelFutureRef.current.length === 0}
+              title="Refazer (⇧⌘Z)"
+            >
+              <Icon name="redo" />
+            </button>
+          </div>
+          {dirty && (
+            <>
+              {canDiscard && (
+                <button type="button" className="discard-edits" onClick={discardTimelineEdits} title="Voltar ao corte atual sem aplicar">
+                  Descartar
+                </button>
+              )}
+              <button type="button" className="apply-corrections" onClick={() => void onApplyTimelineEdits()} disabled={applyingCorrections} title="Enviar os novos cortes para gerar o render atualizado">
+                {applyingCorrections ? 'Aplicando...' : 'Aplicar ajustes'}
+              </button>
+            </>
+          )}
           <div className="timeline-time">{formatTimecode(currentTime, fps)} <span>/ {formatTimecode(effectiveDuration, fps)}</span></div>
         </div>
         <div className="timeline-scroll" ref={scrollRef}>
@@ -1677,23 +1713,10 @@ function EditorWorkspace({
             <button type="button" className="transport-button" onClick={toggleMute} disabled={!media} title={muted ? 'Ativar áudio' : 'Silenciar'}>
               <Icon name={muted ? 'volumeOff' : 'volume'} />
             </button>
-            {dirty ? (
-              <>
-                {canDiscard && (
-                  <button type="button" className="discard-edits" onClick={discardTimelineEdits} title="Voltar ao corte atual sem aplicar">
-                    Descartar
-                  </button>
-                )}
-                <button type="button" className="apply-corrections" onClick={() => void onApplyTimelineEdits()} disabled={applyingCorrections} title="Enviar os novos cortes para gerar o render atualizado">
-                  {applyingCorrections ? 'Aplicando...' : 'Aplicar edições'}
-                </button>
-              </>
-            ) : (
-              corrections.length > 0 && (
-                <button type="button" className="apply-corrections" onClick={() => void applyCorrections()} disabled={applyingCorrections}>
-                  {applyingCorrections ? 'Aplicando...' : 'Aplicar'}
-                </button>
-              )
+            {!dirty && corrections.length > 0 && (
+              <button type="button" className="apply-corrections" onClick={() => void applyCorrections()} disabled={applyingCorrections}>
+                {applyingCorrections ? 'Aplicando...' : 'Aplicar'}
+              </button>
             )}
           </div>
         </div>
@@ -2587,12 +2610,9 @@ export function App() {
     try {
       const result = await window.edvidDesktop.applyJcut(projectDirectory);
       if (result.applied) {
+        // Sem mensagem no chat: o próprio botão fica verde ("J-Cut
+        // aplicado") — falha continua avisando por mensagem.
         setJcutApplied(true);
-        setMessages((current) => [...current, {
-          id: `system:${Date.now()}`,
-          role: 'system',
-          text: `J-Cut aplicado: o áudio da cena seguinte agora entra ~150 ms antes do corte em ${result.cuts} ${result.cuts === 1 ? 'transição' : 'transições'}. O vídeo não foi reencodado — só a trilha de áudio mudou.`,
-        }]);
         await refreshWorkspace();
         requestPhase2Render();
       } else if (result.error) {
@@ -2645,7 +2665,7 @@ export function App() {
     ].join('\n');
     return dispatchMessage(
       prompt,
-      `Aplicar edições da timeline (${ranges.length} ${ranges.length === 1 ? 'trecho' : 'trechos'})`,
+      `Aplicar ajustes da timeline (${ranges.length} ${ranges.length === 1 ? 'trecho' : 'trechos'})`,
     );
   }
 
@@ -3117,7 +3137,7 @@ export function App() {
                         <button type="button" className="btn primary" onClick={() => void approveCleanCut(message.id)} disabled={sending || approvingCut}>
                           <Icon name="check" /> {approvingCut ? 'Aprovando...' : 'Aprovado'}
                         </button>
-                        <button type="button" className="btn ghost small" onClick={() => void applyJcut()} disabled={jcutBusy || jcutApplied}>
+                        <button type="button" className={`btn ghost small ${jcutApplied ? 'jcut-applied' : ''}`} onClick={() => void applyJcut()} disabled={jcutBusy || jcutApplied}>
                           <Icon name="waveform" /> {jcutApplied ? 'J-Cut aplicado' : jcutBusy ? 'Aplicando…' : 'Aplicar J-Cut'}
                         </button>
                       </div>
@@ -3125,7 +3145,7 @@ export function App() {
                     {message.id.startsWith('style-gate:') && (
                       <div className="clean-cut-gate jcut-gate">
                         <div><strong>J-Cut opcional</strong><span>Antecipa o áudio da próxima cena nas transições do corte aprovado.</span></div>
-                        <button type="button" className="btn ghost small" onClick={() => void applyJcut()} disabled={jcutBusy || jcutApplied}>
+                        <button type="button" className={`btn ghost small ${jcutApplied ? 'jcut-applied' : ''}`} onClick={() => void applyJcut()} disabled={jcutBusy || jcutApplied}>
                           <Icon name="waveform" /> {jcutApplied ? 'J-Cut aplicado' : jcutBusy ? 'Aplicando…' : 'Aplicar J-Cut'}
                         </button>
                       </div>
@@ -3139,7 +3159,7 @@ export function App() {
                   <button type="button" className="btn primary" onClick={() => void approveCleanCut(`pinned:${Date.now()}`)} disabled={sending || approvingCut}>
                     <Icon name="check" /> {approvingCut ? 'Aprovando...' : 'Aprovado'}
                   </button>
-                  <button type="button" className="btn ghost small" onClick={() => void applyJcut()} disabled={jcutBusy || jcutApplied}>
+                  <button type="button" className={`btn ghost small ${jcutApplied ? 'jcut-applied' : ''}`} onClick={() => void applyJcut()} disabled={jcutBusy || jcutApplied}>
                     <Icon name="waveform" /> {jcutApplied ? 'J-Cut aplicado' : jcutBusy ? 'Aplicando…' : 'Aplicar J-Cut'}
                   </button>
                 </div>

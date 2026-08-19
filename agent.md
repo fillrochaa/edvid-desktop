@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-19 (0.13.1 — gate de aprovação/J-Cut à prova de fraseado: detecção por âncoras + gate fixo quando o preview é um corte limpo não aprovado)
+Atualizado em: 2026-08-19 (0.13.2 — J-Cut aplicado vira botão verde sem mensagem; desfazer/refazer e "Aplicar ajustes" na barra do topo da timeline)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -561,9 +561,14 @@ Ferramentas implementadas no editor:
    impõe o fim de cada segmento mesmo que o motor tenha parado. Sem essa
    segunda camada, qualquer retomada do elemento por fora do estado do React
    fazia o arquivo-fonte tocar inteiro, ignorando os cortes.
-9. "Aplicar edições" envia os novos ranges (tempo de fonte) ao agente para
+9. "Aplicar ajustes" envia os novos ranges (tempo de fonte) ao agente para
    regravar o EDL e re-renderizar; "Descartar" volta ao corte atual.
    Enquanto houver edições pendentes, as marcações In/Out ficam bloqueadas.
+   Desde a 0.13.2 esses botões vivem na BARRA DO TOPO da timeline (junto do
+   badge "Prévia das edições" e do timecode), ao lado dos botões visíveis de
+   desfazer/refazer — os atalhos ⌘Z/⇧⌘Z existem desde a 0.6.0 (listener no
+   window; o estado habilitado dos botões lê os refs de histórico, exato
+   porque toda mutação re-renderiza).
 
 Regras preservadas:
 
@@ -956,6 +961,16 @@ Fase 2:
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.13.2: refinamentos pedidos em uso real. Sucesso do J-Cut deixou de gerar
+  mensagem de sistema no chat: o próprio botão fica VERDE (#4fd08b,
+  .jcut-applied) com "J-Cut aplicado" — falha continua avisando por
+  mensagem. Botões de desfazer/refazer (ícones novos undo/redo) na barra do
+  topo da timeline, com estado habilitado lido dos refs de histórico;
+  "Descartar"/"Aplicar ajustes" (ex-"Aplicar edições") migraram da barra de
+  transporte para essa mesma barra. QA: ciclo completo navalha → desfazer →
+  refazer → ⌘Z validado (o modificador ⌘ não atravessa o painel de
+  automação; validar com KeyboardEvent real no body — dispatch no window
+  quebra no closest() do guard de inputs).
 - 0.13.1: o gate de aprovação (e com ele o J-Cut) não aparecia em uso real —
   a frase do agente variou e a regex exigia proximidade de 80 caracteres.
   Detecção reescrita por âncoras de palavra sem limite de distância + gate

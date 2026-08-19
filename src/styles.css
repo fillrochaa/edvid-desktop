@@ -134,6 +134,8 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .clean-cut-gate strong { color: #d9f4f4; font-size: 9.5px; }
 .clean-cut-gate span { margin-top: 2px; color: #6d898e; font-size: 7.5px; line-height: 1.4; }
 .clean-cut-gate .btn { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; }
+/* Aplicado = botão verde do design system; a cor comunica sem mensagem no chat. */
+.clean-cut-gate .btn.jcut-applied { color: #4fd08b; border-color: rgba(56,199,124,.4); background: rgba(56,199,124,.09); opacity: 1; }
 .clean-cut-gate .icon { width: 12px; height: 12px; }
 .btn.danger { color: #ff8fa0; }
 .scroll-to-latest { position: absolute; right: 15px; bottom: 92px; z-index: 4; display: flex; align-items: center; gap: 5px; padding: 6px 9px; border: 1px solid rgba(9,181,183,.25); border-radius: 999px; color: #75d8da; background: rgba(15,22,28,.94); box-shadow: 0 8px 28px rgba(0,0,0,.35); font-size: 8px; cursor: pointer; }
@@ -487,7 +489,13 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .account-action.gear .icon { width: 12px; height: 12px; }
 .rail-pin .icon { width: 11px; height: 11px; }
 
-.timeline-toolbar.slim { min-height: 26px; display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 3px 10px; }
+.timeline-toolbar.slim { min-height: 30px; display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 3px 10px; }
+.timeline-toolbar.slim .mapped-badge { margin-right: auto; }
+.history-buttons { display: flex; align-items: center; gap: 4px; }
+.history-button { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.12); border-radius: 7px; color: #8b95a1; background: rgba(255,255,255,.03); cursor: pointer; }
+.history-button:hover:not(:disabled) { color: #c7ced6; border-color: rgba(255,255,255,.24); }
+.history-button:disabled { opacity: .32; cursor: default; }
+.history-button .icon { width: 12px; height: 12px; }
 .timeline-transport .timeline-zoom { margin-right: 4px; }
 
 .modal-overlay { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 20px; background: rgba(4,6,9,.5); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
