@@ -499,41 +499,71 @@ try {
   // ao lado do python.exe, primeiro lugar da busca de DLLs.
   let msvcRuntime = null;
   if (isWindows) {
-    const vsRoot = 'C:\\Program Files\\Microsoft Visual Studio\\2022';
-    const editions = await readdir(vsRoot).catch(() => []);
+    // 1º: pasta Redist de um Visual Studio localizado pelo vswhere (melhor
+    // proveniencia). 2º: copias do System32 — sao os MESMOS arquivos REDIST,
+    // instalados no runner; o conjunto minimo e verificado ao final.
     const redistDirectories = [];
-    for (const edition of editions) {
-      const msvcRoot = path.join(vsRoot, edition, 'VC', 'Redist', 'MSVC');
-      const versions = await readdir(msvcRoot).catch(() => []);
-      for (const redistVersion of versions.sort().reverse()) {
-        for (const flavor of ['Microsoft.VC143.CRT', 'Microsoft.VC143.OpenMP']) {
-          const candidate = path.join(msvcRoot, redistVersion, 'x64', flavor);
-          if (await exists(candidate)) redistDirectories.push({ redistVersion, candidate, flavor });
+    const vswhere = 'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe';
+    if (await exists(vswhere)) {
+      const located = spawnSync(vswhere, ['-products', '*', '-property', 'installationPath'], {
+        encoding: 'utf8',
+      });
+      const installs = `${located.stdout ?? ''}`.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+      for (const install of installs) {
+        const msvcRoot = path.join(install, 'VC', 'Redist', 'MSVC');
+        const versions = (await readdir(msvcRoot).catch(() => [])).sort().reverse();
+        for (const redistVersion of versions) {
+          for (const flavor of ['Microsoft.VC143.CRT', 'Microsoft.VC143.OpenMP']) {
+            const candidate = path.join(msvcRoot, redistVersion, 'x64', flavor);
+            if (await exists(candidate)) redistDirectories.push({ redistVersion, candidate });
+          }
+          if (redistDirectories.length >= 2) break;
         }
         if (redistDirectories.length >= 2) break;
       }
-      if (redistDirectories.length >= 2) break;
     }
-    if (redistDirectories.length === 0) {
-      throw new Error(
-        'Redist do Visual C++ (VC143 x64) nao encontrado nesta maquina; instale o Build Tools/VS para preparar o runtime win32.',
-      );
-    }
+
     const copied = [];
-    for (const { candidate, redistVersion } of redistDirectories) {
-      for (const name of await readdir(candidate)) {
-        if (!/\.dll$/iu.test(name)) continue;
+    let redistSource = 'vs-redist';
+    if (redistDirectories.length > 0) {
+      for (const { candidate, redistVersion } of redistDirectories) {
+        for (const name of await readdir(candidate)) {
+          if (!/\.dll$/iu.test(name)) continue;
+          const destinationDll = path.join(path.dirname(stagedPython), name);
+          await cp(path.join(candidate, name), destinationDll);
+          copied.push({ name, redistVersion, sha256: await sha256(destinationDll) });
+        }
+      }
+    } else {
+      redistSource = 'system32';
+      const system32 = 'C:\\Windows\\System32';
+      const runtimeDlls = [
+        'msvcp140.dll',
+        'msvcp140_1.dll',
+        'msvcp140_2.dll',
+        'msvcp140_atomic_wait.dll',
+        'msvcp140_codecvt_ids.dll',
+        'vcruntime140.dll',
+        'vcruntime140_1.dll',
+        'concrt140.dll',
+        'vcomp140.dll',
+      ];
+      for (const name of runtimeDlls) {
+        const sourceDll = path.join(system32, name);
+        if (!(await exists(sourceDll))) continue;
         const destinationDll = path.join(path.dirname(stagedPython), name);
-        await cp(path.join(candidate, name), destinationDll);
-        copied.push({ name, redistVersion, sha256: await sha256(destinationDll) });
+        await cp(sourceDll, destinationDll);
+        copied.push({ name, redistVersion: 'system32', sha256: await sha256(destinationDll) });
       }
     }
-    if (!copied.some((entry) => /^msvcp140\.dll$/iu.test(entry.name)) ||
-        !copied.some((entry) => /^vcomp140\.dll$/iu.test(entry.name))) {
-      throw new Error('Redist incompleto: msvcp140.dll ou vcomp140.dll ausentes na copia app-local.');
+    for (const required of ['msvcp140.dll', 'vcomp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']) {
+      if (!copied.some((entry) => entry.name.toLowerCase() === required)) {
+        throw new Error(`Redist incompleto (${redistSource}): ${required} ausente na copia app-local.`);
+      }
     }
     msvcRuntime = {
       policy: whisperxManifest.winMsvcRuntime ?? 'app-local-vc143',
+      source: redistSource,
       note: 'Arquivos REDIST da Microsoft (VC143 CRT + OpenMP) para deploy app-local',
       files: copied.sort((a, b) => a.name.localeCompare(b.name)),
     };
