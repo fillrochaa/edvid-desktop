@@ -969,6 +969,12 @@ Lições das 8 iterações (vao doer de novo se esquecidas):
   carrega ("or one of its dependencies").
 - .runtime-cache é cacheado no CI: mudança no MODO de build precisa de
   winBuildRevision no metadata para invalidar.
+- O runner do CI tem o VC++ Redistributable instalado e MASCARA a ausência
+  dele nas máquinas de aluno (torch/ctranslate2 precisam de
+  msvcp140/vcomp140/vcruntime140). Solução: DLLs REDIST app-local ao lado
+  do python.exe, copiadas do VC143 Redist do runner no stage (0.13.4);
+  o smoke exige as DLLs NO pack. Codex (rust) rodava mesmo assim — só
+  exigia vcruntime, que costuma existir; o sintoma era só no Python.
 
 Como construir (os dois caminhos rodam os MESMOS npm scripts):
 - CI: workflow `windows-build` (.github/workflows/windows-build.yml),
@@ -1063,6 +1069,15 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.13.4: segunda rodada do teste real no Windows, agora com causa exata
+  graças ao banner novo: "falta o Microsoft Visual C++ Redistributable".
+  Em vez de forçar um instalador com UAC na instalação, o runtime VC143
+  (CRT + OpenMP) virou APP-LOCAL: o stage win copia as DLLs REDIST para o
+  lado do python.exe e registra versões/sha no metadata; o manifest ganhou
+  winMsvcRuntime (muda a chave do pack — os DOIS packs são republicados e
+  o aplicativo 0.13.4 busca a chave nova); o smoke passou a exigir as
+  DLLs dentro do pack. Sem passo extra para o aluno e sem prompt de
+  administrador.
 - 0.13.3: primeiro teste real no Windows ("mecanismo local de transcrição
   não abriu"). O smoke novo (workflow windows-smoke: baixa o runtime pack
   PUBLICADO do R2, extrai como o app e roda os mesmos comandos do agente,

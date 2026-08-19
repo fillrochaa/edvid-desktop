@@ -46,6 +46,11 @@ jobs:
           & "$py/python.exe" --version
           if (-not (Test-Path "$py/python3.exe")) { throw "python3.exe ausente no pack" }
           & "$py/python3.exe" --version
+          # O runner tem o VC++ Redistributable e mascararia a ausencia; a
+          # maquina do aluno nao tem — as DLLs precisam estar NO pack.
+          foreach ($dll in @('msvcp140.dll', 'vcomp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
+            if (-not (Test-Path "$py/$dll")) { throw "runtime VC++ app-local ausente no pack: $dll" }
+          }
 
       - name: Imports do WhisperX (torch, torchcodec, DLLs)
         run: |

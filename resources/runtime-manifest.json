@@ -38,7 +38,8 @@
       "opencvVersion": "4.14.0.94",
       "distribution": "uv-locked-pypi-pytorch-cpu",
       "modelPolicy": "download-on-demand-to-app-data",
-      "sharedFfmpegVersion": "7.1.5"
+      "sharedFfmpegVersion": "7.1.5",
+      "winMsvcRuntime": "app-local-vc143"
     },
     "codex-app-server": {
       "version": "0.147.0",

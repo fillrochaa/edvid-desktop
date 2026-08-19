@@ -492,6 +492,53 @@ try {
     }
   }
 
+  // Runtime do Visual C++ APP-LOCAL: torch/ctranslate2 dependem de
+  // msvcp140/vcomp140/vcruntime140, que uma maquina limpa de aluno nao tem
+  // (o runner do CI tem o Redistributable e mascarava isso). Os arquivos
+  // REDIST da Microsoft podem ser distribuidos junto do aplicativo; ficam
+  // ao lado do python.exe, primeiro lugar da busca de DLLs.
+  let msvcRuntime = null;
+  if (isWindows) {
+    const vsRoot = 'C:\\Program Files\\Microsoft Visual Studio\\2022';
+    const editions = await readdir(vsRoot).catch(() => []);
+    const redistDirectories = [];
+    for (const edition of editions) {
+      const msvcRoot = path.join(vsRoot, edition, 'VC', 'Redist', 'MSVC');
+      const versions = await readdir(msvcRoot).catch(() => []);
+      for (const redistVersion of versions.sort().reverse()) {
+        for (const flavor of ['Microsoft.VC143.CRT', 'Microsoft.VC143.OpenMP']) {
+          const candidate = path.join(msvcRoot, redistVersion, 'x64', flavor);
+          if (await exists(candidate)) redistDirectories.push({ redistVersion, candidate, flavor });
+        }
+        if (redistDirectories.length >= 2) break;
+      }
+      if (redistDirectories.length >= 2) break;
+    }
+    if (redistDirectories.length === 0) {
+      throw new Error(
+        'Redist do Visual C++ (VC143 x64) nao encontrado nesta maquina; instale o Build Tools/VS para preparar o runtime win32.',
+      );
+    }
+    const copied = [];
+    for (const { candidate, redistVersion } of redistDirectories) {
+      for (const name of await readdir(candidate)) {
+        if (!/\.dll$/iu.test(name)) continue;
+        const destinationDll = path.join(path.dirname(stagedPython), name);
+        await cp(path.join(candidate, name), destinationDll);
+        copied.push({ name, redistVersion, sha256: await sha256(destinationDll) });
+      }
+    }
+    if (!copied.some((entry) => /^msvcp140\.dll$/iu.test(entry.name)) ||
+        !copied.some((entry) => /^vcomp140\.dll$/iu.test(entry.name))) {
+      throw new Error('Redist incompleto: msvcp140.dll ou vcomp140.dll ausentes na copia app-local.');
+    }
+    msvcRuntime = {
+      policy: whisperxManifest.winMsvcRuntime ?? 'app-local-vc143',
+      note: 'Arquivos REDIST da Microsoft (VC143 CRT + OpenMP) para deploy app-local',
+      files: copied.sort((a, b) => a.name.localeCompare(b.name)),
+    };
+  }
+
   if (!isWindows) await validateBundleSymlinks(stagedPythonRoot);
 
   console.log(`Instalando WhisperX ${whisperxManifest.version} pelo lockfile...`);
@@ -618,6 +665,7 @@ try {
           signatureFingerprint: sharedFfmpegMetadata.signatureFingerprint,
           libraryCount: sharedLibraries.length,
         },
+        ...(msvcRuntime ? { msvcRuntime } : {}),
         lockSha256,
         pyprojectSha256,
         versions,
