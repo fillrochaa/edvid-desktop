@@ -948,7 +948,16 @@ carregando as DLLs, instalador Squirrel e runtime pack gerados —
 artefato "edvid-windows" (~1,1 GB) anexado na rodada. Falta instalar
 numa máquina Windows real e validar o ciclo completo de aluno.
 
-Lições das 6 iterações (vao doer de novo se esquecidas):
+PUBLICADO no R2 em 2026-08-19 (run com publish, 8ª iteração): runtime pack
+`runtimes/runtimes-win32-x64-<chave>.tar.gz`, canal `win32/RELEASES`
+(edvid-0.13.2-full.nupkg) e instalador `EdvidSetup.exe` estável na raiz —
+o link para a página de download da Creator Factory. feed.json do mac
+intacto. Secrets adicionados ao repositório com autorização do Fill.
+
+Lições das 8 iterações (vao doer de novo se esquecidas):
+- O tar do actions/cache corrompe as junctions do python-install do uv
+  ("directory name is invalid", os error 267): python-install fica FORA do
+  cache e o stage recria do zero (wheels seguem no uv-cache).
 - gh CLI no Actions exige GH_TOKEN (attestation do uv).
 - O gpg de runtime MSYS do PATH dos runners mutila caminhos com letra de
   drive; usar o gpg do MSYS2 (pacman gnupg) com caminhos /c/....
