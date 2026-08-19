@@ -123,16 +123,24 @@ function checksumFor(checksums, filename) {
   throw new Error(`Checksum oficial ausente para ${filename}.`);
 }
 
+// No Windows os gpg de runtime MSYS do PATH mutilam caminhos com letra de
+// drive; usamos deterministicamente o gpg do MSYS2 (workflow instala o
+// pacote gnupg) com os caminhos convertidos para a forma /c/... — o mesmo
+// arranjo do fetch-ffmpeg-source.
+const isWindowsHost = process.platform === 'win32';
+const gpgCommand = isWindowsHost
+  ? process.env.EDVID_MSYS2_GPG || 'C:\\msys64\\usr\\bin\\gpg.exe'
+  : 'gpg';
+
+function gpgPath(value) {
+  if (!isWindowsHost) return value;
+  return value
+    .replace(/^([A-Za-z]):[\\/]/u, (_match, drive) => `/${drive.toLowerCase()}/`)
+    .replaceAll('\\', '/');
+}
+
 async function verifySignedChecksums() {
-  if (process.platform === 'win32') {
-    // O gpg dos runners Windows (MSYS) mutila caminhos com letra de drive
-    // ("/d/a/...C:\\Users\\..."). No Windows o EXECUTAVEL baixado e
-    // verificado pela attestation do GitHub (gh attestation verify, como o
-    // uv) logo apos o download — confianca equivalente, sem gpg.
-    console.log('Windows: verificacao da release via attestation do GitHub (sem gpg).');
-    return;
-  }
-  const gpgAvailable = spawnSync('gpg', ['--version'], { stdio: 'ignore' }).status === 0;
+  const gpgAvailable = spawnSync(gpgCommand, ['--version'], { stdio: 'ignore' }).status === 0;
   if (!gpgAvailable) {
     throw new Error('GnuPG ausente. Instale `gpg` para verificar a release do yt-dlp.');
   }
@@ -140,12 +148,12 @@ async function verifySignedChecksums() {
   const gpgHome = await mkdtemp(path.join(tmpdir(), 'edvid-yt-dlp-gpg-'));
   await chmod(gpgHome, 0o700);
   try {
-    run('gpg', ['--batch', '--homedir', gpgHome, '--import', publicKeyPath], {
+    run(gpgCommand, ['--batch', '--homedir', gpgPath(gpgHome), '--import', gpgPath(publicKeyPath)], {
       capture: true,
     });
     const keyListing = run(
-      'gpg',
-      ['--batch', '--homedir', gpgHome, '--with-colons', '--fingerprint'],
+      gpgCommand,
+      ['--batch', '--homedir', gpgPath(gpgHome), '--with-colons', '--fingerprint'],
       { capture: true },
     );
     const fingerprints = keyListing
@@ -159,8 +167,8 @@ async function verifySignedChecksums() {
       );
     }
     run(
-      'gpg',
-      ['--batch', '--homedir', gpgHome, '--verify', signaturePath, checksumsPath],
+      gpgCommand,
+      ['--batch', '--homedir', gpgPath(gpgHome), '--verify', gpgPath(signaturePath), gpgPath(checksumsPath)],
       { capture: true },
     );
   } finally {
@@ -251,12 +259,6 @@ const artifactHash = await ensureVerifiedDownload(
   artifactExpectedHash,
   `yt-dlp ${version} para ${target}`,
 );
-if (process.platform === 'win32') {
-  run('gh', ['attestation', 'verify', artifactPath, '--repo', 'yt-dlp/yt-dlp'], {
-    capture: true,
-  });
-  console.log('Attestation do GitHub verificada para o executavel yt-dlp.');
-}
 const sourceArchiveHash = await ensureVerifiedDownload(
   sourceArchiveName,
   sourceArchivePath,
