@@ -145,6 +145,9 @@ if (target === 'win32-x64') {
     'swscale-8.dll',
   ];
   const dllDirectory = path.join(prefix, 'bin');
+  // Sobe quando o modo de build muda (flags, runtime dlls): o .runtime-cache
+  // e cacheado no CI e sem isso um build antigo nunca seria refeito.
+  const winBuildRevision = 2;
 
   const dllsPresent = async () => {
     for (const name of expectedDlls) {
@@ -156,7 +159,12 @@ if (target === 'win32-x64') {
   if (await exists(metadataPath)) {
     try {
       const metadata = JSON.parse(await readFile(metadataPath, 'utf8'));
-      if (metadata.target === target && metadata.version === version && (await dllsPresent())) {
+      if (
+        metadata.target === target &&
+        metadata.version === version &&
+        metadata.winBuildRevision === winBuildRevision &&
+        (await dllsPresent())
+      ) {
         console.log(`FFmpeg compartilhado ${version} ja esta preparado para o TorchCodec (win32).`);
         process.exit(0);
       }
@@ -196,6 +204,9 @@ if (target === 'win32-x64') {
     '--enable-shared',
     '--disable-postproc',
     '--disable-network',
+    // Sem isso as DLLs dependem de libgcc_s_seh-1.dll do mingw e o
+    // libtorchcodec nao consegue carrega-las fora do MSYS2.
+    '--extra-ldflags=-static-libgcc',
   ];
   runBash(
     `"${posix(source)}/configure" ${winConfigureFlags.map((flag) => `"${flag}"`).join(' ')}`,
@@ -203,6 +214,16 @@ if (target === 'win32-x64') {
   );
   runBash(`make -j${jobs}`, buildDirectory);
   runBash('make install', buildDirectory);
+
+  // Runtime do mingw de que as DLLs dependem (pthreads). Copiado para o
+  // MESMO diretorio: o stage-python leva todos os .dll de bin/ juntos.
+  const mingwRuntime = path.dirname(bash).replace(/usr[\\/]bin$/u, path.join('mingw64', 'bin'));
+  for (const runtimeDll of ['libwinpthread-1.dll', 'libgcc_s_seh-1.dll']) {
+    const sourceDll = path.join(mingwRuntime, runtimeDll);
+    if (await exists(sourceDll)) {
+      await cp(sourceDll, path.join(dllDirectory, runtimeDll));
+    }
+  }
 
   const libraries = {};
   for (const name of expectedDlls) {
@@ -228,6 +249,7 @@ if (target === 'win32-x64') {
       {
         target,
         version,
+        winBuildRevision,
         purpose: 'TorchCodec shared-library ABI compatibility',
         license: 'LGPL-2.1-or-later',
         sourceUrl: sourceMetadata.archiveUrl,
