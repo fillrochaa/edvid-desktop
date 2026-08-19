@@ -1036,10 +1036,22 @@ Validação pendente na primeira rodada real (nesta ordem):
 
 Dependências do Fill:
 - Adicionar os 4 secrets no repositório (gh secret set …).
-- Certificado de assinatura Windows (decisão futura): sem ele o
-  SmartScreen mostra "editor desconhecido" — funciona, mas com fricção
-  para o aluno. Opções: Azure Trusted Signing (mais barato) ou EV/OV
-  tradicional; quando existir, entra no workflow.
+- Assinatura Windows (Azure Trusted Signing): o CI já está PRONTO e
+  gateado — com os secrets presentes, o passo "Preparar assinatura" baixa
+  o dlib (Microsoft.Trusted.Signing.Client via nuget), acha o signtool do
+  SDK, escreve o metadata.json e exporta EDVID_WIN_SIGNTOOL +
+  EDVID_WIN_SIGN_PARAMS; o forge.config aplica windowsSign no packager
+  (Edvid.exe) e no MakerSquirrel (Update.exe/Setup.exe via
+  electron-winstaller 5.4+). Sem secrets, build sem assinatura como
+  antes. Falta o lado Azure do Fill: assinatura ativa → recurso "Trusted
+  Signing Account" (Basic ~US$9,99/mês) → Identity Validation (aguardar
+  aprovação) → Certificate Profile (Public Trust) → App registration com
+  client secret + papel "Trusted Signing Certificate Profile Signer" no
+  recurso → secrets AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET/
+  EDVID_ATS_ENDPOINT (ex.: https://eus.codesigning.azure.net)/
+  EDVID_ATS_ACCOUNT/EDVID_ATS_PROFILE no repositório. Primeira build
+  assinada valida o arranjo (signtool antigo do Squirrel NÃO é usado —
+  windowsSign substitui).
 - Não assumir que o pacote macOS prova compatibilidade Windows.
 
 ## 15. Histórico recente de versões

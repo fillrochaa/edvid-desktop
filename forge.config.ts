@@ -9,6 +9,17 @@ import path from 'node:path';
 
 const macSigningIdentity = process.env.EDVID_MAC_SIGN_IDENTITY?.trim();
 
+// Assinatura Windows via Azure Trusted Signing: o workflow do CI prepara o
+// signtool do SDK + o dlib do Trusted Signing e exporta estes dois envs; sem
+// eles o build sai sem assinatura (SmartScreen avisa, mas funciona). A
+// autenticacao vem de AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET no ambiente.
+const windowsSignToolPath = process.env.EDVID_WIN_SIGNTOOL?.trim();
+const windowsSignParams = process.env.EDVID_WIN_SIGN_PARAMS?.trim();
+const windowsSign =
+  windowsSignToolPath && windowsSignParams
+    ? { signToolPath: windowsSignToolPath, signWithParams: windowsSignParams }
+    : undefined;
+
 // Notarizacao so entra quando as tres credenciais estiverem no ambiente:
 // EDVID_APPLE_ID (e-mail da conta), EDVID_APPLE_APP_PASSWORD (senha de app
 // gerada em appleid.apple.com) e EDVID_APPLE_TEAM_ID. Sem elas o build segue
@@ -54,10 +65,17 @@ const config: ForgeConfig = {
           teamId: appleTeamId as string,
         }
       : undefined,
+    windowsSign,
   },
   rebuildConfig: {},
   makers: [
-    new MakerSquirrel({ name: 'edvid', setupIcon: path.resolve('src/brand/edvid-icon.ico') }),
+    new MakerSquirrel({
+      name: 'edvid',
+      setupIcon: path.resolve('src/brand/edvid-icon.ico'),
+      // electron-winstaller 5.4+ assina Update.exe/Setup.exe com o mesmo
+      // windowsSign do packager (que ja assinou o Edvid.exe do app).
+      ...(windowsSign ? { windowsSign } : {}),
+    }),
     new MakerDMG(
       {
         background: path.resolve('src/brand/dmg-background.png'),

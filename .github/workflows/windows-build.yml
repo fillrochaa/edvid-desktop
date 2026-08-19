@@ -29,6 +29,14 @@ jobs:
       EDVID_CF_API_TOKEN: ${{ secrets.EDVID_CF_API_TOKEN }}
       EDVID_R2_BUCKET: ${{ secrets.EDVID_R2_BUCKET }}
       EDVID_UPDATE_BASE_URL: ${{ secrets.EDVID_UPDATE_BASE_URL }}
+      # Assinatura Windows (Azure Trusted Signing). Sem estes secrets o build
+      # sai sem assinatura, como antes.
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      EDVID_ATS_ENDPOINT: ${{ secrets.EDVID_ATS_ENDPOINT }}
+      EDVID_ATS_ACCOUNT: ${{ secrets.EDVID_ATS_ACCOUNT }}
+      EDVID_ATS_PROFILE: ${{ secrets.EDVID_ATS_PROFILE }}
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +62,24 @@ jobs:
           key: runtime-cache-win32-x64-v2-${{ hashFiles('resources/runtime-manifest.json', 'python/whisperx/uv.lock') }}
 
       - run: npm ci
+
+      # Prepara o signtool do SDK + o dlib do Trusted Signing e exporta os
+      # envs que o forge.config consome (windowsSign no packager e no
+      # Squirrel). So roda quando os secrets do Azure existem.
+      - name: Preparar assinatura (Azure Trusted Signing)
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Trusted.Signing.Client -x -OutputDirectory ats-client
+          $dlib = (Get-ChildItem -Recurse ats-client -Filter Azure.CodeSigning.Dlib.dll | Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1).FullName
+          if (-not $dlib) { throw "Azure.CodeSigning.Dlib.dll nao encontrado" }
+          $metadata = Join-Path $PWD "ats-metadata.json"
+          @{ Endpoint = $env:EDVID_ATS_ENDPOINT; CodeSigningAccountName = $env:EDVID_ATS_ACCOUNT; CertificateProfileName = $env:EDVID_ATS_PROFILE } | ConvertTo-Json | Set-Content $metadata -Encoding ascii
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1).FullName
+          if (-not $signtool) { throw "signtool.exe do SDK nao encontrado" }
+          "EDVID_WIN_SIGNTOOL=$signtool" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
+          "EDVID_WIN_SIGN_PARAMS=/v /fd SHA256 /tr http://timestamp.acr.microsoft.com /td SHA256 /dlib `"$dlib`" /dmdf `"$metadata`"" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
+          Write-Host "Assinatura preparada com $signtool"
 
       # A cadeia "make" roda todos os stage:* na plataforma corrente
       # (win32-x64), empacota com o Vite e gera o instalador Squirrel.
