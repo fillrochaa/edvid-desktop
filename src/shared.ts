@@ -249,6 +249,9 @@ export type ClaudeAccountState = {
   email: string | null;
   mode?: 'oauth' | 'api-key';
   manual?: boolean;
+  // O codigo chegou e a troca pelo token esta em andamento (com novas
+  // tentativas automaticas quando o servidor limita — HTTP 429).
+  finishing?: boolean;
   error?: string;
 };
 

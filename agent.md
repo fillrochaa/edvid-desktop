@@ -787,6 +787,11 @@ Arquitetura (`src/claude-agent.ts`, tudo em um módulo):
   (`{error:{message}}`) — os dois são tratados. Diário sanitizado em
   `userData/claude-login.log` (etapas e status HTTP, nunca códigos,
   tokens ou verifier) para diagnosticar um login que falha à distância.
+  O endpoint de token limita por IP com facilidade (429 real em uso):
+  o callback responde página neutra na hora e a troca roda no app com
+  retries (3s/8s/20s/45s) e estado finishing no modal; refresh com
+  retries curtos (2s/5s). EDVID_OAUTH_CALLBACK_PORT muda a porta nas
+  sondas (o authorize aceita qualquer porta de loopback).
 - Provas executadas no desenvolvimento (sem conta real): instalação com o
   npm empacotado ok; probe do query com token falso passou TODA a
   validação de opções (init com session e claude-sonnet-5) e falhou
@@ -1081,6 +1086,18 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.13.5: login do Claude resiliente ao rate limit da Anthropic. Em uso
+  real a troca do código chegou a falhar com "Rate limited" — o endpoint
+  de token limita por IP com facilidade (poucas tentativas bastam). O
+  callback agora responde NA HORA uma página neutra ("Quase lá — volte ao
+  Edvid") e a troca segue no aplicativo com novas tentativas (3s/8s/20s/
+  45s para 429/5xx/sem-rede; o código vale ~10min), estado "finishing"
+  no modal ("Concluindo o login…") e mensagem final em PT-BR acionável
+  quando esgota. Refresh usa retries curtos (2s/5s) para não travar
+  turnos. Porta de callback ganhou env EDVID_OAUTH_CALLBACK_PORT para as
+  sondas não disputarem a 54545 com um Edvid aberto (lição: a sonda
+  falhou porque o PRÓPRIO app em produção segurava a porta). Sonda com
+  33 verificações, incluindo 429→retry→conectado.
 - 0.13.4: segunda rodada do teste real no Windows, agora com causa exata
   graças ao banner novo: "falta o Microsoft Visual C++ Redistributable".
   Em vez de forçar um instalador com UAC na instalação, o runtime VC143

@@ -2036,7 +2036,9 @@ export function App() {
     ? `Chave ${claudeAccount.email ?? 'de API'} conectada`
     : claudeAccount.email ?? (
       claudeAccount.status === 'waiting-for-browser'
-        ? claudeAccount.manual ? 'Cole o código exibido no site' : 'Conclua no navegador'
+        ? claudeAccount.finishing
+          ? 'Concluindo o login…'
+          : claudeAccount.manual ? 'Cole o código exibido no site' : 'Conclua no navegador'
         : 'Claude desconectado'
     );
   const geminiLabel = geminiAccount.maskedKey
@@ -2881,7 +2883,7 @@ export function App() {
             >
               <img src={claudeMark} alt="" />
               <strong>Claude</strong>
-              <small>{claudeWaiting ? (claudeAccount.manual ? 'Cole o código abaixo' : 'Conclua no navegador…') : 'Entrar com sua conta'}</small>
+              <small>{claudeWaiting ? (claudeAccount.finishing ? 'Concluindo o login…' : claudeAccount.manual ? 'Cole o código abaixo' : 'Conclua no navegador…') : 'Entrar com sua conta'}</small>
             </button>
             <button type="button" className="ai-key-link" onClick={() => openKeyEntry('claude')} disabled={someLoginWaiting}>ou usar chave de API</button>
           </div>
@@ -2899,7 +2901,7 @@ export function App() {
             <span className="ai-key-link ghost">chave do Google AI Studio</span>
           </div>
         </div>
-        {claudeWaiting && claudeAccount.manual && (
+        {claudeWaiting && claudeAccount.manual && !claudeAccount.finishing && (
           <div className="ai-code-row">
             <input
               type="text"
@@ -3473,7 +3475,7 @@ export function App() {
                         )}
                     </div>
                   </div>
-                  {claudeAccount.status === 'waiting-for-browser' && claudeAccount.manual && (
+                  {claudeAccount.status === 'waiting-for-browser' && claudeAccount.manual && !claudeAccount.finishing && (
                     <div className="ai-code-row">
                       <input
                         type="text"

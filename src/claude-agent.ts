@@ -29,9 +29,11 @@ import type {
 const OAUTH_AUTHORIZE_URL = 'https://claude.com/cai/oauth/authorize';
 const OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
-// Porta de callback registrada do Claude Code. Se estiver ocupada, caimos
-// para o fluxo manual: o site mostra o codigo e o aluno cola no Edvid.
-const OAUTH_CALLBACK_PORT = 54545;
+// Porta de callback registrada do Claude Code (o authorize aceita qualquer
+// porta de loopback — RFC 8252). Se estiver ocupada, caimos para o fluxo
+// manual: o site mostra o codigo e o aluno cola no Edvid. O env existe para
+// as sondas de teste nao disputarem a porta com um Edvid aberto.
+const OAUTH_CALLBACK_PORT = Number(process.env.EDVID_OAUTH_CALLBACK_PORT) || 54545;
 const OAUTH_REDIRECT_URI = `http://localhost:${OAUTH_CALLBACK_PORT}/callback`;
 const OAUTH_MANUAL_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback';
 const OAUTH_SCOPES = 'org:create_api_key user:profile user:inference';
@@ -356,23 +358,20 @@ export class ClaudeAgent {
         }
         login.busy = true;
         this.logLogin('callback do navegador recebido (state confere); trocando codigo por token');
-        // A pagina so anuncia sucesso DEPOIS da troca do token: antes ela
-        // dizia "Login concluído" na hora e, se a troca falhasse em seguida,
-        // o aluno via sucesso no navegador com a conta ainda desconectada.
-        // O login so e encerrado quando a resposta chega ao navegador — o
-        // closeAllConnections do encerramento derrubaria esta propria resposta.
+        // A pagina responde NA HORA, neutra e verdadeira: a troca do token
+        // continua no aplicativo, com novas tentativas automaticas quando o
+        // servidor da Anthropic limita (HTTP 429 e comum apos varias
+        // tentativas de login do mesmo IP). O desfecho aparece no modal.
+        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', Connection: 'close' });
+        response.end(
+          page(
+            'Quase lá',
+            'Pode fechar esta aba e voltar para o Edvid — o login está sendo concluído no aplicativo (pode levar até um minuto).',
+          ),
+        );
+        this.broadcast({ status: 'waiting-for-browser', email: null, manual: login.manual, finishing: true });
         void this.completeLogin(code, login.state, OAUTH_REDIRECT_URI, login.verifier).then((result) => {
-          if (result.ok) {
-            response.once('close', () => {
-              if (this.pendingLogin === login) this.closeLogin();
-            });
-          }
-          response.writeHead(result.ok ? 200 : 502, { 'Content-Type': 'text/html; charset=utf-8', Connection: 'close' });
-          response.end(
-            result.ok
-              ? page('Login concluído', 'Pode fechar esta aba e voltar para o Edvid.')
-              : page('O login não terminou', `${result.error ?? 'Erro inesperado.'} Volte ao Edvid e tente de novo.`),
-          );
+          if (result.ok && this.pendingLogin === login) this.closeLogin();
         });
       });
       server.once('error', () => resolve(null));
@@ -390,6 +389,7 @@ export class ClaudeAgent {
       return this.lastAccount;
     }
     this.logLogin('codigo manual colado; trocando codigo por token');
+    this.broadcast({ status: 'waiting-for-browser', email: null, manual: login.manual, finishing: true });
     const result = await this.completeLogin(code, pastedState || login.state, OAUTH_MANUAL_REDIRECT_URI, login.verifier);
     if (result.ok) this.closeLogin();
     return this.lastAccount;
@@ -430,7 +430,41 @@ export class ClaudeAgent {
     }
   }
 
+  // O endpoint de token da Anthropic limita por IP com facilidade (429 apos
+  // poucas tentativas de login). Como o codigo de autorizacao vale ~10 min,
+  // 429/5xx/sem-rede ganham novas tentativas com espera crescente; recusa
+  // real (400/401) falha na hora.
   private async exchangeToken(
+    body: Record<string, string>,
+    retryDelaysMs: number[] = [3_000, 8_000, 20_000, 45_000],
+  ): Promise<Extract<StoredClaudeAuth, { accessToken: string }>> {
+    let attempt = 0;
+    for (;;) {
+      try {
+        return await this.exchangeTokenOnce(body);
+      } catch (error) {
+        const status = error instanceof OauthHttpError ? error.status : null;
+        const transient =
+          status === 429 || (status !== null && status >= 500) ||
+          (error instanceof Error && error.message.startsWith('Sem conexão'));
+        const delay = retryDelaysMs[attempt];
+        if (!transient || delay === undefined) {
+          if (transient && status === 429) {
+            throw new OauthHttpError(
+              'O servidor do Claude está limitando tentativas de login agora. Aguarde alguns minutos e clique em Entrar de novo.',
+              429,
+            );
+          }
+          throw error;
+        }
+        attempt += 1;
+        this.logLogin(`troca de token (${body.grant_type}): transitorio (${status ?? 'sem rede'}); nova tentativa em ${Math.round(delay / 1000)}s (${attempt}/${retryDelaysMs.length})`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  private async exchangeTokenOnce(
     body: Record<string, string>,
   ): Promise<Extract<StoredClaudeAuth, { accessToken: string }>> {
     let response: Response;
@@ -515,11 +549,16 @@ export class ClaudeAgent {
     if (!this.refreshJob) {
       this.refreshJob = (async () => {
         try {
-          const tokens = await this.exchangeToken({
-            grant_type: 'refresh_token',
-            refresh_token: stored.refreshToken,
-            client_id: OAUTH_CLIENT_ID,
-          });
+          // Retentativas curtas: um turno de conversa nao pode esperar um
+          // backoff de minutos so para renovar token.
+          const tokens = await this.exchangeToken(
+            {
+              grant_type: 'refresh_token',
+              refresh_token: stored.refreshToken,
+              client_id: OAUTH_CLIENT_ID,
+            },
+            [2_000, 5_000],
+          );
           await this.writeStored(tokens);
           return tokens.accessToken;
         } catch (error) {
