@@ -3,6 +3,7 @@ import type {
   ClaudeAccountState,
   CodexEvent,
   EdvidDesktopApi,
+  GeminiAccountState,
   ProjectSummary,
   ProjectWorkspace,
   RuntimeCheck,
@@ -66,10 +67,17 @@ let qaChatGptConnected = !qaSearch().has('ia');
 let qaProvider: AiProvider = 'chatgpt';
 let qaClaude: ClaudeAccountState = { status: 'signed-out', email: null };
 const claudeListeners = new Set<(state: ClaudeAccountState) => void>();
+let qaGemini: GeminiAccountState = { status: 'signed-out', maskedKey: null };
+const geminiListeners = new Set<(state: GeminiAccountState) => void>();
 
 function emitClaude(state: ClaudeAccountState): void {
   qaClaude = state;
   for (const listener of claudeListeners) listener(state);
+}
+
+function emitGemini(state: GeminiAccountState): void {
+  qaGemini = state;
+  for (const listener of geminiListeners) listener(state);
 }
 
 const runtimeVersions: Record<RuntimeName, string> = {
@@ -183,6 +191,42 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     onClaudeAccount: (listener) => {
       claudeListeners.add(listener);
       return () => claudeListeners.delete(listener);
+    },
+    loginCodexWithApiKey: async (apiKey) => {
+      if (apiKey.includes('errada')) {
+        throw new Error('Chave inválida. Confira na plataforma da OpenAI e cole de novo.');
+      }
+      qaChatGptConnected = true;
+      return {
+        status: 'signed-in',
+        account: { type: 'apiKey', email: null, planType: null },
+        requiresOpenaiAuth: false,
+      };
+    },
+    connectClaudeApiKey: async (apiKey) => {
+      if (apiKey.includes('errada')) {
+        emitClaude({ ...qaClaude, error: 'Chave inválida. Confira no Console da Anthropic e cole de novo.' });
+      } else {
+        emitClaude({ status: 'signed-in', email: 'sk-ant-api…f4k3', mode: 'api-key' });
+      }
+      return qaClaude;
+    },
+    getGeminiAccount: async () => qaGemini,
+    connectGeminiApiKey: async (apiKey) => {
+      if (apiKey.includes('errada')) {
+        emitGemini({ ...qaGemini, error: 'Chave inválida. Confira no Google AI Studio e cole de novo.' });
+      } else {
+        emitGemini({ status: 'signed-in', maskedKey: 'AIzaSy…f4k3' });
+      }
+      return qaGemini;
+    },
+    disconnectGemini: async () => {
+      emitGemini({ status: 'signed-out', maskedKey: null });
+      return qaGemini;
+    },
+    onGeminiAccount: (listener) => {
+      geminiListeners.add(listener);
+      return () => geminiListeners.delete(listener);
     },
     saveTimelineModel: async () => {
       // O QA visual não persiste; as edições ficam apenas em memória.

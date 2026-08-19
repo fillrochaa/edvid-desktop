@@ -4,6 +4,7 @@ import type {
   ClaudeAccountState,
   CodexEvent,
   EdvidDesktopApi,
+  GeminiAccountState,
   MemberAuthState,
   Phase2RenderState,
   RemotionRuntimeState,
@@ -29,8 +30,10 @@ const api: EdvidDesktopApi = {
   logoutCodex: () => ipcRenderer.invoke('codex:logout'),
   getAiProvider: () => ipcRenderer.invoke('ai:provider-get'),
   setAiProvider: (provider) => ipcRenderer.invoke('ai:provider-set', { provider }),
+  loginCodexWithApiKey: (apiKey) => ipcRenderer.invoke('codex:login-api-key', { apiKey }),
   getClaudeAccount: () => ipcRenderer.invoke('claude:account'),
   loginWithClaude: () => ipcRenderer.invoke('claude:login'),
+  connectClaudeApiKey: (apiKey) => ipcRenderer.invoke('claude:connect-key', { apiKey }),
   submitClaudeLoginCode: (code) => ipcRenderer.invoke('claude:login-code', { code }),
   cancelClaudeLogin: () => ipcRenderer.invoke('claude:login-cancel'),
   logoutClaude: () => ipcRenderer.invoke('claude:logout'),
@@ -38,6 +41,14 @@ const api: EdvidDesktopApi = {
     const handler = (_event: Electron.IpcRendererEvent, state: ClaudeAccountState) => listener(state);
     ipcRenderer.on('claude:account', handler);
     return () => ipcRenderer.removeListener('claude:account', handler);
+  },
+  getGeminiAccount: () => ipcRenderer.invoke('gemini:account'),
+  connectGeminiApiKey: (apiKey) => ipcRenderer.invoke('gemini:connect-key', { apiKey }),
+  disconnectGemini: () => ipcRenderer.invoke('gemini:disconnect'),
+  onGeminiAccount: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: GeminiAccountState) => listener(state);
+    ipcRenderer.on('gemini:account', handler);
+    return () => ipcRenderer.removeListener('gemini:account', handler);
   },
   saveTimelineModel: (directory, model, loadStamp) =>
     ipcRenderer.invoke('timeline:save', { directory, model, loadStamp }),

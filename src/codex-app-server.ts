@@ -404,6 +404,21 @@ export class CodexAppServer {
     };
   }
 
+  // Login com chave de API da OpenAI. O app-server guarda a chave sozinho no
+  // CODEX_HOME e responde na hora (sondado: aceita QUALQUER texto, entao a
+  // validacao contra a API acontece antes, no main).
+  async startApiKeyLogin(apiKey: string): Promise<CodexAccountState> {
+    await this.start();
+    const response = await this.request<LoginStartResponse>('account/login/start', {
+      type: 'apiKey',
+      apiKey,
+    });
+    if (response.type !== 'apiKey') {
+      throw new Error('O Codex nao aceitou o login por chave de API.');
+    }
+    return this.readAccount();
+  }
+
   async cancelLogin(): Promise<CodexAccountState> {
     await this.start();
     if (this.activeLoginId) {

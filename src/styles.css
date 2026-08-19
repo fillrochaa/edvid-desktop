@@ -521,6 +521,13 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .ai-onboarding h2 { font-size: 13.5px; }
 .ai-onboarding > p { margin: 0; color: #8b95a2; font-size: 9px; line-height: 1.55; }
 .ai-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+.ai-choices.three { grid-template-columns: 1fr 1fr 1fr; }
+.ai-choice-cell { display: flex; flex-direction: column; gap: 6px; }
+.ai-choice-cell .ai-choice { flex: 1; }
+.ai-key-link { padding: 3px 6px; border: 0; border-radius: 7px; color: #77818e; background: transparent; font-size: 7.5px; cursor: pointer; }
+.ai-key-link:hover:not(:disabled):not(.ghost) { color: var(--text); background: rgba(255,255,255,.06); }
+.ai-key-link:disabled { opacity: .4; cursor: default; }
+.ai-key-link.ghost { cursor: default; opacity: .55; }
 .ai-choice { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 18px 12px 14px; border: 1px solid var(--stroke); border-radius: 13px; color: var(--text); background: rgba(255,255,255,.025); cursor: pointer; transition: border-color .15s ease, background .15s ease, transform .15s ease; }
 .ai-choice:hover:not(:disabled) { border-color: rgba(255,119,19,.5); background: rgba(255,255,255,.05); transform: translateY(-1px); }
 .ai-choice:disabled { opacity: .45; cursor: default; }

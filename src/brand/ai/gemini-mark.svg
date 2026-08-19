@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <!-- Estrela de quatro pontas do Gemini com o degrade azul-roxo. -->
+  <defs>
+    <linearGradient id="edvid-gemini-grad" x1="10" y1="90" x2="90" y2="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1C7DFF"/>
+      <stop offset=".55" stop-color="#4E8FF7"/>
+      <stop offset="1" stop-color="#9B72CB"/>
+    </linearGradient>
+  </defs>
+  <path
+    d="M50 3 C54.5 28.5 71.5 45.5 97 50 C71.5 54.5 54.5 71.5 50 97 C45.5 71.5 28.5 54.5 3 50 C28.5 45.5 45.5 28.5 50 3 Z"
+    fill="url(#edvid-gemini-grad)"
+  />
+</svg>

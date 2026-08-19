@@ -42,6 +42,7 @@ const captionThumbs: Record<Exclude<CaptionStyle, 'none'>, { kind: 'video' | 'im
 };
 import chatgptMark from './brand/ai/chatgpt-mark.svg';
 import claudeMark from './brand/ai/claude-mark.svg';
+import geminiMark from './brand/ai/gemini-mark.svg';
 import type {
   AiProvider,
   AppUpdateState,
@@ -50,6 +51,7 @@ import type {
   CodexApproval,
   CodexEvent,
   DesktopInfo,
+  GeminiAccountState,
   MemberAuthState,
   Phase2RenderState,
   ProjectSummary,
@@ -1890,9 +1892,16 @@ export function App() {
   const [runtimePack, setRuntimePack] = useState<RuntimePackState>({ status: 'unknown' });
   const [claudeAccount, setClaudeAccount] = useState<ClaudeAccountState>({ status: 'signed-out', email: null });
   const [claudeLoaded, setClaudeLoaded] = useState(false);
+  const [geminiAccount, setGeminiAccount] = useState<GeminiAccountState>({ status: 'signed-out', maskedKey: null });
+  const [geminiLoaded, setGeminiLoaded] = useState(false);
   const [aiProvider, setAiProviderState] = useState<AiProvider>('chatgpt');
   const [aiOnboardingDismissed, setAiOnboardingDismissed] = useState(false);
   const [claudeCode, setClaudeCode] = useState('');
+  // Entrada de chave de API: qual provedor esta com o campo aberto.
+  const [keyEntry, setKeyEntry] = useState<AiProvider | null>(null);
+  const [keyValue, setKeyValue] = useState('');
+  const [keyBusy, setKeyBusy] = useState(false);
+  const [keyError, setKeyError] = useState<string | null>(null);
   const [nameDialog, setNameDialog] = useState<{ mode: 'create' } | { mode: 'rename'; directory: string } | null>(null);
   const [nameValue, setNameValue] = useState('');
   const [projectMenu, setProjectMenu] = useState<string | null>(null);
@@ -1913,17 +1922,30 @@ export function App() {
   const projectDirectory = workspace?.project.directory ?? null;
   const chatgptConnected = account.status === 'signed-in';
   const claudeConnected = claudeAccount.status === 'signed-in';
-  // O chat conversa com o provedor ATIVO; o outro pode ficar conectado em
-  // espera. A troca acontece nas Configurações (ou sozinha, abaixo).
-  const activeAiConnected = aiProvider === 'claude' ? claudeConnected : chatgptConnected;
+  const geminiConnected = geminiAccount.status === 'signed-in';
+  const aiConnected: Record<AiProvider, boolean> = {
+    chatgpt: chatgptConnected,
+    claude: claudeConnected,
+    gemini: geminiConnected,
+  };
+  // O chat conversa com o provedor ATIVO; os outros podem ficar conectados
+  // em espera. A troca acontece nas Configurações (ou sozinha, abaixo).
+  const activeAiConnected = aiConnected[aiProvider];
   const canChat = Boolean(projectDirectory) && activeAiConnected;
   const readyRuntimes = runtimes.filter((runtime) => runtime.available).length;
-  const accountLabel = account.account?.email ?? (account.status === 'waiting-for-browser' ? 'Conclua no navegador' : 'ChatGPT desconectado');
-  const claudeLabel = claudeAccount.email ?? (
-    claudeAccount.status === 'waiting-for-browser'
-      ? claudeAccount.manual ? 'Cole o código exibido no site' : 'Conclua no navegador'
-      : 'Claude desconectado'
-  );
+  const accountLabel = account.account?.type === 'apiKey'
+    ? 'Chave de API conectada'
+    : account.account?.email ?? (account.status === 'waiting-for-browser' ? 'Conclua no navegador' : 'ChatGPT desconectado');
+  const claudeLabel = claudeAccount.mode === 'api-key'
+    ? `Chave ${claudeAccount.email ?? 'de API'} conectada`
+    : claudeAccount.email ?? (
+      claudeAccount.status === 'waiting-for-browser'
+        ? claudeAccount.manual ? 'Cole o código exibido no site' : 'Conclua no navegador'
+        : 'Claude desconectado'
+    );
+  const geminiLabel = geminiAccount.maskedKey
+    ? `Chave ${geminiAccount.maskedKey} conectada`
+    : 'Gemini desconectado';
   const activeApproval = approvals[0] ?? null;
   const pendingCutApprovalId = useMemo(
     () => [...messages].reverse().find((message) => (
@@ -2175,6 +2197,67 @@ export function App() {
   function switchAiProvider(provider: AiProvider) {
     void window.edvidDesktop.setAiProvider(provider).then(setAiProviderState);
   }
+
+  function openKeyEntry(provider: AiProvider) {
+    setKeyEntry(provider);
+    setKeyValue('');
+    setKeyError(null);
+  }
+
+  async function submitProviderKey() {
+    const apiKey = keyValue.trim();
+    if (!apiKey || !keyEntry || keyBusy) return;
+    setKeyBusy(true);
+    setKeyError(null);
+    try {
+      if (keyEntry === 'chatgpt') {
+        const state = await window.edvidDesktop.loginCodexWithApiKey(apiKey);
+        setAccount(state);
+        if (state.status === 'signed-in') setKeyEntry(null);
+      } else if (keyEntry === 'claude') {
+        const state = await window.edvidDesktop.connectClaudeApiKey(apiKey);
+        setClaudeAccount(state);
+        if (state.status === 'signed-in' && state.mode === 'api-key') setKeyEntry(null);
+      } else {
+        const state = await window.edvidDesktop.connectGeminiApiKey(apiKey);
+        setGeminiAccount(state);
+        if (state.status === 'signed-in') setKeyEntry(null);
+      }
+      setKeyValue('');
+    } catch (error) {
+      setKeyError(errorMessage(error));
+    } finally {
+      setKeyBusy(false);
+    }
+  }
+
+  const keyPlaceholders: Record<AiProvider, string> = {
+    chatgpt: 'Cole a chave da OpenAI (sk-…)',
+    claude: 'Cole a chave da Anthropic (sk-ant-…)',
+    gemini: 'Cole a chave do Google AI Studio (AIza…)',
+  };
+
+  // Campo de chave compartilhado entre o onboarding e as Configurações.
+  const keyEntryRow = keyEntry && (
+    <div className="ai-code-row">
+      <input
+        type="password"
+        value={keyValue}
+        placeholder={keyPlaceholders[keyEntry]}
+        onChange={(event) => setKeyValue(event.target.value)}
+        onKeyDown={(event) => { if (event.key === 'Enter') void submitProviderKey(); }}
+        autoFocus
+      />
+      <button type="button" className="btn primary small" onClick={() => void submitProviderKey()} disabled={!keyValue.trim() || keyBusy}>
+        {keyBusy ? 'Validando…' : 'Conectar'}
+      </button>
+    </div>
+  );
+
+  const keyEntryError = keyEntry && (
+    keyError
+    ?? (keyEntry === 'claude' ? claudeAccount.error : keyEntry === 'gemini' ? geminiAccount.error : null)
+  );
 
   function handleCodexEvent(event: CodexEvent) {
     if (event.type === 'account') {
@@ -2432,6 +2515,7 @@ export function App() {
     const unsubscribeUpdate = window.edvidDesktop.onAppUpdateState(setAppUpdate);
     const unsubscribeMember = window.edvidDesktop.onMemberAuthState(setMemberAuth);
     const unsubscribeClaude = window.edvidDesktop.onClaudeAccount(setClaudeAccount);
+    const unsubscribeGemini = window.edvidDesktop.onGeminiAccount(setGeminiAccount);
     void window.edvidDesktop.getMemberAuth().then(setMemberAuth);
     const unsubscribePack = window.edvidDesktop.onRuntimePackState((state) => {
       setRuntimePack(state);
@@ -2447,6 +2531,10 @@ export function App() {
       void window.edvidDesktop.getClaudeAccount().then((state) => {
         setClaudeAccount(state);
         setClaudeLoaded(true);
+      });
+      void window.edvidDesktop.getGeminiAccount().then((state) => {
+        setGeminiAccount(state);
+        setGeminiLoaded(true);
       });
       void window.edvidDesktop.getAiProvider().then(setAiProviderState);
       void refreshRuntimes();
@@ -2474,6 +2562,7 @@ export function App() {
       unsubscribeMember();
       unsubscribePack();
       unsubscribeClaude();
+      unsubscribeGemini();
     };
   }, []);
 
@@ -2495,54 +2584,80 @@ export function App() {
     } satisfies StoredChat));
   }, [messages, handledCutApprovalId, jcutApplied, projectDirectory]);
 
-  // Se o provedor ativo está desconectado mas o outro está pronto, a troca é
-  // automática: o aluno nunca fica com o chat travado por uma escolha antiga.
+  // Se o provedor ativo está desconectado (com o estado dele já resolvido)
+  // e algum outro está pronto, a troca é automática: o aluno nunca fica com
+  // o chat travado por uma escolha antiga.
   useEffect(() => {
-    if (aiProvider === 'chatgpt' && claudeConnected && (account.status === 'signed-out' || account.status === 'error')) {
-      switchAiProvider('claude');
-    }
-    if (aiProvider === 'claude' && chatgptConnected && claudeLoaded && claudeAccount.status === 'signed-out') {
-      switchAiProvider('chatgpt');
-    }
-  }, [aiProvider, chatgptConnected, claudeConnected, claudeLoaded, account.status, claudeAccount.status]);
+    const resolved: Record<AiProvider, boolean> = {
+      chatgpt: account.status === 'signed-out' || account.status === 'error',
+      claude: claudeLoaded && claudeAccount.status === 'signed-out',
+      gemini: geminiLoaded && geminiAccount.status !== 'signed-in',
+    };
+    if (aiConnected[aiProvider] || !resolved[aiProvider]) return;
+    const fallback = (['chatgpt', 'claude', 'gemini'] as AiProvider[]).find((provider) => aiConnected[provider]);
+    if (fallback) switchAiProvider(fallback);
+  }, [aiProvider, chatgptConnected, claudeConnected, geminiConnected, claudeLoaded, geminiLoaded, account.status, claudeAccount.status, geminiAccount.status]);
 
   // Onboarding da conexão de IA: logo depois do login do aluno, se nenhuma
-  // IA estiver conectada, o Edvid oferece ChatGPT e Claude. Clicar no logo
-  // abre o login daquele provedor; dá para deixar para depois.
+  // IA estiver conectada, o Edvid oferece ChatGPT, Claude e Gemini. O clique
+  // no logo abre o login daquele provedor (assinatura); cada card também
+  // aceita chave de API — no Gemini ela é o único caminho.
   const showAiOnboarding =
     claudeLoaded &&
+    geminiLoaded &&
     account.status !== 'starting' &&
     !chatgptConnected &&
     !claudeConnected &&
+    !geminiConnected &&
     !aiOnboardingDismissed;
 
   const claudeWaiting = claudeAccount.status === 'waiting-for-browser';
+  const someLoginWaiting = account.status === 'waiting-for-browser' || claudeWaiting;
   const aiModal = showAiOnboarding && (
     <div className="modal-overlay ai-overlay">
       <section className="ai-onboarding" role="dialog" aria-modal="true" aria-label="Conecte sua IA">
         <h2>Conecte sua IA</h2>
         <p>O Edvid edita com a inteligência da sua própria conta. Escolha qual conectar — dá para trocar depois em Configurações.</p>
-        <div className="ai-choices">
-          <button
-            type="button"
-            className={`ai-choice ${account.status === 'waiting-for-browser' ? 'busy' : ''}`}
-            onClick={() => { if (account.status !== 'waiting-for-browser' && account.status !== 'starting') void login(); }}
-            disabled={claudeWaiting}
-          >
-            <img src={chatgptMark} alt="" />
-            <strong>ChatGPT</strong>
-            <small>{account.status === 'waiting-for-browser' ? 'Conclua no navegador…' : account.status === 'starting' ? 'Preparando…' : 'Entrar com sua conta'}</small>
-          </button>
-          <button
-            type="button"
-            className={`ai-choice ${claudeWaiting ? 'busy' : ''}`}
-            onClick={() => { if (!claudeWaiting) void claudeLogin(); }}
-            disabled={account.status === 'waiting-for-browser'}
-          >
-            <img src={claudeMark} alt="" />
-            <strong>Claude</strong>
-            <small>{claudeWaiting ? (claudeAccount.manual ? 'Cole o código abaixo' : 'Conclua no navegador…') : 'Entrar com sua conta'}</small>
-          </button>
+        <div className="ai-choices three">
+          <div className="ai-choice-cell">
+            <button
+              type="button"
+              className={`ai-choice ${account.status === 'waiting-for-browser' ? 'busy' : ''}`}
+              onClick={() => { setKeyEntry(null); if (account.status !== 'waiting-for-browser' && account.status !== 'starting') void login(); }}
+              disabled={claudeWaiting}
+            >
+              <img src={chatgptMark} alt="" />
+              <strong>ChatGPT</strong>
+              <small>{account.status === 'waiting-for-browser' ? 'Conclua no navegador…' : account.status === 'starting' ? 'Preparando…' : 'Entrar com sua conta'}</small>
+            </button>
+            <button type="button" className="ai-key-link" onClick={() => openKeyEntry('chatgpt')} disabled={someLoginWaiting}>ou usar chave de API</button>
+          </div>
+          <div className="ai-choice-cell">
+            <button
+              type="button"
+              className={`ai-choice ${claudeWaiting ? 'busy' : ''}`}
+              onClick={() => { setKeyEntry(null); if (!claudeWaiting) void claudeLogin(); }}
+              disabled={account.status === 'waiting-for-browser'}
+            >
+              <img src={claudeMark} alt="" />
+              <strong>Claude</strong>
+              <small>{claudeWaiting ? (claudeAccount.manual ? 'Cole o código abaixo' : 'Conclua no navegador…') : 'Entrar com sua conta'}</small>
+            </button>
+            <button type="button" className="ai-key-link" onClick={() => openKeyEntry('claude')} disabled={someLoginWaiting}>ou usar chave de API</button>
+          </div>
+          <div className="ai-choice-cell">
+            <button
+              type="button"
+              className={`ai-choice ${keyEntry === 'gemini' ? 'busy' : ''}`}
+              onClick={() => openKeyEntry('gemini')}
+              disabled={someLoginWaiting}
+            >
+              <img src={geminiMark} alt="" />
+              <strong>Gemini</strong>
+              <small>Conectar com chave de API</small>
+            </button>
+            <span className="ai-key-link ghost">chave do Google AI Studio</span>
+          </div>
         </div>
         {claudeWaiting && claudeAccount.manual && (
           <div className="ai-code-row">
@@ -2556,10 +2671,11 @@ export function App() {
             <button type="button" className="btn primary small" onClick={() => void claudeSubmitCode()} disabled={!claudeCode.trim()}>Confirmar</button>
           </div>
         )}
-        {(account.error || claudeAccount.error) && (
-          <div className="inline-error">{claudeAccount.error ?? account.error}</div>
+        {!someLoginWaiting && keyEntryRow}
+        {(keyEntryError || account.error || claudeAccount.error) && (
+          <div className="inline-error">{keyEntryError ?? claudeAccount.error ?? account.error}</div>
         )}
-        {(account.status === 'waiting-for-browser' || claudeWaiting) ? (
+        {someLoginWaiting ? (
           <button
             type="button"
             className="ai-skip"
@@ -2747,7 +2863,7 @@ export function App() {
                 <div className="auth-inline">
                   <span className="chat-empty-icon"><Icon name="chat" /></span>
                   <h2>Conecte sua IA</h2>
-                  <p>Entre com sua conta do ChatGPT ou do Claude para começar a editar.</p>
+                  <p>Entre com ChatGPT, Claude ou Gemini para começar a editar.</p>
                   {account.error && <div className="inline-error">{account.error}</div>}
                   <button type="button" className="btn primary" onClick={() => setAiOnboardingDismissed(false)}>Conectar IA</button>
                 </div>
@@ -2975,6 +3091,19 @@ export function App() {
                   )}
                 </div>
                 <div className="settings-block">
+                  <h3>Dependências</h3>
+                  <div className="settings-row">
+                    <div>
+                      <strong>{checking ? 'Verificando...' : `${readyRuntimes}/${runtimeNames.length} ferramentas prontas`}</strong>
+                      <small>{missingRuntimeNames.length ? `Pendentes: ${missingRuntimeNames.join(', ')}` : `Todas instaladas${desktopInfo ? ` · ${desktopInfo.platform} ${desktopInfo.arch}` : ''}`}</small>
+                    </div>
+                    <button type="button" className="account-action" onClick={refreshRuntimes} disabled={checking}>Verificar</button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="settings-body">
+                <div className="settings-block">
                   <h3>Conexão de IA</h3>
                   <div className="settings-row">
                     <div className="ai-ident">
@@ -2987,9 +3116,15 @@ export function App() {
                         : <button type="button" className="account-action" onClick={() => switchAiProvider('chatgpt')}>Usar</button>)}
                       {chatgptConnected
                         ? <button type="button" className="account-action" onClick={logout}>Sair</button>
-                        : <button type="button" className="account-action" onClick={account.status === 'waiting-for-browser' ? cancelLogin : login}>{account.status === 'waiting-for-browser' ? 'Cancelar' : 'Entrar'}</button>}
+                        : (
+                          <>
+                            <button type="button" className="account-action" onClick={account.status === 'waiting-for-browser' ? cancelLogin : login}>{account.status === 'waiting-for-browser' ? 'Cancelar' : 'Entrar'}</button>
+                            <button type="button" className="account-action" onClick={() => openKeyEntry('chatgpt')}>Chave</button>
+                          </>
+                        )}
                     </div>
                   </div>
+                  {keyEntry === 'chatgpt' && keyEntryRow}
                   <div className="settings-row">
                     <div className="ai-ident">
                       <img src={claudeMark} alt="" />
@@ -3001,7 +3136,12 @@ export function App() {
                         : <button type="button" className="account-action" onClick={() => switchAiProvider('claude')}>Usar</button>)}
                       {claudeConnected
                         ? <button type="button" className="account-action" onClick={() => void claudeLogout()}>Sair</button>
-                        : <button type="button" className="account-action" onClick={() => void (claudeAccount.status === 'waiting-for-browser' ? claudeCancelLogin() : claudeLogin())}>{claudeAccount.status === 'waiting-for-browser' ? 'Cancelar' : 'Entrar'}</button>}
+                        : (
+                          <>
+                            <button type="button" className="account-action" onClick={() => void (claudeAccount.status === 'waiting-for-browser' ? claudeCancelLogin() : claudeLogin())}>{claudeAccount.status === 'waiting-for-browser' ? 'Cancelar' : 'Entrar'}</button>
+                            <button type="button" className="account-action" onClick={() => openKeyEntry('claude')}>Chave</button>
+                          </>
+                        )}
                     </div>
                   </div>
                   {claudeAccount.status === 'waiting-for-browser' && claudeAccount.manual && (
@@ -3016,24 +3156,28 @@ export function App() {
                       <button type="button" className="btn primary small" onClick={() => void claudeSubmitCode()} disabled={!claudeCode.trim()}>Confirmar</button>
                     </div>
                   )}
-                  {claudeAccount.error && <p className="settings-note error">{claudeAccount.error}</p>}
-                </div>
-                <div className="settings-block">
-                  <h3>Dependências</h3>
+                  {keyEntry === 'claude' && keyEntryRow}
                   <div className="settings-row">
-                    <div>
-                      <strong>{checking ? 'Verificando...' : `${readyRuntimes}/${runtimeNames.length} ferramentas prontas`}</strong>
-                      <small>{missingRuntimeNames.length ? `Pendentes: ${missingRuntimeNames.join(', ')}` : `Todas instaladas${desktopInfo ? ` · ${desktopInfo.platform} ${desktopInfo.arch}` : ''}`}</small>
+                    <div className="ai-ident">
+                      <img src={geminiMark} alt="" />
+                      <div><strong>Gemini</strong><small>{geminiLabel}</small></div>
                     </div>
-                    <button type="button" className="account-action" onClick={refreshRuntimes} disabled={checking}>Verificar</button>
+                    <div className="settings-row-actions">
+                      {geminiConnected && (aiProvider === 'gemini'
+                        ? <span className="ai-active-badge">Em uso</span>
+                        : <button type="button" className="account-action" onClick={() => switchAiProvider('gemini')}>Usar</button>)}
+                      {geminiConnected
+                        ? <button type="button" className="account-action" onClick={() => void window.edvidDesktop.disconnectGemini().then(setGeminiAccount)}>Sair</button>
+                        : <button type="button" className="account-action" onClick={() => openKeyEntry('gemini')}>Chave</button>}
+                    </div>
                   </div>
+                  {keyEntry === 'gemini' && keyEntryRow}
+                  {(keyEntryError || claudeAccount.error) && <p className="settings-note error">{keyEntryError ?? claudeAccount.error}</p>}
+                  <p className="settings-note">Assinatura: ChatGPT e Claude entram pelo navegador com a conta que você já paga. Chave de API: cobrada por uso na plataforma de cada um; a do Gemini sai grátis no Google AI Studio com limite diário.</p>
                 </div>
-              </div>
-            ) : (
-              <div className="settings-body">
                 <div className="settings-block">
-                  <h3>Conexões</h3>
-                  <p className="settings-note">Em breve: chaves de API e conexões MCP para ampliar o Edvid.</p>
+                  <h3>MCPs</h3>
+                  <p className="settings-note">Em breve: conexões MCP para ampliar o Edvid.</p>
                 </div>
               </div>
             )}

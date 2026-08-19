@@ -184,17 +184,27 @@ export type Phase2RenderState = {
   error?: string;
 };
 
-// Provedor de IA que conduz a conversa. Cada aluno conecta a propria conta;
-// o Edvid so guarda qual provedor esta ativo e os tokens de cada um.
-export type AiProvider = 'chatgpt' | 'claude';
+// Provedor de IA que conduz a conversa. Cada aluno conecta a propria conta
+// (assinatura OU chave de API); o Edvid guarda qual provedor esta ativo e as
+// credenciais de cada um.
+export type AiProvider = 'chatgpt' | 'claude' | 'gemini';
 
-// Conta Claude (assinatura Pro/Max, OAuth do proprio Claude Code). O login
-// abre o navegador; "manual" indica que o callback local nao pode ser usado
-// e o aluno deve colar o codigo exibido pelo site apos autorizar.
+// Conta Claude: assinatura Pro/Max (OAuth do proprio Claude Code) ou chave
+// de API da Anthropic. No OAuth o login abre o navegador; "manual" indica
+// que o callback local nao pode ser usado e o aluno cola o codigo do site.
 export type ClaudeAccountState = {
   status: 'signed-out' | 'waiting-for-browser' | 'signed-in' | 'error';
   email: string | null;
+  mode?: 'oauth' | 'api-key';
   manual?: boolean;
+  error?: string;
+};
+
+// Conta Gemini: somente chave de API (o login gratuito com conta Google do
+// Gemini CLI foi descontinuado pelo Google em 06/2026).
+export type GeminiAccountState = {
+  status: 'signed-out' | 'signed-in' | 'error';
+  maskedKey: string | null;
   error?: string;
 };
 
@@ -277,12 +287,18 @@ export type EdvidDesktopApi = {
   logoutCodex: () => Promise<CodexAccountState>;
   getAiProvider: () => Promise<AiProvider>;
   setAiProvider: (provider: AiProvider) => Promise<AiProvider>;
+  loginCodexWithApiKey: (apiKey: string) => Promise<CodexAccountState>;
   getClaudeAccount: () => Promise<ClaudeAccountState>;
   loginWithClaude: () => Promise<ClaudeAccountState>;
+  connectClaudeApiKey: (apiKey: string) => Promise<ClaudeAccountState>;
   submitClaudeLoginCode: (code: string) => Promise<ClaudeAccountState>;
   cancelClaudeLogin: () => Promise<ClaudeAccountState>;
   logoutClaude: () => Promise<ClaudeAccountState>;
   onClaudeAccount: (listener: (state: ClaudeAccountState) => void) => () => void;
+  getGeminiAccount: () => Promise<GeminiAccountState>;
+  connectGeminiApiKey: (apiKey: string) => Promise<GeminiAccountState>;
+  disconnectGemini: () => Promise<GeminiAccountState>;
+  onGeminiAccount: (listener: (state: GeminiAccountState) => void) => () => void;
   saveTimelineModel: (
     directory: string,
     model: TimelineModel,

@@ -44,12 +44,24 @@ Regras especificas desta integracao:
 - Pergunte qualquer duvida diretamente no texto da resposta, em portugues simples. Nao use a ferramenta AskUserQuestion.
 - Nao ha rede disponivel para comandos; nunca tente instalar pacotes ou baixar arquivos.`;
 
-type StoredClaudeAuth = {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number;
-  email: string | null;
-};
+// Duas formas de conexao: OAuth da assinatura (padrao) ou chave de API da
+// Anthropic. Arquivos antigos sem "mode" sao OAuth.
+type StoredClaudeAuth =
+  | {
+      mode?: 'oauth';
+      accessToken: string;
+      refreshToken: string;
+      expiresAt: number;
+      email: string | null;
+    }
+  | { mode: 'api-key'; apiKey: string };
+
+const ANTHROPIC_MODELS_URL = 'https://api.anthropic.com/v1/models';
+
+function maskKey(apiKey: string): string {
+  if (apiKey.length <= 10) return `${apiKey.slice(0, 3)}…`;
+  return `${apiKey.slice(0, 10)}…${apiKey.slice(-4)}`;
+}
 
 type PendingLogin = {
   verifier: string;
@@ -165,18 +177,24 @@ export class ClaudeAgent {
   private async readStored(): Promise<StoredClaudeAuth | null> {
     if (this.stored !== undefined) return this.stored;
     try {
-      const parsed = JSON.parse(await readFile(this.deps.authFile, 'utf8')) as Partial<StoredClaudeAuth>;
-      this.stored =
+      const parsed = JSON.parse(await readFile(this.deps.authFile, 'utf8')) as Record<string, unknown>;
+      if (parsed.mode === 'api-key' && typeof parsed.apiKey === 'string' && parsed.apiKey) {
+        this.stored = { mode: 'api-key', apiKey: parsed.apiKey };
+      } else if (
         typeof parsed.accessToken === 'string' &&
         typeof parsed.refreshToken === 'string' &&
         typeof parsed.expiresAt === 'number'
-          ? {
-              accessToken: parsed.accessToken,
-              refreshToken: parsed.refreshToken,
-              expiresAt: parsed.expiresAt,
-              email: typeof parsed.email === 'string' ? parsed.email : null,
-            }
-          : null;
+      ) {
+        this.stored = {
+          mode: 'oauth',
+          accessToken: parsed.accessToken,
+          refreshToken: parsed.refreshToken,
+          expiresAt: parsed.expiresAt,
+          email: typeof parsed.email === 'string' ? parsed.email : null,
+        };
+      } else {
+        this.stored = null;
+      }
     } catch {
       this.stored = null;
     }
@@ -200,9 +218,44 @@ export class ClaudeAgent {
   async readAccount(): Promise<ClaudeAccountState> {
     if (this.pendingLogin) return this.lastAccount;
     const stored = await this.readStored();
-    this.lastAccount = stored
-      ? { status: 'signed-in', email: stored.email }
-      : { status: 'signed-out', email: null };
+    this.lastAccount = !stored
+      ? { status: 'signed-out', email: null }
+      : stored.mode === 'api-key'
+        ? { status: 'signed-in', email: maskKey(stored.apiKey), mode: 'api-key' }
+        : { status: 'signed-in', email: stored.email, mode: 'oauth' };
+    return this.lastAccount;
+  }
+
+  // Conexao por chave de API da Anthropic: valida contra /v1/models antes de
+  // aceitar e substitui qualquer login OAuth anterior.
+  async connectApiKey(apiKey: string): Promise<ClaudeAccountState> {
+    const trimmed = apiKey.trim();
+    if (!trimmed) {
+      this.broadcast({ ...this.lastAccount, error: 'Cole a chave de API da Anthropic.' });
+      return this.lastAccount;
+    }
+    let response: Response;
+    try {
+      response = await this.deps.fetchImpl(`${ANTHROPIC_MODELS_URL}?limit=1`, {
+        headers: { 'x-api-key': trimmed, 'anthropic-version': '2023-06-01' },
+      });
+    } catch {
+      this.broadcast({ ...this.lastAccount, error: 'Sem conexão para validar a chave. Tente de novo.' });
+      return this.lastAccount;
+    }
+    if (!response.ok) {
+      this.broadcast({
+        ...this.lastAccount,
+        error: response.status === 401 || response.status === 403
+          ? 'Chave inválida. Confira no Console da Anthropic e cole de novo.'
+          : `A validação da chave falhou (HTTP ${response.status}). Tente de novo.`,
+      });
+      return this.lastAccount;
+    }
+    this.closeLogin();
+    await this.writeStored({ mode: 'api-key', apiKey: trimmed });
+    this.broadcast({ status: 'signed-in', email: maskKey(trimmed), mode: 'api-key' });
+    void this.ensureRuntime().catch(() => {});
     return this.lastAccount;
   }
 
@@ -298,7 +351,7 @@ export class ClaudeAgent {
       });
       await this.writeStored(tokens);
       this.closeLogin();
-      this.broadcast({ status: 'signed-in', email: tokens.email });
+      this.broadcast({ status: 'signed-in', email: tokens.email, mode: 'oauth' });
       // Deixa o motor pronto em segundo plano: a primeira mensagem do aluno
       // nao deveria esperar um npm install.
       void this.ensureRuntime().catch(() => {});
@@ -312,7 +365,9 @@ export class ClaudeAgent {
     }
   }
 
-  private async exchangeToken(body: Record<string, string>): Promise<StoredClaudeAuth> {
+  private async exchangeToken(
+    body: Record<string, string>,
+  ): Promise<Extract<StoredClaudeAuth, { accessToken: string }>> {
     let response: Response;
     try {
       response = await this.deps.fetchImpl(OAUTH_TOKEN_URL, {
@@ -341,11 +396,13 @@ export class ClaudeAgent {
         'O Claude recusou o login. Tente de novo.';
       throw new Error(detail);
     }
+    const previousEmail = this.stored && this.stored.mode !== 'api-key' ? this.stored.email : null;
     return {
+      mode: 'oauth',
       accessToken: payload.access_token,
       refreshToken: payload.refresh_token,
       expiresAt: Date.now() + Math.max(60, payload.expires_in ?? 3600) * 1000,
-      email: payload.account?.email_address ?? this.stored?.email ?? null,
+      email: payload.account?.email_address ?? previousEmail,
     };
   }
 
@@ -372,10 +429,16 @@ export class ClaudeAgent {
     return this.lastAccount;
   }
 
-  // Token valido para a proxima chamada; renova sozinho perto de expirar.
-  private async accessToken(): Promise<string> {
+  // Credencial pronta para o ambiente do proximo turno: chave de API direta
+  // ou token OAuth renovado sozinho perto de expirar.
+  private async authEnvironment(): Promise<Record<string, string>> {
     const stored = await this.readStored();
     if (!stored) throw new Error('Conecte sua conta Claude em Configurações para conversar.');
+    if (stored.mode === 'api-key') return { ANTHROPIC_API_KEY: stored.apiKey };
+    return { CLAUDE_CODE_OAUTH_TOKEN: await this.oauthAccessToken(stored) };
+  }
+
+  private async oauthAccessToken(stored: Extract<StoredClaudeAuth, { accessToken: string }>): Promise<string> {
     if (stored.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) return stored.accessToken;
     if (!this.refreshJob) {
       this.refreshJob = (async () => {
@@ -495,7 +558,7 @@ export class ClaudeAgent {
 
   // --- Conversa -------------------------------------------------------------
 
-  private buildEnvironment(token: string): Record<string, string | undefined> {
+  private buildEnvironment(auth: Record<string, string>): Record<string, string | undefined> {
     const environment: Record<string, string | undefined> = { ...process.env };
     // Nenhuma credencial ou configuracao de Claude da maquina do usuario
     // pode vazar para o agente do Edvid (ANTHROPIC_API_KEY teria precedencia
@@ -506,7 +569,7 @@ export class ClaudeAgent {
     return {
       ...environment,
       ...this.deps.toolsEnvironment(),
-      CLAUDE_CODE_OAUTH_TOKEN: token,
+      ...auth,
       CLAUDE_CONFIG_DIR: this.deps.configDirectory,
       DISABLE_AUTOUPDATER: '1',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
@@ -593,7 +656,7 @@ export class ClaudeAgent {
     projectDirectory: string,
     text: string,
   ): Promise<{ threadId: string; turnId: string }> {
-    const token = await this.accessToken();
+    const auth = await this.authEnvironment();
     const sdk = await this.loadSdk();
     let threadId = this.threadsByProject.get(projectDirectory);
     if (!threadId) {
@@ -655,7 +718,7 @@ export class ClaudeAgent {
         },
         canUseTool: (toolName: string, input: ToolInput, extra?: { signal?: AbortSignal }) =>
           this.requestApproval(threadId as string, turnId, projectDirectory, toolName, input, extra?.signal),
-        env: this.buildEnvironment(token),
+        env: this.buildEnvironment(auth),
         ...(resumeSession ? { resume: resumeSession } : {}),
       },
       });

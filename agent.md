@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-18 (0.9.0 — provedor de IA duplo: login com conta Claude + onboarding de conexão de IA)
+Atualizado em: 2026-08-18 (0.10.0 — três provedores de IA: Gemini via ACP + chave de API nos três)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -148,16 +148,31 @@ sandbox, e cada transcrição exigia aprovação do usuário.
   `whisperx/assets/pytorch_model.bin`. Verificado rodando a transcrição
   completa com `HF_HUB_OFFLINE=1`.
 
-## 5. Login e provedores de IA (ChatGPT + Claude)
+## 5. Login e provedores de IA (ChatGPT + Claude + Gemini)
 
-Desde a 0.9.0 o Edvid tem dois provedores de IA; cada aluno conecta a própria
+Desde a 0.10.0 o Edvid tem três provedores de IA; cada aluno conecta a própria
 conta e escolhe qual conduz a conversa (`settings.json` em userData guarda
-`aiProvider`). Os DOIS adaptadores emitem o mesmo vocabulário de eventos
+`aiProvider`). Cada provedor aceita até dois modos: ASSINATURA (ChatGPT e
+Claude, OAuth no navegador) e CHAVE DE API (os três; no Gemini é o único
+caminho — o login gratuito com conta Google do Gemini CLI foi descontinuado
+pelo Google em 18/06/2026, com migração para o Antigravity, que não suporta
+ser embutido). Os TRÊS adaptadores emitem o mesmo vocabulário de eventos
 (`assistant-delta`, `assistant-final`, `turn-state`, `approval-*`) pelo canal
 `codex:event` — o chat do renderer não sabe qual provedor está por trás. O
 roteamento fica no main: `codex:message` despacha pelo provedor ativo;
-interrupção e aprovação são roteadas pela posse (`threadId` com prefixo
-`claude:` / approvalId `claude:N`).
+interrupção e aprovação são roteadas pela posse (`threadId`/approvalId com
+prefixo `claude:` ou `gemini:`).
+
+Chaves de API (validadas ANTES de aceitar, sempre):
+- ChatGPT: `account/login/start { type: 'apiKey' }` no app-server (sondado:
+  ele aceita qualquer texto sem validar e guarda a chave sozinho no
+  CODEX_HOME — por isso o main valida em api.openai.com/v1/models antes).
+- Claude: `claude-auth.json` vira união `{ mode: 'oauth', … } | { mode:
+  'api-key', apiKey }`; a credencial entra no ambiente como
+  `ANTHROPIC_API_KEY` em vez de `CLAUDE_CODE_OAUTH_TOKEN`. Validação em
+  api.anthropic.com/v1/models.
+- Gemini: `gemini-auth.json` (0600) + `GEMINI_API_KEY` no ambiente do CLI.
+  Validação em generativelanguage.googleapis.com/v1beta/models.
 
 ChatGPT (Codex App Server):
 - O login com ChatGPT acontece pelo Codex App Server.
@@ -758,7 +773,36 @@ Arquitetura (`src/claude-agent.ts`, tudo em um módulo):
   deixar o catch sobrescrever.
 - QA visual: `?ia` abre o app sem nenhuma IA conectada (onboarding);
   `?ia=manual` força o fluxo de colar código ("codigo-errado" simula
-  recusa).
+  recusa). Chaves com "errada" no texto simulam recusa nos três provedores.
+
+### 13f. Gemini via ACP + chave de API (0.10.0)
+
+Arquitetura (`src/gemini-agent.ts`):
+- O CLI oficial `@google/gemini-cli` PINADO, instalado sob demanda em
+  `userData/runtime/gemini` com o npm empacotado (os nativos node-pty/keytar
+  são optionalDependencies — o bloqueio de install-scripts do npm novo é
+  inofensivo). Um processo `gemini --acp` de vida longa (JSON-RPC 2.0 por
+  stdio, newline-delimited), sessões por projeto via `session/new { cwd }`.
+- Sondagens que definiram o desenho (contra o CLI real, com chave falsa):
+  initialize lista authMethods e `gemini-api-key` entra sozinho quando
+  `GEMINI_API_KEY` está no ambiente (sem chamada authenticate); modelos
+  gemini-3.1-pro-preview / gemini-3.5-flash (padrão `auto`);
+  `session/set_mode { modeId: 'autoEdit' }` é o nome de wire correto e FALHA
+  com "untrusted folder" até desligar o gate por settings de sistema:
+  `GEMINI_CLI_SYSTEM_SETTINGS_PATH` → arquivo do Edvid com
+  `security.folderTrust.enabled=false` + `privacy.usageStatisticsEnabled=false`.
+  `session/prompt` com chave falsa falha exatamente na API (API_KEY_INVALID),
+  com o erro em JSON aninhado em string (há um desembrulhador de 3 níveis).
+- Modo `autoEdit`: edições de arquivo sem prompt; comandos chegam por
+  `session/request_permission` e viram o card de aprovação padrão
+  ("permitir nesta sessão" responde com a opção `allow_always`, que o CLI
+  lembra pelo resto da sessão). Sem sandbox do lado do Gemini na v1 — os
+  comandos rodam com aprovação explícita do aluno.
+- Instruções: o ACP não tem prompt de sistema; as EDVID_INSTRUCTIONS entram
+  como preâmbulo da PRIMEIRA mensagem de cada sessão.
+- Interrupção: notificação `session/cancel` → prompt retorna stopReason
+  `cancelled`. Streaming: `session/update` com
+  `update.sessionUpdate === 'agent_message_chunk'`.
 
 ## 14. Windows
 
@@ -782,6 +826,16 @@ Arquitetura (`src/claude-agent.ts`, tudo em um módulo):
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.10.0: três provedores + chaves de API. Adaptador Gemini sobre o modo ACP
+  do CLI oficial (processo longo, sessões por projeto, autoEdit + aprovações
+  pela interface, instruções no primeiro turno); chave de API como segundo
+  modo no ChatGPT (login apiKey nativo do app-server, validado antes pelo
+  main) e no Claude (ANTHROPIC_API_KEY no lugar do token OAuth). Onboarding
+  com três logos e "ou usar chave de API"; aba Conexões consolidada com os
+  três provedores, badge Em uso, troca e campos de chave; troca automática
+  generalizada. Contexto de negócio: o free tier generoso do Gemini CLI
+  (login Google) foi desligado pelo Google em 18/06/2026 — chave de API é o
+  único caminho são para Gemini hoje.
 - 0.9.0: provedor de IA duplo. Adaptador Claude (Agent SDK) falando o mesmo
   vocabulário de eventos do Codex pelo mesmo canal; login OAuth PKCE com a
   conta Claude do aluno (callback 54545 + fallback de colar código); runtime

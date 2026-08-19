@@ -19,6 +19,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { ClaudeAgent } from './claude-agent';
 import { CodexAppServer } from './codex-app-server';
+import { GeminiAgent } from './gemini-agent';
 import { mediaKind, mediaMimeType, mediaTier, pickPreviewMedia, resolveByteRange } from './media-selection';
 import { resolveRuntime, runtimePackKey, type RuntimeResolution } from './runtime';
 import type {
@@ -28,6 +29,7 @@ import type {
   CodexApprovalDecision,
   CodexEvent,
   CodexSendMessageInput,
+  GeminiAccountState,
   MemberAuthState,
   Phase2RenderState,
   RuntimePackState,
@@ -1890,6 +1892,57 @@ async function claudeAgentReady(): Promise<ClaudeAgent> {
   return getClaudeAgent();
 }
 
+let geminiAgent: GeminiAgent | null = null;
+
+function broadcastGeminiAccount(state: GeminiAccountState): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('gemini:account', state);
+  }
+}
+
+function getGeminiAgent(): GeminiAgent {
+  if (geminiAgent) return geminiAgent;
+  geminiAgent = new GeminiAgent({
+    runtimeDirectory: path.join(app.getPath('userData'), 'runtime', 'gemini'),
+    authFile: path.join(app.getPath('userData'), 'gemini-auth.json'),
+    systemSettingsFile: path.join(app.getPath('userData'), 'gemini-system-settings.json'),
+    toolsEnvironment: agentToolsEnvironment,
+    resolveNode: () => resolveRuntime('node', appRuntimeContext()).command,
+    resolveNpm: () => {
+      const npm = resolveRuntime('npm', appRuntimeContext());
+      return { command: npm.command, argsPrefix: npm.argsPrefix };
+    },
+    emitEvent: broadcastCodexEvent,
+    emitAccount: broadcastGeminiAccount,
+    fetchImpl: net.fetch.bind(net),
+  });
+  return geminiAgent;
+}
+
+async function geminiAgentReady(): Promise<GeminiAgent> {
+  await requireRuntimePack();
+  return getGeminiAgent();
+}
+
+// Valida a chave da OpenAI antes de entregar ao Codex: o app-server aceita
+// qualquer texto sem checar, e o aluno so descobriria o erro no meio do turno.
+async function validateOpenAiKey(apiKey: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await net.fetch('https://api.openai.com/v1/models', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+  } catch {
+    throw new Error('Sem conexão para validar a chave. Tente de novo.');
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new Error('Chave inválida. Confira na plataforma da OpenAI e cole de novo.');
+  }
+  if (!response.ok) {
+    throw new Error(`A validação da chave falhou (HTTP ${response.status}). Tente de novo.`);
+  }
+}
+
 function checkRuntime(
   resolution: RuntimeResolution,
   args: string[],
@@ -2144,6 +2197,9 @@ function registerIpcHandlers(): void {
     if (aiProvider === 'claude') {
       return (await claudeAgentReady()).sendMessage(resolvedProjectDirectory, text);
     }
+    if (aiProvider === 'gemini') {
+      return (await geminiAgentReady()).sendMessage(resolvedProjectDirectory, text);
+    }
     return (await codexServer()).sendMessage(resolvedProjectDirectory, text);
   });
 
@@ -2152,6 +2208,9 @@ function registerIpcHandlers(): void {
     async (_event, input: { threadId: string; turnId: string }) => {
       if (getClaudeAgent().ownsThread(asText(input.threadId))) {
         return getClaudeAgent().interrupt(input.threadId, input.turnId);
+      }
+      if (getGeminiAgent().ownsThread(asText(input.threadId))) {
+        return getGeminiAgent().interrupt(input.threadId, input.turnId);
       }
       return (await codexServer()).interrupt(input.threadId, input.turnId);
     },
@@ -2165,6 +2224,9 @@ function registerIpcHandlers(): void {
     ) => {
       if (getClaudeAgent().ownsApproval(input.approvalId)) {
         return getClaudeAgent().respondToApproval(input.approvalId, input.decision);
+      }
+      if (getGeminiAgent().ownsApproval(input.approvalId)) {
+        return getGeminiAgent().respondToApproval(input.approvalId, input.decision);
       }
       return (await codexServer()).respondToApproval(input.approvalId, input.decision);
     },
@@ -2193,6 +2255,23 @@ function registerIpcHandlers(): void {
   ipcMain.handle('claude:login-cancel', () => getClaudeAgent().cancelLogin());
 
   ipcMain.handle('claude:logout', () => getClaudeAgent().logout());
+
+  ipcMain.handle('claude:connect-key', (_event, input: { apiKey?: string }) =>
+    getClaudeAgent().connectApiKey(asText(input.apiKey)));
+
+  ipcMain.handle('codex:login-api-key', async (_event, input: { apiKey?: string }) => {
+    const apiKey = asText(input.apiKey).trim();
+    if (!apiKey) throw new Error('Cole a chave de API da OpenAI.');
+    await validateOpenAiKey(apiKey);
+    return (await codexServer()).startApiKeyLogin(apiKey);
+  });
+
+  ipcMain.handle('gemini:account', () => getGeminiAgent().readAccount());
+
+  ipcMain.handle('gemini:connect-key', (_event, input: { apiKey?: string }) =>
+    getGeminiAgent().connectApiKey(asText(input.apiKey)));
+
+  ipcMain.handle('gemini:disconnect', () => getGeminiAgent().disconnect());
 
   ipcMain.handle('runtime-pack:ensure', () => ensureRuntimePack());
 }
@@ -2589,14 +2668,17 @@ void app.whenReady().then(async () => {
   // O download do pacote de ferramentas comeca imediatamente, antes mesmo do
   // login: no primeiro boot ele e o caminho critico de tudo.
   void ensureRuntimePack();
-  // Provedor de IA escolhido e, se o Claude ja estiver conectado, o motor
-  // dele fica pronto em segundo plano antes da primeira mensagem.
+  // Provedor de IA escolhido e, para provedores ja conectados, o motor fica
+  // pronto em segundo plano antes da primeira mensagem.
   void loadAppSettings().then(async () => {
-    const account = await getClaudeAgent().readAccount();
-    if (account.status === 'signed-in') {
-      await requireRuntimePack().catch(() => {});
-      void getClaudeAgent().ensureRuntime().catch(() => {});
-    }
+    const [claudeAccount, geminiAccount] = await Promise.all([
+      getClaudeAgent().readAccount(),
+      getGeminiAgent().readAccount(),
+    ]);
+    if (claudeAccount.status !== 'signed-in' && geminiAccount.status !== 'signed-in') return;
+    await requireRuntimePack().catch(() => {});
+    if (claudeAccount.status === 'signed-in') void getClaudeAgent().ensureRuntime().catch(() => {});
+    if (geminiAccount.status === 'signed-in') void getGeminiAgent().ensureRuntime().catch(() => {});
   });
   // Servidor de mídia com suporte a Range. Sem 206/Accept-Ranges o <video>
   // não consegue posicionar a agulha em arquivos grandes: o clique na
@@ -2657,4 +2739,5 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   codexAppServer?.stop();
   claudeAgent?.stop();
+  geminiAgent?.stop();
 });
