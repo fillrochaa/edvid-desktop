@@ -1071,6 +1071,30 @@ async function inspectProjectOverlays(directory: string): Promise<ProjectOverlay
       const built = clip(item.start, item.end, asText(item.label).trim() || 'Animação');
       if (built) animations.push(built);
     }
+    // Blindagem contra improviso de schema: agentes ja inventaram campos
+    // proprios (ex.: creatorInfographics) e a animacao sumia da timeline.
+    // Qualquer lista DESCONHECIDA no topo do edit-data cujos itens tenham
+    // start + end (ou start + dur) vira chip de animacao, seja qual for o
+    // nome — a timeline nunca mais fica cega para janelas de tempo.
+    const knownKeys = new Set([
+      'width', 'height', 'fps', 'durationSec', 'camera', 'hook', 'captions',
+      'inserts', 'behind', 'splits', 'animations', 'soundtrack',
+    ]);
+    for (const [key, value] of Object.entries(parsed)) {
+      if (knownKeys.has(key) || !Array.isArray(value)) continue;
+      for (const item of list(value)) {
+        const end = Number.isFinite(Number(item.end))
+          ? item.end
+          : Number(item.start) + Number(item.dur);
+        const label =
+          asText(item.label).trim() ||
+          asText(item.title).trim() ||
+          path.basename(asText(item.src)) ||
+          key;
+        const built = clip(item.start, end, label);
+        if (built) animations.push(built);
+      }
+    }
     const hook = parsed.hook as { enabled?: unknown; endSec?: unknown } | undefined;
     const hookEnd = hook?.enabled === true && Number.isFinite(Number(hook.endSec)) ? Number(hook.endSec) : null;
     if (!images.length && !videos.length && !animations.length && hookEnd === null) return null;

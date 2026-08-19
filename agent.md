@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-19 (0.12.1 — CustomGraphics entra na impressão digital do render e as animações sob medida são registradas em edit-data.animations)
+Atualizado em: 2026-08-19 (0.12.2 — timeline imune a improviso de schema: campos desconhecidos com janelas de tempo viram chips de Animações)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -885,6 +885,15 @@ Arquitetura (`src/gemini-agent.ts`):
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.12.2: timeline imune a improviso de schema. Mesmo com o campo oficial
+  animations existindo, um agente registrou a animação num campo INVENTADO
+  (creatorInfographics) e a track sumiu de novo — instrução não garante
+  disciplina. inspectProjectOverlays agora COLHE qualquer lista
+  desconhecida no topo do edit-data cujos itens tenham start+end (ou
+  start+dur) e desenha como chip de Animações (label de label/title/src ou
+  o nome do campo); campos aninhados (captions.windows) não são tocados.
+  Instruções passaram a proibir campos inventados explicitamente, com a
+  lista dos oficiais.
 - 0.12.1: animação sob medida invisível, causa dupla achada em uso real. O
   agente criou um infográfico no CustomGraphics.tsx e (1) o render nunca
   disparou — a impressão digital da Fase 2 só olhava public/, e o ÚNICO
