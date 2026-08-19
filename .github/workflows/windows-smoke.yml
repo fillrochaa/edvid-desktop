@@ -1,0 +1,69 @@
+# Smoke do runtime pack win32 PUBLICADO: baixa do R2 o mesmo tar.gz que o
+# aplicativo do aluno baixa, extrai com o mesmo bsdtar e roda os mesmos
+# comandos que o Edvid/agente rodam (node, ffmpeg, python3 -m whisperx e o
+# smoke de decodificacao de audio). Reproduz o ambiente do aluno sem GUI.
+name: windows-smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Baixar e extrair o runtime pack publicado
+        run: |
+          $key = node -e "const m=require('./resources/runtime-manifest.json');const{createHash}=require('crypto');console.log(createHash('sha256').update(JSON.stringify(m.runtimes)).digest('hex').slice(0,12))"
+          $pack = "runtimes-win32-x64-$key.tar.gz"
+          $url = "https://pub-89ee05cdaf26477c8984a36be2b373fa.r2.dev/runtimes/$pack"
+          Write-Host "Pacote: $url"
+          curl.exe -fsSL -o $pack $url
+          if ($LASTEXITCODE -ne 0) { throw "download falhou" }
+          New-Item -ItemType Directory -Force -Path tools | Out-Null
+          tar -xzf $pack -C tools
+          if ($LASTEXITCODE -ne 0) { throw "extracao falhou" }
+          Get-ChildItem tools/win32-x64
+
+      - name: Ferramentas básicas do pack
+        run: |
+          $root = "tools/win32-x64"
+          & "$root/node/node.exe" --version
+          & "$root/ffmpeg/bin/ffmpeg.exe" -version | Select-Object -First 1
+          & "$root/ffmpeg/bin/ffprobe.exe" -version | Select-Object -First 1
+          & "$root/uv/bin/uv.exe" --version
+          & "$root/yt-dlp/bin/yt-dlp.exe" --version
+          & "$root/codex-app-server/bin/codex-app-server.exe" --version
+
+      - name: Python e alias python3 do pack
+        run: |
+          $py = "tools/win32-x64/python-whisperx/python"
+          & "$py/python.exe" --version
+          if (-not (Test-Path "$py/python3.exe")) { throw "python3.exe ausente no pack" }
+          & "$py/python3.exe" --version
+
+      - name: Imports do WhisperX (torch, torchcodec, DLLs)
+        run: |
+          $py = "tools/win32-x64/python-whisperx/python/python3.exe"
+          & $py -B -c "from importlib.metadata import version; import ctranslate2, faster_whisper, pyannote.audio, torch, torchcodec, whisperx; print('whisperx', version('whisperx')); print('torch', torch.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw "imports falharam" }
+
+      - name: Smoke de áudio (mesmo caminho do corte)
+        run: |
+          $root = "tools/win32-x64"
+          $py = "$root/python-whisperx/python/python3.exe"
+          & "$root/ffmpeg/bin/ffmpeg.exe" -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 0.25 tone.wav
+          $tone = (Resolve-Path tone.wav).Path -replace '\\','/'
+          & $py -B -c "from whisperx.audio import load_audio; print('amostras:', load_audio('$tone').shape[0])"
+          if ($LASTEXITCODE -ne 0) { throw "smoke de audio falhou" }
+
+      - name: CLI do WhisperX (como o agente chama)
+        run: |
+          $env:PATH = (Resolve-Path "tools/win32-x64/python-whisperx/python").Path + ";" + (Resolve-Path "tools/win32-x64/ffmpeg/bin").Path + ";" + $env:PATH
+          python3 -B -m whisperx --help | Select-Object -First 5
+          if ($LASTEXITCODE -ne 0) { throw "whisperx --help falhou" }
