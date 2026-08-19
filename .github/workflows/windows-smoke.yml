@@ -68,23 +68,38 @@ jobs:
           python3 -B -c "from whisperx.audio import load_audio; print('amostras:', load_audio('$tone').shape[0])"
           if ($LASTEXITCODE -ne 0) { throw "smoke de audio falhou" }
 
-      - name: Prefetch do modelo (como o app faz no boot)
+      - name: Prefetch dos modelos (como o app faz no boot)
         run: |
           $env:PATH = (Resolve-Path "tools/win32-x64/python-whisperx/python").Path + ";" + $env:PATH
           $env:HF_HOME = "$PWD/hf-cache"
           $env:HUGGINGFACE_HUB_CACHE = "$PWD/hf-cache/hub"
           $env:HF_HUB_DISABLE_TELEMETRY = "1"
-          python3 -B -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-small')"
-          if ($LASTEXITCODE -ne 0) { throw "prefetch do modelo falhou" }
+          # Transcricao + alinhamento pt, os dois que o ensureWhisperModel baixa.
+          # O smoke antigo pulava o alinhamento (--no_align) e ficou verde
+          # enquanto o aluno morria em "modelo de alinhamento nao disponivel".
+          python3 -B -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-small'); snapshot_download('jonatasgrosman/wav2vec2-large-xlsr-53-portuguese')"
+          if ($LASTEXITCODE -ne 0) { throw "prefetch dos modelos falhou" }
 
-      - name: Transcrição real pela CLI (como o agente chama)
+      - name: Transcrição real pela CLI com alinhamento, offline (como o agente)
         run: |
           $env:PATH = (Resolve-Path "tools/win32-x64/python-whisperx/python").Path + ";" + (Resolve-Path "tools/win32-x64/ffmpeg/bin").Path + ";" + $env:PATH
           $env:HF_HOME = "$PWD/hf-cache"
           $env:HUGGINGFACE_HUB_CACHE = "$PWD/hf-cache/hub"
+          $env:TORCH_HOME = "$PWD/torch-cache"
+          $env:XDG_CACHE_HOME = "$PWD/xdg-cache"
           $env:PYTHONDONTWRITEBYTECODE = "1"
           $env:PYTHONNOUSERSITE = "1"
-          ffmpeg -hide_banner -loglevel error -f lavfi -i "sine=frequency=300:sample_rate=16000" -t 2 fala.wav
-          python3 -B -m whisperx fala.wav --model small --language pt --device cpu --compute_type int8 --no_align --output_dir saida --output_format json
-          if ($LASTEXITCODE -ne 0) { throw "whisperx CLI falhou" }
-          Get-Content saida/fala.json | Select-Object -First 3
+          $env:HF_HUB_OFFLINE = "1"
+          # Fala de verdade (SAPI): sem palavras o alinhamento nao e exercitado.
+          Add-Type -AssemblyName System.Speech
+          $tts = New-Object System.Speech.Synthesis.SpeechSynthesizer
+          $tts.SetOutputToWaveFile("$PWD/fala.wav")
+          $tts.Speak('O Edvid corta o video guiado pelo audio da fala.')
+          $tts.Dispose()
+          python3 -B -m whisperx fala.wav --model small --language pt --device cpu --compute_type int8 --output_dir saida --output_format json
+          if ($LASTEXITCODE -ne 0) { throw "whisperx CLI com alinhamento falhou" }
+          $json = Get-Content saida/fala.json -Raw | ConvertFrom-Json
+          if (-not $json.segments -or $json.segments.Count -lt 1) { throw "transcricao sem segmentos" }
+          $words = @($json.segments | ForEach-Object { $_.words } | Where-Object { $_ -and $null -ne $_.start })
+          if ($words.Count -lt 1) { throw "alinhamento nao gerou tempos de palavra" }
+          Write-Host "segmentos: $($json.segments.Count); palavras alinhadas: $($words.Count)"

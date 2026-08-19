@@ -144,9 +144,19 @@ sandbox, e cada transcrição exigia aprovação do usuário.
   informado ao agente por `EDVID_WHISPER_MODEL`. Trocar o modelo exige mudar
   `WHISPERX_MODEL_NAME`/`WHISPERX_MODEL_REPO` no `main.ts`, senão o agente
   falha offline.
+- O prefetch baixa TAMBÉM o modelo de alinhamento pt
+  (`jonatasgrosman/wav2vec2-large-xlsr-53-portuguese`, ~1,27 GB —
+  `WHISPERX_ALIGN_REPO`): o whisperx resolve `--language pt` para esse repo
+  e sem ele a transcrição offline morre depois do texto, na etapa de
+  alinhamento (visto em máquina real na 0.13.7). O critério de "pronto"
+  exige os dois no cache; transcrever é sempre com `--language pt`.
 - O modelo de VAD não é baixado: ele acompanha o pacote do WhisperX em
   `whisperx/assets/pytorch_model.bin`. Verificado rodando a transcrição
   completa com `HF_HUB_OFFLINE=1`.
+- `ensureWhisperModel` termina com um healthcheck (`python -B -m whisperx
+  --help`, uma vez por chave de pack, marcador em
+  `cache/whisperx-ok-<chave>.json`): WhisperX instalado mas que não ABRE
+  nesta máquina vira erro exato no banner, em vez do relato vago do agente.
 
 ## 5. Login e provedores de IA (ChatGPT + Claude + Gemini)
 
@@ -1132,6 +1142,29 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.13.8: transcrição offline COMPLETA e diagnóstico do WhisperX no banner,
+  pelos dois prints do teste real pós-0.13.7. (1) Windows: "o modelo de
+  alinhamento em português não está disponível no cache local" — o prefetch
+  baixava só o Systran/faster-whisper-small e o ambiente do agente é offline
+  de propósito; o whisperx resolve pt → jonatasgrosman/
+  wav2vec2-large-xlsr-53-portuguese (DEFAULT_ALIGN_MODELS_HF) e esse repo
+  nunca entrou no cache. ensureWhisperModel agora baixa OS DOIS (critério de
+  pronto: small >100 MB E alinhamento >1 GB — máquinas antigas com só o
+  small voltam a baixar), o ticker soma os dois diretórios e as instruções
+  mandam transcrever SEMPRE com --language pt (outros idiomas: avisar e
+  --no_align). LIÇÃO DE SMOKE: o smoke antigo rodava com --no_align e sem
+  HF_HUB_OFFLINE — ficou verde enquanto o aluno morria no alinhamento; um
+  smoke que pula a etapa que quebra não é smoke. Agora ele sintetiza fala
+  de verdade (SAPI no Windows), transcreve COM alinhamento, offline, e
+  exige tempos de palavra no JSON. (2) Mac: "o WhisperX não está disponível
+  no ambiente" sem causa visível — ensureWhisperModel ganhou healthcheck:
+  `python -B -m whisperx --help` uma vez por chave de pack (marcador em
+  cache/whisperx-ok-<chave>.json; ~10 s de imports quando roda); falha vira
+  erro EXATO no banner ("o WhisperX não abre neste computador (última linha
+  do stderr)") com o Tentar de novo. Réplica local com o pack darwin
+  PUBLICADO no R2 (mesmo tar.gz que o aluno baixa) validou o ciclo:
+  whisperx abre, prefetch duplo, say -v Luciana → transcrição offline
+  alinhada com tempos de palavra.
 - 0.13.7: hotfix da 0.13.6, minutos depois, por erro em produção: "thread/
   start.allowProviderModelFallback requires experimentalApi capability" — o
   campo é gated e derrubava TODO envio de mensagem no ChatGPT. Removido dos

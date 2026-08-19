@@ -1159,6 +1159,11 @@ function broadcastCodexEvent(event: CodexEvent): void {
 
 const WHISPERX_MODEL_NAME = 'small';
 const WHISPERX_MODEL_REPO = 'Systran/faster-whisper-small';
+// Alinhamento em portugues: o whisperx resolve "pt" para este repo
+// (DEFAULT_ALIGN_MODELS_HF em alignment.py) e o agente roda offline — sem o
+// prefetch o corte morria em "modelo de alinhamento nao disponivel no cache
+// local" (aconteceu no Windows; o smoke antigo mascarava com --no_align).
+const WHISPERX_ALIGN_REPO = 'jonatasgrosman/wav2vec2-large-xlsr-53-portuguese';
 
 let modelPrefetch: Promise<WhisperModelState> | null = null;
 let modelState: WhisperModelState = { status: 'unknown', model: WHISPERX_MODEL_NAME };
@@ -1197,6 +1202,7 @@ function runModelDownload(python: string, hubCache: string): Promise<void> {
   const script = [
     'from huggingface_hub import snapshot_download',
     `snapshot_download(${JSON.stringify(WHISPERX_MODEL_REPO)})`,
+    `snapshot_download(${JSON.stringify(WHISPERX_ALIGN_REPO)})`,
   ].join('\n');
   return new Promise((resolve, reject) => {
     const child = spawn(python, ['-c', script], {
@@ -1839,10 +1845,68 @@ function renderPhase2(projectDirectory: string): Promise<Phase2RenderState> {
   return promise;
 }
 
+// O WhisperX pode estar "instalado" e mesmo assim nao abrir nesta maquina
+// (dylib/DLL ausente, pacote corrompido no download). Provar uma vez por
+// chave de pack que `python -m whisperx --help` executa transforma o defeito
+// invisivel do agente ("o WhisperX nao esta disponivel no ambiente") num
+// erro exato no banner, com o "Tentar de novo". As importacoes pesam ~10 s,
+// entao o resultado bom fica marcado e as sessoes seguintes nao repetem.
+async function verifyWhisperxCli(
+  python: string,
+): Promise<{ ok: boolean; error: string }> {
+  const caches = cachePaths();
+  const marker = path.join(caches.root, `whisperx-ok-${runtimePackKey()}.json`);
+  try {
+    await stat(marker);
+    return { ok: true, error: '' };
+  } catch {
+    // Sem marcador: verifica de verdade.
+  }
+  const outcome = await new Promise<{ ok: boolean; error: string }>((resolve) => {
+    const child = spawn(python, ['-B', '-m', 'whisperx', '--help'], {
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: {
+        ...process.env,
+        PYTHONDONTWRITEBYTECODE: '1',
+        PYTHONNOUSERSITE: '1',
+        HF_HOME: caches.huggingface,
+        HUGGINGFACE_HUB_CACHE: path.join(caches.huggingface, 'hub'),
+        TORCH_HOME: caches.torch,
+        XDG_CACHE_HOME: caches.xdg,
+        MPLCONFIGDIR: caches.matplotlib,
+        HF_HUB_OFFLINE: '1',
+      },
+    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      if (stderr.length < 16_384) stderr += chunk;
+    });
+    const timer = setTimeout(() => {
+      child.kill();
+      resolve({ ok: false, error: 'a verificação demorou mais de 3 minutos' });
+    }, 180_000);
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      resolve({ ok: false, error: error.message });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve({ ok: true, error: '' });
+      else resolve({ ok: false, error: stderr.trim().split(/\r?\n/).at(-1) || `saiu com código ${code}` });
+    });
+  });
+  if (outcome.ok) {
+    await writeFile(marker, `${JSON.stringify({ checkedAt: new Date().toISOString() })}\n`).catch(() => {});
+  }
+  return outcome;
+}
+
 function ensureWhisperModel(): Promise<WhisperModelState> {
   if (modelPrefetch) return modelPrefetch;
   modelPrefetch = (async (): Promise<WhisperModelState> => {
-    // O download do modelo roda no Python do pacote de ferramentas.
+    // O download dos modelos roda no Python do pacote de ferramentas.
     await requireRuntimePack();
     const caches = cachePaths();
     const hubCache = path.join(caches.huggingface, 'hub');
@@ -1850,11 +1914,11 @@ function ensureWhisperModel(): Promise<WhisperModelState> {
       hubCache,
       `models--${WHISPERX_MODEL_REPO.replace('/', '--')}`,
     );
+    const alignDirectory = path.join(
+      hubCache,
+      `models--${WHISPERX_ALIGN_REPO.replace('/', '--')}`,
+    );
     await prepareCacheDirectories();
-    // Um snapshot ja baixado tem os pesos; qualquer coisa menor esta pela metade.
-    if ((await directorySize(modelDirectory)) > 100_000_000) {
-      return { status: 'ready', model: WHISPERX_MODEL_NAME };
-    }
     const python = resolveRuntime('python', appRuntimeContext());
     if (!python.command) {
       return {
@@ -1863,27 +1927,49 @@ function ensureWhisperModel(): Promise<WhisperModelState> {
         error: 'Python interno nao esta disponivel nesta plataforma.',
       };
     }
-    broadcastModelState({ status: 'downloading', model: WHISPERX_MODEL_NAME, downloadedBytes: 0 });
-    const ticker = setInterval(() => {
-      void directorySize(modelDirectory).then((downloadedBytes) => {
-        if (modelState.status === 'downloading') {
-          broadcastModelState({ status: 'downloading', model: WHISPERX_MODEL_NAME, downloadedBytes });
-        }
-      });
-    }, 700);
-    try {
-      await runModelDownload(python.command, hubCache);
-      return { status: 'ready', model: WHISPERX_MODEL_NAME };
-    } catch (error) {
-      modelPrefetch = null; // Falha de rede pode ser transitoria; permite repetir.
+    // Um snapshot ja baixado tem os pesos; qualquer coisa menor esta pela
+    // metade. O de transcricao (small) passa de 100 MB; o de alinhamento pt
+    // (wav2vec2-large) passa de 1 GB.
+    const cached =
+      (await directorySize(modelDirectory)) > 100_000_000 &&
+      (await directorySize(alignDirectory)) > 1_000_000_000;
+    if (!cached) {
+      broadcastModelState({ status: 'downloading', model: WHISPERX_MODEL_NAME, downloadedBytes: 0 });
+      const ticker = setInterval(() => {
+        void Promise.all([directorySize(modelDirectory), directorySize(alignDirectory)])
+          .then(([modelBytes, alignBytes]) => {
+            if (modelState.status === 'downloading') {
+              broadcastModelState({
+                status: 'downloading',
+                model: WHISPERX_MODEL_NAME,
+                downloadedBytes: modelBytes + alignBytes,
+              });
+            }
+          });
+      }, 700);
+      try {
+        await runModelDownload(python.command, hubCache);
+      } catch (error) {
+        modelPrefetch = null; // Falha de rede pode ser transitoria; permite repetir.
+        return {
+          status: 'error',
+          model: WHISPERX_MODEL_NAME,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      } finally {
+        clearInterval(ticker);
+      }
+    }
+    const health = await verifyWhisperxCli(python.command);
+    if (!health.ok) {
+      modelPrefetch = null; // "Tentar de novo" repete a verificação.
       return {
         status: 'error',
         model: WHISPERX_MODEL_NAME,
-        error: error instanceof Error ? error.message : String(error),
+        error: `o WhisperX não abre neste computador (${health.error})`,
       };
-    } finally {
-      clearInterval(ticker);
     }
+    return { status: 'ready', model: WHISPERX_MODEL_NAME };
   })().then((state) => {
     broadcastModelState(state);
     return state;
