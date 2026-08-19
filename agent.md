@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-19 (0.11.0 — papéis de IA chat/imagem, geração de imagens pelo app e fallback de limite)
+Atualizado em: 2026-08-19 (0.11.1 — continuação automática após a geração de imagens fecha o ciclo pedido→gerar→aplicar)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -803,6 +803,12 @@ fora do sandbox):
   EDVID_INSTRUCTIONS. Depois de cada turno o renderer chama image:fulfill;
   o main gera as pendentes com a IA de imagem e salva em edit/imagens/;
   pedidos atendidos saem da fila, falhas ficam e vão ao chat.
+- CONTINUAÇÃO AUTOMÁTICA (0.11.1): geração que termina em ready com done>0
+  dispara sozinha um turno "Imagens prontas — aplicando na edição" — sem
+  isso o agente pedia a imagem, o app gerava e NINGUÉM aplicava (o agente
+  não volta sozinho depois que o turno acaba; achado em uso real). O
+  despacho sai de um efeito (closures atuais), nunca do handler de evento
+  registrado no boot, que tem closures congeladas.
 - Backend ChatGPT: runUtilityTurn no CodexAppServer — thread própria
   invisível ao chat (eventos suprimidos, aprovações auto-recusadas) que
   instrui a skill imagegen (gpt-image-2, cota da assinatura). SONDADO com o
@@ -879,6 +885,11 @@ Arquitetura (`src/gemini-agent.ts`):
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.11.1: continuação automática das imagens. Em uso real o ciclo não
+  fechava: o agente pedia a imagem e encerrava o turno, o app gerava, e a
+  aplicação só viria se o aluno mandasse outra mensagem. Agora o Edvid
+  despacha sozinho o turno de continuação quando a geração termina, e as
+  instruções mandam o agente aplicar nesse turno sem esperar novo pedido.
 - 0.11.0: papéis de IA e imagens. Papel "chat" e papel "imagem" com regras
   automáticas (ChatGPT > Gemini para imagem; Claude só chat), pins de
   escolha manual, seletores rápidos sob o composer e chips por papel nas

@@ -1898,6 +1898,7 @@ export function App() {
   const [geminiLoaded, setGeminiLoaded] = useState(false);
   const [aiRoles, setAiRoles] = useState<AiRolesState>({ chat: 'chatgpt', image: null, chatPinned: false, imagePinned: false });
   const [imageGen, setImageGen] = useState<ImageGenState>({ status: 'idle' });
+  const [imageContinuationAt, setImageContinuationAt] = useState<number | null>(null);
   const [aiOnboardingDismissed, setAiOnboardingDismissed] = useState(false);
   const [claudeCode, setClaudeCode] = useState('');
   // Entrada de chave de API: qual provedor esta com o campo aberto.
@@ -1912,6 +1913,7 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<'geral' | 'conexoes'>('geral');
   const [jcutApplied, setJcutApplied] = useState(false);
   const phase2StatusRef = useRef<Phase2RenderState['status']>('idle');
+  const imageGenStatusRef = useRef<ImageGenState['status']>('idle');
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const activeProjectDirectoryRef = useRef<string | null>(null);
   const timelineSaveTimerRef = useRef<number | null>(null);
@@ -2132,6 +2134,18 @@ export function App() {
     if (!directory) return;
     // O andamento chega por onImageGenState; sem pedidos o main devolve idle.
     void window.edvidDesktop.fulfillImageRequests(directory).catch(() => {});
+  }
+
+  function handleImageGenState(state: ImageGenState) {
+    const previous = imageGenStatusRef.current;
+    imageGenStatusRef.current = state.status;
+    setImageGen(state);
+    // Geracao terminou com sucesso: fecha o ciclo sozinho — o agente pediu
+    // as imagens e encerrou o turno, entao alguem precisa acorda-lo para
+    // aplica-las. O despacho real acontece num efeito, com closures atuais.
+    if (state.status === 'ready' && previous === 'generating' && (state.done ?? 0) > 0) {
+      setImageContinuationAt(Date.now());
+    }
   }
 
   function handlePhase2RenderState(state: Phase2RenderState) {
@@ -2561,7 +2575,7 @@ export function App() {
     const unsubscribeClaude = window.edvidDesktop.onClaudeAccount(setClaudeAccount);
     const unsubscribeGemini = window.edvidDesktop.onGeminiAccount(setGeminiAccount);
     const unsubscribeRoles = window.edvidDesktop.onAiRoles(setAiRoles);
-    const unsubscribeImageGen = window.edvidDesktop.onImageGenState(setImageGen);
+    const unsubscribeImageGen = window.edvidDesktop.onImageGenState(handleImageGenState);
     void window.edvidDesktop.getMemberAuth().then(setMemberAuth);
     const unsubscribePack = window.edvidDesktop.onRuntimePackState((state) => {
       setRuntimePack(state);
@@ -2660,6 +2674,17 @@ export function App() {
   useEffect(() => {
     aiRuntimeRef.current = { roles: aiRoles, connected: aiConnected };
   }, [aiRoles, chatgptConnected, claudeConnected, geminiConnected]);
+
+  // Continuação automática das imagens: o agente pediu, o app gerou, e este
+  // turno avisa o agente para aplicá-las — sem o aluno digitar nada.
+  useEffect(() => {
+    if (!imageContinuationAt) return;
+    setImageContinuationAt(null);
+    void dispatchMessage(
+      'As imagens pedidas foram geradas e já estão em edit/imagens/. Aplique cada uma na edição exatamente onde você planejou; não crie novos pedidos de imagem se não precisar de imagens novas.',
+      'Imagens prontas — aplicando na edição',
+    );
+  }, [imageContinuationAt]);
 
   // Onboarding da conexão de IA: logo depois do login do aluno, se nenhuma
   // IA estiver conectada, o Edvid oferece ChatGPT, Claude e Gemini. O clique
