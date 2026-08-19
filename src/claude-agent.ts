@@ -86,6 +86,9 @@ type PendingLogin = {
   manual: boolean;
   server: Server | null;
   timer: NodeJS.Timeout | null;
+  // Trava a troca em voo: um refresh da aba de callback re-GETa a URL com o
+  // MESMO codigo e uma segunda troca falharia sobrescrevendo o sucesso.
+  busy: boolean;
 };
 
 type PendingApproval = {
@@ -292,7 +295,7 @@ export class ClaudeAgent {
     this.closeLogin();
     const verifier = base64Url(randomBytes(32));
     const state = base64Url(randomBytes(32));
-    const login: PendingLogin = { verifier, state, manual: false, server: null, timer: null };
+    const login: PendingLogin = { verifier, state, manual: false, server: null, timer: null, busy: false };
     this.pendingLogin = login;
 
     login.server = await this.bindCallbackServer(login);
@@ -342,7 +345,7 @@ export class ClaudeAgent {
         }
         const code = url.searchParams.get('code') ?? '';
         const returnedState = url.searchParams.get('state') ?? '';
-        const valid = Boolean(code) && returnedState === login.state && this.pendingLogin === login;
+        const valid = Boolean(code) && returnedState === login.state && this.pendingLogin === login && !login.busy;
         if (!valid) {
           this.logLogin(
             `callback invalido (codigo ${code ? 'presente' : 'ausente'}, state ${returnedState === login.state ? 'confere' : 'diverge'}, login ${this.pendingLogin === login ? 'ativo' : 'encerrado'})`,
@@ -351,6 +354,7 @@ export class ClaudeAgent {
           response.end(page('Requisição de login inválida', 'Volte ao Edvid e tente de novo.'));
           return;
         }
+        login.busy = true;
         this.logLogin('callback do navegador recebido (state confere); trocando codigo por token');
         // A pagina so anuncia sucesso DEPOIS da troca do token: antes ela
         // dizia "Login concluído" na hora e, se a troca falhasse em seguida,
