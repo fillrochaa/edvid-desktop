@@ -3125,7 +3125,10 @@ export function App() {
                   )}
                   {whisperModel.status === 'error' && (
                     <div className="model-status error">
-                      Não foi possível preparar a transcrição. Verifique a conexão e reabra o Edvid.
+                      <span>Não foi possível preparar a transcrição{whisperModel.error ? `: ${whisperModel.error}` : ''}.</span>
+                      <button type="button" className="btn ghost small" onClick={() => void window.edvidDesktop.ensureWhisperModel().then(setWhisperModel)}>
+                        Tentar de novo
+                      </button>
                     </div>
                   )}
                 </div>
@@ -3167,6 +3170,20 @@ export function App() {
                   </button>
                   <button type="button" className={`btn ghost small ${jcutApplied ? 'jcut-applied' : ''}`} onClick={() => void applyJcut()} disabled={jcutBusy || jcutApplied}>
                     <Icon name="waveform" /> {jcutApplied ? 'J-Cut aplicado' : jcutBusy ? 'Aplicando…' : 'Aplicar J-Cut'}
+                  </button>
+                </div>
+              )}
+              {messages.length > 0 && whisperModel.status === 'downloading' && (
+                <div className="model-status">
+                  <span className="model-status-orb" />
+                  Preparando a transcrição{whisperModel.downloadedBytes ? ` · ${Math.round(whisperModel.downloadedBytes / 1e6)} MB` : ''}
+                </div>
+              )}
+              {messages.length > 0 && whisperModel.status === 'error' && (
+                <div className="model-status error">
+                  <span>A transcrição não está pronta{whisperModel.error ? `: ${whisperModel.error}` : ''}. O corte limpo depende dela.</span>
+                  <button type="button" className="btn ghost small" onClick={() => void window.edvidDesktop.ensureWhisperModel().then(setWhisperModel)}>
+                    Tentar de novo
                   </button>
                 </div>
               )}

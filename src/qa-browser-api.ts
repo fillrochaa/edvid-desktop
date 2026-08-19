@@ -314,7 +314,18 @@ export function createQaBrowserApi(): EdvidDesktopApi {
       }
       return () => {};
     },
-    ensureWhisperModel: async () => ({ status: 'ready', model: 'small' }),
+    // "?modelo=erro" simula a falha de prefetch do modelo (banner com
+    // "Tentar de novo"); "?modelo=baixando" simula o download em andamento.
+    ensureWhisperModel: async () => {
+      const modo = qaSearch().get('modelo');
+      if (modo === 'erro') {
+        return { status: 'error', model: 'small', error: 'sem conexão com o Hugging Face' };
+      }
+      if (modo === 'baixando') {
+        return { status: 'downloading', model: 'small', downloadedBytes: 213_000_000 };
+      }
+      return { status: 'ready', model: 'small' };
+    },
     onWhisperModelState: () => () => {},
     ensureRemotionRuntime: async () => ({ status: 'ready' }),
     onRemotionRuntimeState: () => () => {},

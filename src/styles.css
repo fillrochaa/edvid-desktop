@@ -455,7 +455,8 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .timeline-correction-range > span:hover ~ .delete-correction, .delete-correction:hover, .delete-correction:focus-visible { opacity: 1; transform: none; }
 /* Preparo do modelo de transcrição, feito pelo app antes de o usuário pedir. */
 .model-status { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; padding: 5px 9px; border: 1px solid rgba(9,181,183,.2); border-radius: 8px; color: #7fb6b8; background: rgba(9,181,183,.05); font-size: 8px; }
-.model-status.error { color: #ff9fae; border-color: rgba(255,90,110,.24); background: rgba(255,90,110,.06); }
+.model-status.error { color: #ff9fae; border-color: rgba(255,90,110,.24); background: rgba(255,90,110,.06); flex-wrap: wrap; }
+.model-status.error .btn { flex: 0 0 auto; color: #ffc2cb; border-color: rgba(255,90,110,.3); }
 .model-status-orb { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--teal); animation: model-pulse 1.3s ease-in-out infinite; }
 @keyframes model-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
 

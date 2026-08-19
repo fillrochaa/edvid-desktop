@@ -1012,6 +1012,12 @@ O que cada peça faz no win32-x64:
   spawns usam binários absolutos ou `node script.js` (sem npx/.cmd);
   PATH usa path.delimiter; a extração do pack usa bsdtar (Windows 10+).
 
+Smoke contínuo: o workflow windows-smoke baixa o runtime pack PUBLICADO
+do R2 num runner limpo e roda os comandos do agente (ferramentas, imports
+do WhisperX, prefetch do modelo e transcrição real pela CLI) — é o
+replicador do ambiente do aluno; rodar sempre que houver suspeita de
+pacote quebrado no Windows. Verde em 2026-08-19.
+
 Validação pendente na primeira rodada real (nesta ordem):
 1. Workflow sem publish → instalar o Setup.exe numa máquina/VM Windows.
 2. Boot: download do runtime pack win32 + extração + checkRuntimes verde.
@@ -1057,6 +1063,19 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.13.3: primeiro teste real no Windows ("mecanismo local de transcrição
+  não abriu"). O smoke novo (workflow windows-smoke: baixa o runtime pack
+  PUBLICADO do R2, extrai como o app e roda os mesmos comandos do agente,
+  incluindo prefetch do modelo e transcrição real pela CLI) provou o
+  pacote 100% funcional — até transcreveu "E aí" de um seno (alucinação
+  clássica = pipeline inteiro rodou). Ou seja: a falha do aluno é estado
+  local, e o suspeito é o prefetch do modelo, cuja falha era INVISÍVEL
+  com o chat preenchido (o banner só existia no estado vazio). Correções:
+  banner de "Preparando a transcrição"/erro agora persiste no chat com
+  mensagens e ganhou "Tentar de novo" (re-dispara ensureWhisperModel);
+  e o gate fixo "Corte limpo pronto" passou a exigir corte respaldado
+  por EDL (clipes com sourceId real) — ele tinha aparecido logo abaixo
+  da mensagem de FALHA do corte. QA: ?modelo=erro|baixando e ?semcorte.
 - 0.13.2: refinamentos pedidos em uso real. Sucesso do J-Cut deixou de gerar
   mensagem de sistema no chat: o próprio botão fica VERDE (#4fd08b,
   .jcut-applied) com "J-Cut aplicado" — falha continua avisando por
