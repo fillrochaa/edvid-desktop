@@ -941,8 +941,25 @@ Fase 2:
 
 ## 14. Windows
 
-Infra completa desde 2026-08-19; falta a primeira execução real (CI ou
-máquina Windows) e a validação em máquina de aluno.
+Infra completa e PRIMEIRA BUILD VERDE no CI em 2026-08-19 (run
+32266364640 do workflow windows-build, 6 iterações): todos os stages
+win32-x64, FFmpeg 7.1.5 compilado via MSYS2, WhisperX com torchcodec
+carregando as DLLs, instalador Squirrel e runtime pack gerados —
+artefato "edvid-windows" (~1,1 GB) anexado na rodada. Falta instalar
+numa máquina Windows real e validar o ciclo completo de aluno.
+
+Lições das 6 iterações (vao doer de novo se esquecidas):
+- gh CLI no Actions exige GH_TOKEN (attestation do uv).
+- O gpg de runtime MSYS do PATH dos runners mutila caminhos com letra de
+  drive; usar o gpg do MSYS2 (pacman gnupg) com caminhos /c/....
+- O exe do yt-dlp NAO tem attestation no GitHub (404) — é gpg mesmo.
+- Temp (C:) e workspace (D:) são drives distintos: rename dá EXDEV,
+  precisa fallback de cópia.
+- DLLs mingw dependem de libwinpthread-1.dll/libgcc_s_seh-1.dll:
+  -static-libgcc + copiar o winpthread junto, senão o libtorchcodec não
+  carrega ("or one of its dependencies").
+- .runtime-cache é cacheado no CI: mudança no MODO de build precisa de
+  winBuildRevision no metadata para invalidar.
 
 Como construir (os dois caminhos rodam os MESMOS npm scripts):
 - CI: workflow `windows-build` (.github/workflows/windows-build.yml),
