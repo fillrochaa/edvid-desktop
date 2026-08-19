@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-19 (0.12.0 — tela dividida oficial no template, legenda na divisa em todos os estilos e tracks reais de overlay na timeline)
+Atualizado em: 2026-08-19 (0.12.1 — CustomGraphics entra na impressão digital do render e as animações sob medida são registradas em edit-data.animations)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -885,6 +885,14 @@ Arquitetura (`src/gemini-agent.ts`):
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- 0.12.1: animação sob medida invisível, causa dupla achada em uso real. O
+  agente criou um infográfico no CustomGraphics.tsx e (1) o render nunca
+  disparou — a impressão digital da Fase 2 só olhava public/, e o ÚNICO
+  arquivo-fonte que o agente edita ficava de fora (agora
+  src/CustomGraphics.tsx entra no fingerprint); (2) a timeline não tinha
+  como desenhar código — nasce o campo edit-data.animations
+  [{start,end,label}] como REGISTRO obrigatório (instruções mandam
+  registrar no mesmo turno), alimentando a track Animações.
 - 0.12.0: tela dividida oficial + tracks reais. O split vira DADO
   (EditData.splits {kind image|video, src, start, end, position, bandTop}):
   o Main.tsx monta a divisão sozinho (mídia numa metade, faixa bandTop do

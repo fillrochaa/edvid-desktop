@@ -1065,6 +1065,12 @@ async function inspectProjectOverlays(directory: string): Promise<ProjectOverlay
       const built = clip(item.start, Number(item.start) + Number(item.dur), item.kind === 'words' ? 'Palavras' : 'Atrás do sujeito');
       if (built) animations.push(built);
     }
+    // Animacoes sob medida do CustomGraphics: o agente REGISTRA as janelas em
+    // edit-data.animations (o codigo nao e legivel pela timeline).
+    for (const item of list(parsed.animations)) {
+      const built = clip(item.start, item.end, asText(item.label).trim() || 'Animação');
+      if (built) animations.push(built);
+    }
     const hook = parsed.hook as { enabled?: unknown; endSec?: unknown } | undefined;
     const hookEnd = hook?.enabled === true && Number.isFinite(Number(hook.endSec)) ? Number(hook.endSec) : null;
     if (!images.length && !videos.length && !animations.length && hookEnd === null) return null;
@@ -1590,9 +1596,16 @@ async function phase2Fingerprint(publicDirectory: string): Promise<string | null
     return null;
   }
   const parts: string[] = [];
-  for (const name of PHASE2_INPUTS) {
+  // O CustomGraphics e CODIGO que o agente edita (animacoes sob medida);
+  // sem ele na impressao digital, uma animacao nova nao disparava render
+  // nenhum — o unico arquivo-fonte editavel precisa contar como dado.
+  const inputs: Array<[string, string]> = [
+    ...PHASE2_INPUTS.map((name): [string, string] => [name, path.join(publicDirectory, name)]),
+    ['CustomGraphics.tsx', path.join(publicDirectory, '..', 'src', 'CustomGraphics.tsx')],
+  ];
+  for (const [name, filePath] of inputs) {
     try {
-      const info = await stat(path.join(publicDirectory, name));
+      const info = await stat(filePath);
       parts.push(`${name}:${info.size}:${Math.floor(info.mtimeMs)}`);
     } catch {
       parts.push(`${name}:ausente`);

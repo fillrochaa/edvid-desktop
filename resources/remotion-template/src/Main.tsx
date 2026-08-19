@@ -112,6 +112,10 @@ export type EditData = {
   inserts: Insert[];
   behind: Behind[];
   splits?: Split[];
+  // REGISTRO das animacoes sob medida do CustomGraphics: o template nao
+  // renderiza nada daqui (o movimento vive no codigo), mas a timeline do
+  // Edvid le estas janelas para desenhar a track de Animacoes.
+  animations?: {start: number; end: number; label?: string}[];
   soundtrack: {enabled: boolean; file: string; volume: number};
 };
 
