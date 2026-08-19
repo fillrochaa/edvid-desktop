@@ -27,6 +27,16 @@ const qaTimelineModel = modelFromSegments(
   ],
   30,
 );
+// O gate fixo de aprovação exige um corte respaldado por EDL (sourceId real,
+// não o preview); o QA simula isso apontando os clipes para o arquivo-fonte.
+// "?semcorte" mantém os clipes no preview (cenário do corte que FALHOU: o
+// gate não pode aparecer).
+if (qaTimelineModel && !new URLSearchParams(window.location.search).has('semcorte')) {
+  qaTimelineModel.clips = qaTimelineModel.clips.map((clip) => ({
+    ...clip,
+    sourceId: 'IMG_0001.MOV',
+  }));
+}
 
 const qaWorkspace: ProjectWorkspace = {
   project: qaProject,
@@ -50,6 +60,16 @@ const qaWorkspace: ProjectWorkspace = {
       name: 'corte_limpo_qa.mp4',
       url: 'data:video/mp4;base64,',
       duration: 10.7,
+      fps: 30,
+      width: 1080,
+      height: 1920,
+      available: true,
+    },
+    {
+      id: 'IMG_0001.MOV',
+      name: 'IMG_0001.MOV',
+      url: 'data:video/mp4;base64,',
+      duration: 16.13,
       fps: 30,
       width: 1080,
       height: 1920,

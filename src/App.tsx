@@ -71,6 +71,7 @@ import {
   VIDEO_TRACK_ID,
   VOICE_TRACK_ID,
   applyTrim,
+  PREVIEW_SOURCE_ID,
   clipDuration,
   clipEnd,
   deleteClipLeaveGap,
@@ -2059,6 +2060,11 @@ export function App() {
     !handledCutApprovalId &&
     !styleApplied &&
     workspace?.media?.kind === 'clean-cut' &&
+    // So um corte de VERDADE abre o gate: o modelo migrado do EDL referencia
+    // os arquivos-fonte reais. Um video solto em edit/ sem EDL (ex.: turno em
+    // que o corte FALHOU) nao pode oferecer "Aprovado" — aconteceu no Windows
+    // com o WhisperX indisponivel.
+    workspace?.timelineModel?.clips.some((clip) => clip.sourceId !== PREVIEW_SOURCE_ID) &&
     !activeTurn &&
     !sending &&
     messages.some((message) => message.role === 'assistant'),

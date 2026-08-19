@@ -53,17 +53,33 @@ jobs:
           & $py -B -c "from importlib.metadata import version; import ctranslate2, faster_whisper, pyannote.audio, torch, torchcodec, whisperx; print('whisperx', version('whisperx')); print('torch', torch.__version__)"
           if ($LASTEXITCODE -ne 0) { throw "imports falharam" }
 
+      # Daqui em diante o ambiente espelha o agentToolsEnvironment do app:
+      # PATH com o python e o ffmpeg do pack, caches HF locais.
       - name: Smoke de áudio (mesmo caminho do corte)
         run: |
-          $root = "tools/win32-x64"
-          $py = "$root/python-whisperx/python/python3.exe"
-          & "$root/ffmpeg/bin/ffmpeg.exe" -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 0.25 tone.wav
+          $env:PATH = (Resolve-Path "tools/win32-x64/python-whisperx/python").Path + ";" + (Resolve-Path "tools/win32-x64/ffmpeg/bin").Path + ";" + $env:PATH
+          ffmpeg -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 0.25 tone.wav
           $tone = (Resolve-Path tone.wav).Path -replace '\\','/'
-          & $py -B -c "from whisperx.audio import load_audio; print('amostras:', load_audio('$tone').shape[0])"
+          python3 -B -c "from whisperx.audio import load_audio; print('amostras:', load_audio('$tone').shape[0])"
           if ($LASTEXITCODE -ne 0) { throw "smoke de audio falhou" }
 
-      - name: CLI do WhisperX (como o agente chama)
+      - name: Prefetch do modelo (como o app faz no boot)
+        run: |
+          $env:PATH = (Resolve-Path "tools/win32-x64/python-whisperx/python").Path + ";" + $env:PATH
+          $env:HF_HOME = "$PWD/hf-cache"
+          $env:HUGGINGFACE_HUB_CACHE = "$PWD/hf-cache/hub"
+          $env:HF_HUB_DISABLE_TELEMETRY = "1"
+          python3 -B -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-small')"
+          if ($LASTEXITCODE -ne 0) { throw "prefetch do modelo falhou" }
+
+      - name: Transcrição real pela CLI (como o agente chama)
         run: |
           $env:PATH = (Resolve-Path "tools/win32-x64/python-whisperx/python").Path + ";" + (Resolve-Path "tools/win32-x64/ffmpeg/bin").Path + ";" + $env:PATH
-          python3 -B -m whisperx --help | Select-Object -First 5
-          if ($LASTEXITCODE -ne 0) { throw "whisperx --help falhou" }
+          $env:HF_HOME = "$PWD/hf-cache"
+          $env:HUGGINGFACE_HUB_CACHE = "$PWD/hf-cache/hub"
+          $env:PYTHONDONTWRITEBYTECODE = "1"
+          $env:PYTHONNOUSERSITE = "1"
+          ffmpeg -hide_banner -loglevel error -f lavfi -i "sine=frequency=300:sample_rate=16000" -t 2 fala.wav
+          python3 -B -m whisperx fala.wav --model small --language pt --device cpu --compute_type int8 --no_align --output_dir saida --output_format json
+          if ($LASTEXITCODE -ne 0) { throw "whisperx CLI falhou" }
+          Get-Content saida/fala.json | Select-Object -First 3
