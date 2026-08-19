@@ -183,7 +183,11 @@ if (!apacheLicense.includes('Apache License') || !mitLicense.startsWith('MIT Lic
 const temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'edvid-uv-'));
 try {
   run('tar', ['-xf', archivePath, '-C', temporaryDirectory]);
-  const extractedRoot = path.join(temporaryDirectory, archiveRoot);
+  // O tar.gz do macOS embrulha os binarios numa pasta com o nome do
+  // artefato; o zip do Windows traz uv.exe/uvx.exe direto na raiz.
+  const extractedRoot = executableSuffix
+    ? temporaryDirectory
+    : path.join(temporaryDirectory, archiveRoot);
   const extractedUv = path.join(extractedRoot, `uv${executableSuffix}`);
   const extractedUvx = path.join(extractedRoot, `uvx${executableSuffix}`);
   if (!(await exists(extractedUv)) || !(await exists(extractedUvx))) {
@@ -194,10 +198,18 @@ try {
     await chmod(extractedUv, 0o755);
     await chmod(extractedUvx, 0o755);
   }
-  const uvVersion = run(extractedUv, ['--version'], { capture: true }).trim();
-  const uvxVersion = run(extractedUvx, ['--version'], { capture: true }).trim();
-  if (!uvVersion.startsWith(`uv ${version} `) || !uvxVersion.startsWith(`uvx ${version} `)) {
-    throw new Error(`Versoes uv inesperadas: ${uvVersion}; ${uvxVersion}`);
+  // Executar o binario para conferir a versao so faz sentido na PROPRIA
+  // plataforma; no cross-stage (ex.: preparar win32 a partir do macOS) o
+  // sha256 do artefato + attestation ja garantem a integridade.
+  const runningOnTargetPlatform = target.startsWith(`${process.platform}-`);
+  if (runningOnTargetPlatform) {
+    const uvVersion = run(extractedUv, ['--version'], { capture: true }).trim();
+    const uvxVersion = run(extractedUvx, ['--version'], { capture: true }).trim();
+    if (!uvVersion.startsWith(`uv ${version} `) || !uvxVersion.startsWith(`uvx ${version} `)) {
+      throw new Error(`Versoes uv inesperadas: ${uvVersion}; ${uvxVersion}`);
+    }
+  } else {
+    console.log(`Cross-stage: pulando a execucao de uv --version fora de ${target}.`);
   }
   const dynamicLibraries = await validateMacDependencies(extractedUv);
 

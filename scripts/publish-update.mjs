@@ -13,7 +13,7 @@
 //   EDVID_UPDATE_BASE_URL URL publica do bucket (r2.dev ou dominio proprio)
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { S3Client } from '@aws-sdk/client-s3';
@@ -35,12 +35,37 @@ if (!accountId || !apiToken || !bucket || !baseUrl) {
 const version =
   process.argv[2]?.trim() ||
   JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8')).version;
+
+// A publicacao e da PLATAFORMA que fez o make: no macOS sobe o ZIP + feed.json
+// (Squirrel.Mac, serverType json); no Windows sobe RELEASES + .nupkg + Setup
+// sob win32/ (Squirrel.Windows le a pasta) e o instalador com nome estavel.
+const isWindowsRelease = process.platform === 'win32';
+
 const zipName = `Edvid-darwin-arm64-${version}.zip`;
 const zipPath = path.join(projectRoot, 'out', 'make', 'zip', 'darwin', 'arm64', zipName);
-const zipInfo = await stat(zipPath).catch(() => null);
-if (!zipInfo) {
-  console.error(`ZIP da versao ${version} nao encontrado. Rode "npm run make:signed" antes.`);
-  process.exit(1);
+let zipInfo = null;
+let windowsFiles = null;
+if (isWindowsRelease) {
+  const squirrelDirectory = path.join(projectRoot, 'out', 'make', 'squirrel.windows', 'x64');
+  const entries = await readdir(squirrelDirectory).catch(() => null);
+  if (!entries) {
+    console.error('Artefatos Squirrel nao encontrados em out/make/squirrel.windows/x64. Rode "npm run make" antes.');
+    process.exit(1);
+  }
+  const releasesName = entries.find((name) => name === 'RELEASES');
+  const nupkgs = entries.filter((name) => name.endsWith('.nupkg'));
+  const setupExe = entries.find((name) => name.endsWith('.exe'));
+  if (!releasesName || nupkgs.length === 0 || !setupExe) {
+    console.error(`Artefatos Squirrel incompletos (${entries.join(', ')}).`);
+    process.exit(1);
+  }
+  windowsFiles = { squirrelDirectory, releasesName, nupkgs, setupExe };
+} else {
+  zipInfo = await stat(zipPath).catch(() => null);
+  if (!zipInfo) {
+    console.error(`ZIP da versao ${version} nao encontrado. Rode "npm run make:signed" antes.`);
+    process.exit(1);
+  }
 }
 
 // Access Key ID = id do token (verify); Secret = SHA-256 do valor do token.
@@ -87,27 +112,49 @@ async function putObject(key, filePath, contentType, size) {
   await upload.done();
 }
 
-const feed = {
-  currentRelease: version,
-  releases: [
-    {
-      version,
-      updateTo: {
+if (isWindowsRelease) {
+  const { squirrelDirectory, releasesName, nupkgs, setupExe } = windowsFiles;
+  // Os .nupkg primeiro: o RELEASES novo so pode apontar para pacotes ja
+  // disponiveis (Squirrel.Windows le win32/RELEASES e baixa dali).
+  for (const nupkg of nupkgs) {
+    const nupkgPath = path.join(squirrelDirectory, nupkg);
+    await putObject(`win32/${nupkg}`, nupkgPath, 'application/octet-stream', (await stat(nupkgPath)).size);
+  }
+  const releasesPath = path.join(squirrelDirectory, releasesName);
+  await putObject('win32/RELEASES', releasesPath, 'application/octet-stream', (await stat(releasesPath)).size);
+  // Instalador para alunos novos: versao arquivada + nome ESTAVEL para o
+  // link de download da Creator Factory.
+  const setupPath = path.join(squirrelDirectory, setupExe);
+  const setupSize = (await stat(setupPath)).size;
+  await putObject(`win32/Edvid-Setup-${version}.exe`, setupPath, 'application/octet-stream', setupSize);
+  await putObject('EdvidSetup.exe', setupPath, 'application/octet-stream', setupSize);
+
+  console.log(`\nRelease Windows ${version} publicado.`);
+  console.log(`Atualizacao: ${baseUrl}/win32/RELEASES`);
+  console.log(`Instalador: ${baseUrl}/EdvidSetup.exe`);
+} else {
+  const feed = {
+    currentRelease: version,
+    releases: [
+      {
         version,
-        name: version,
-        url: `${baseUrl}/${zipName}`,
-        pub_date: new Date().toISOString(),
+        updateTo: {
+          version,
+          name: version,
+          url: `${baseUrl}/${zipName}`,
+          pub_date: new Date().toISOString(),
+        },
       },
-    },
-  ],
-};
-const feedPath = path.join(projectRoot, 'out', 'make', 'zip', 'darwin', 'arm64', 'feed.json');
-await writeFile(feedPath, `${JSON.stringify(feed, null, 2)}\n`);
+    ],
+  };
+  const feedPath = path.join(projectRoot, 'out', 'make', 'zip', 'darwin', 'arm64', 'feed.json');
+  await writeFile(feedPath, `${JSON.stringify(feed, null, 2)}\n`);
 
-// O ZIP primeiro: o feed novo so pode apontar para um arquivo ja disponivel.
-await putObject(zipName, zipPath, 'application/zip', zipInfo.size);
-const feedInfo = await stat(feedPath);
-await putObject('feed.json', feedPath, 'application/json', feedInfo.size);
+  // O ZIP primeiro: o feed novo so pode apontar para um arquivo ja disponivel.
+  await putObject(zipName, zipPath, 'application/zip', zipInfo.size);
+  const feedInfo = await stat(feedPath);
+  await putObject('feed.json', feedPath, 'application/json', feedInfo.size);
 
-console.log(`\nRelease ${version} publicado.`);
-console.log(`Feed: ${baseUrl}/feed.json`);
+  console.log(`\nRelease ${version} publicado.`);
+  console.log(`Feed: ${baseUrl}/feed.json`);
+}

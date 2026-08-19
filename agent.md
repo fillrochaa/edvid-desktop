@@ -1,6 +1,6 @@
 # Edvid Desktop — contexto consolidado do projeto
 
-Atualizado em: 2026-08-19 (0.13.2 — J-Cut aplicado vira botão verde sem mensagem; desfazer/refazer e "Aplicar ajustes" na barra do topo da timeline)
+Atualizado em: 2026-08-19 (infra Windows completa: runtimes win32-x64, instalador Squirrel, updater e publicação — ver seção 14; falta a primeira rodada real)
 
 Este documento registra o contexto de produto, arquitetura, decisões de UX,
 correções e próximos passos definidos durante o desenvolvimento do Edvid
@@ -941,11 +941,64 @@ Fase 2:
 
 ## 14. Windows
 
-- Existe configuração inicial com Electron Forge/Squirrel.
-- Os runtimes Windows x64 precisam ser preparados e empacotados na própria
-  plataforma Windows.
-- Ainda é necessário validar instalador, assinatura de código, paths, execução
-  dos sidecars e atualização no Windows.
+Infra completa desde 2026-08-19; falta a primeira execução real (CI ou
+máquina Windows) e a validação em máquina de aluno.
+
+Como construir (os dois caminhos rodam os MESMOS npm scripts):
+- CI: workflow `windows-build` (.github/workflows/windows-build.yml),
+  disparo manual. Sem "publish" só compila e anexa artefatos (instalador
+  Squirrel + runtime pack) para teste; com "publish" envia runtime pack e
+  release ao R2. Exige secrets EDVID_CF_ACCOUNT_ID, EDVID_CF_API_TOKEN,
+  EDVID_R2_BUCKET e EDVID_UPDATE_BASE_URL (mesmos nomes do signing.env).
+- Local (máquina Windows): `npm ci && npm run make` — a cadeia roda os
+  stage:* na plataforma corrente; depois `npm run pack:runtimes` e, com o
+  signing.env carregado no ambiente, os publish:*.
+
+O que cada peça faz no win32-x64:
+- Runtimes: node/uv/yt-dlp/codex-app-server já tinham alvo win32 pinado
+  (o manifest pina o binário windows do codex por sha256). FFmpeg principal
+  vem do autobuild BtbN DATADO pinado por sha256 do checksums oficial
+  (scripts/fetch-ffmpeg-win.mjs; build-ffmpeg.mjs delega no win) — mesma
+  configuração GPL + libx264 estático do build darwin; a tag "latest" do
+  BtbN muda diariamente e os autobuilds antigos são apagados (~14 dias),
+  por isso o pin é da tag datada. FFmpeg compartilhado do TorchCodec
+  compila da MESMA fonte 7.1.5 verificada por GPG, via MSYS2
+  (build-ffmpeg-torchcodec.mjs, ramo win32; o runner do GitHub já traz
+  MSYS2 em C:\msys64 — pacman instala mingw-w64-x86_64-toolchain) e as
+  DLLs (avcodec-61.dll…) vão para o LADO do python.exe, primeiro lugar da
+  busca de DLLs, sem depender de PATH.
+- Python + WhisperX: stage na própria plataforma (por design); os ajustes
+  win são o filtro .dll, a LICENSE.txt na raiz do cpython e o alias
+  python3.exe — as instruções dos agentes usam "python3" nos três
+  provedores e o alias mantém o contrato idêntico. As instruções também
+  avisam que no PowerShell a pasta de helpers é $env:EDVID_HELPERS.
+- Instalador/atualização: MakerSquirrel já configurado (ícone .ico ok);
+  electron-squirrel-startup trata os eventos de instalação. O autoUpdater
+  no win aponta para `<base>/win32` (Squirrel.Windows lê RELEASES da
+  pasta); publish-update.mjs detecta a plataforma do make: no win sobe
+  nupkg → RELEASES sob win32/ e o instalador como
+  win32/Edvid-Setup-<v>.exe + EdvidSetup.exe ESTÁVEL na raiz (link de
+  download da Creator Factory). O feed.json do mac fica intacto.
+- runtime.ts sempre foi parametrizado (.exe, npm-cli.js, python.exe);
+  spawns usam binários absolutos ou `node script.js` (sem npx/.cmd);
+  PATH usa path.delimiter; a extração do pack usa bsdtar (Windows 10+).
+
+Validação pendente na primeira rodada real (nesta ordem):
+1. Workflow sem publish → instalar o Setup.exe numa máquina/VM Windows.
+2. Boot: download do runtime pack win32 + extração + checkRuntimes verde.
+3. Corte limpo de ponta a ponta (WhisperX + torchcodec com as DLLs 7.1).
+4. Fase 2 (npm install do Remotion + render com chrome-headless win).
+5. Sandbox do Codex no Windows: conferir se o app-server aceita
+   workspace-write ou se os comandos passam a pedir aprovação — se pedir,
+   decidir o ajuste de fricção.
+6. Atualização OTA: instalar versão N, publicar N+1, conferir o ciclo.
+
+Dependências do Fill:
+- Adicionar os 4 secrets no repositório (gh secret set …).
+- Certificado de assinatura Windows (decisão futura): sem ele o
+  SmartScreen mostra "editor desconhecido" — funciona, mas com fricção
+  para o aluno. Opções: Azure Trusted Signing (mais barato) ou EV/OV
+  tradicional; quando existir, entra no workflow.
 - Não assumir que o pacote macOS prova compatibilidade Windows.
 
 ## 15. Histórico recente de versões
@@ -961,6 +1014,20 @@ Fase 2:
 - 0.6.0: primeira versão da timeline não destrutiva — modelo persistente de
   clipes migrado do EDL, seleção, trim, razor, ripple delete, undo/redo, zoom
   ancorado e prévia mapeada sem render.
+- (sem release) infra Windows completa, 2026-08-19: FFmpeg principal win32
+  via autobuild BtbN datado pinado por sha256 (fetch-ffmpeg-win.mjs; GPL +
+  libx264 como no darwin) e FFmpeg compartilhado do TorchCodec compilado
+  da mesma fonte 7.1.5 GPG-verificada via MSYS2 (ramo win32 do
+  build-ffmpeg-torchcodec); stage-python-whisperx com DLLs ao lado do
+  python.exe, LICENSE.txt na raiz e alias python3.exe; autoUpdater
+  Squirrel.Windows apontando para <base>/win32; publish-update com fluxo
+  win (nupkg → RELEASES → Setup versionado + EdvidSetup.exe estável);
+  workflow windows-build (dispatch manual, publish opcional por secrets);
+  prepare:forge-makers ciente de plataforma. Detalhe que motivou os pins:
+  o BtbN apaga autobuilds antigos (~14 dias) e a tag latest muda todo dia
+  — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
+  isso o compartilhado compila da fonte. Validação real pendente (seção
+  14).
 - 0.13.2: refinamentos pedidos em uso real. Sucesso do J-Cut deixou de gerar
   mensagem de sistema no chat: o próprio botão fica VERDE (#4fd08b,
   .jcut-applied) com "J-Cut aplicado" — falha continua avisando por

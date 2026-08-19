@@ -37,9 +37,11 @@ const buildDirectory = path.join(buildRoot, 'ffmpeg');
 const prefix = path.join(buildRoot, 'install');
 const metadataPath = path.join(prefix, 'build-metadata.json');
 
-if (target !== supportedTarget) {
+// darwin-arm64 compila abaixo; win32-x64 compila via MSYS2 mais adiante
+// (depois das funcoes utilitarias). Outros targets nao tem implementacao.
+if (target !== supportedTarget && target !== 'win32-x64') {
   throw new Error(
-    `O FFmpeg compartilhado do TorchCodec esta implementado para ${supportedTarget}; atual: ${target}.`,
+    `O FFmpeg compartilhado do TorchCodec esta implementado para ${supportedTarget} e win32-x64; atual: ${target}.`,
   );
 }
 
@@ -125,6 +127,129 @@ if (!(await exists(path.join(source, 'configure')))) {
 const sourceMetadata = JSON.parse(await readFile(sourceMetadataPath, 'utf8'));
 if (!sourceMetadata.signatureVerified || sourceMetadata.version !== version) {
   throw new Error('O fonte FFmpeg 7 nao possui a assinatura GPG esperada.');
+}
+
+// --- Windows: compila as DLLs da MESMA fonte verificada, via MSYS2 ---------
+// O runner windows-latest do GitHub ja traz o MSYS2 em C:\msys64; localmente
+// instale MSYS2 e rode: pacman -S --noconfirm mingw-w64-x86_64-toolchain make
+// (EDVID_MSYS2_BASH aponta para outro bash se preciso). O mingw poe as DLLs
+// em bin/ (avcodec-61.dll...) e os import libs em lib/.
+if (target === 'win32-x64') {
+  const expectedDlls = [
+    'avcodec-61.dll',
+    'avdevice-61.dll',
+    'avfilter-10.dll',
+    'avformat-61.dll',
+    'avutil-59.dll',
+    'swresample-5.dll',
+    'swscale-8.dll',
+  ];
+  const dllDirectory = path.join(prefix, 'bin');
+
+  const dllsPresent = async () => {
+    for (const name of expectedDlls) {
+      if (!(await exists(path.join(dllDirectory, name)))) return false;
+    }
+    return true;
+  };
+
+  if (await exists(metadataPath)) {
+    try {
+      const metadata = JSON.parse(await readFile(metadataPath, 'utf8'));
+      if (metadata.target === target && metadata.version === version && (await dllsPresent())) {
+        console.log(`FFmpeg compartilhado ${version} ja esta preparado para o TorchCodec (win32).`);
+        process.exit(0);
+      }
+    } catch {
+      // Refaz o build.
+    }
+  }
+
+  const bash = process.env.EDVID_MSYS2_BASH || 'C:\\msys64\\usr\\bin\\bash.exe';
+  if (!(await exists(bash))) {
+    throw new Error(
+      `MSYS2 nao encontrado (${bash}). Instale o MSYS2 com mingw-w64-x86_64-toolchain e make, ou defina EDVID_MSYS2_BASH.`,
+    );
+  }
+  const msysEnvironment = {
+    ...process.env,
+    MSYSTEM: 'MINGW64',
+    CHERE_INVOKING: '1',
+    MSYS2_PATH_TYPE: 'inherit',
+  };
+  const posix = (value) => value.replaceAll('\\', '/');
+  const runBash = (script, cwd) =>
+    run(bash, ['-lc', script], { cwd, env: msysEnvironment });
+
+  await rm(buildRoot, { recursive: true, force: true });
+  await mkdir(buildDirectory, { recursive: true });
+
+  const winConfigureFlags = [
+    `--prefix=${posix(prefix)}`,
+    '--arch=x86_64',
+    '--target-os=mingw32',
+    '--disable-autodetect',
+    '--disable-debug',
+    '--disable-doc',
+    '--disable-programs',
+    '--disable-static',
+    '--enable-shared',
+    '--disable-postproc',
+    '--disable-network',
+  ];
+  runBash(
+    `"${posix(source)}/configure" ${winConfigureFlags.map((flag) => `"${flag}"`).join(' ')}`,
+    buildDirectory,
+  );
+  runBash(`make -j${jobs}`, buildDirectory);
+  runBash('make install', buildDirectory);
+
+  const libraries = {};
+  for (const name of expectedDlls) {
+    const dllPath = path.join(dllDirectory, name);
+    if (!(await exists(dllPath))) {
+      throw new Error(`Biblioteca FFmpeg para TorchCodec ausente: ${name}`);
+    }
+    libraries[name] = { sha256: await sha256(dllPath) };
+  }
+
+  const licenseDirectory = path.join(prefix, 'licenses');
+  await mkdir(licenseDirectory, { recursive: true });
+  for (const license of ['LICENSE.md', 'COPYING.LGPLv2.1', 'COPYING.LGPLv3']) {
+    await cp(path.join(source, license), path.join(licenseDirectory, license));
+  }
+
+  const installedFiles = (await readdir(dllDirectory))
+    .filter((name) => name.endsWith('.dll'))
+    .sort();
+  await writeFile(
+    metadataPath,
+    `${JSON.stringify(
+      {
+        target,
+        version,
+        purpose: 'TorchCodec shared-library ABI compatibility',
+        license: 'LGPL-2.1-or-later',
+        sourceUrl: sourceMetadata.archiveUrl,
+        sourceSha256: sourceMetadata.sha256,
+        signatureFingerprint: sourceMetadata.signingFingerprint,
+        configureFlags: winConfigureFlags,
+        installedFiles,
+        libraries,
+        toolchain: run(bash, ['-lc', 'gcc --version'], {
+          capture: true,
+          env: msysEnvironment,
+        }).split(/\r?\n/u)[0],
+        builtAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
+
+  console.log(`FFmpeg compartilhado ${version} (win32, MSYS2) preparado em ${prefix}.`);
+  process.exit(0);
 }
 
 if (await exists(metadataPath)) {

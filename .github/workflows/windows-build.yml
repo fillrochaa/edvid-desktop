@@ -1,0 +1,75 @@
+# Build Windows completo do Edvid: runtimes win32-x64 + instalador Squirrel.
+#
+# Disparo manual (workflow_dispatch). Sem "publish" marcado, o job so compila
+# e anexa os artefatos (instalador + runtime pack) para teste manual. Com
+# "publish", envia o runtime pack e o release para o R2 — exige os secrets
+# EDVID_CF_ACCOUNT_ID, EDVID_CF_API_TOKEN, EDVID_R2_BUCKET e
+# EDVID_UPDATE_BASE_URL no repositorio (mesmos nomes do signing.env local).
+#
+# Assinatura de codigo Windows ainda nao entra aqui: sem certificado o
+# SmartScreen avisa "editor desconhecido" mas o instalador funciona.
+name: windows-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publicar runtime pack e release no R2'
+        type: boolean
+        default: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      EDVID_CF_ACCOUNT_ID: ${{ secrets.EDVID_CF_ACCOUNT_ID }}
+      EDVID_CF_API_TOKEN: ${{ secrets.EDVID_CF_API_TOKEN }}
+      EDVID_R2_BUCKET: ${{ secrets.EDVID_R2_BUCKET }}
+      EDVID_UPDATE_BASE_URL: ${{ secrets.EDVID_UPDATE_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # O FFmpeg compartilhado do TorchCodec compila da fonte 7.1.5 (GPG
+      # verificada) com o MSYS2 que ja vem no runner.
+      - name: Toolchain MSYS2 (FFmpeg compartilhado)
+        run: C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-toolchain make diffutils
+
+      # Fontes do FFmpeg e caches do Python/uv sao os passos mais lentos;
+      # a chave muda junto com o manifest dos runtimes.
+      - name: Cache dos runtimes
+        uses: actions/cache@v4
+        with:
+          path: .runtime-cache
+          key: runtime-cache-win32-x64-${{ hashFiles('resources/runtime-manifest.json', 'python/whisperx/uv.lock') }}
+
+      - run: npm ci
+
+      # A cadeia "make" roda todos os stage:* na plataforma corrente
+      # (win32-x64), empacota com o Vite e gera o instalador Squirrel.
+      - name: Build completo (runtimes + instalador)
+        run: npm run make
+
+      - name: Runtime pack win32-x64
+        run: npm run pack:runtimes
+
+      - name: Anexar artefatos do build
+        uses: actions/upload-artifact@v4
+        with:
+          name: edvid-windows
+          if-no-files-found: error
+          path: |
+            out/make/squirrel.windows/x64/*
+            out/runtime-packs/*
+
+      - name: Publicar runtime pack no R2
+        if: ${{ inputs.publish }}
+        run: node scripts/publish-runtimes.mjs
+
+      - name: Publicar release Windows no R2
+        if: ${{ inputs.publish }}
+        run: node scripts/publish-update.mjs

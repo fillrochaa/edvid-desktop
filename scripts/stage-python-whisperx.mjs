@@ -452,20 +452,29 @@ try {
   if (sharedFfmpegMetadata.version !== whisperxManifest.sharedFfmpegVersion) {
     throw new Error('Versao inesperada do FFmpeg compartilhado do TorchCodec.');
   }
-  const sharedLibraryEntries = await readdir(sharedFfmpegLibraryDirectory, {
+  // No mingw as DLLs saem em bin/ (avcodec-61.dll...); no macOS, dylibs em
+  // lib/. No Windows elas vao para o MESMO diretorio do python.exe: e o
+  // primeiro lugar da busca de DLLs, sem depender de PATH em runtime.
+  const sharedLibrarySourceDirectory = isWindows
+    ? path.join(sharedFfmpegPrefix, 'bin')
+    : sharedFfmpegLibraryDirectory;
+  const sharedLibraryEntries = await readdir(sharedLibrarySourceDirectory, {
     withFileTypes: true,
   });
   const sharedLibraries = sharedLibraryEntries.filter(
     (entry) =>
-      (entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith('.dylib'),
+      (entry.isFile() || entry.isSymbolicLink()) &&
+      (isWindows ? /\.dll$/iu.test(entry.name) : entry.name.endsWith('.dylib')),
   );
   if (sharedLibraries.length === 0) {
     throw new Error('Bibliotecas compartilhadas do FFmpeg 7 ausentes.');
   }
   for (const library of sharedLibraries) {
-    const sourceLibrary = path.join(sharedFfmpegLibraryDirectory, library.name);
-    const destinationLibrary = path.join(stagedPythonRoot, 'lib', library.name);
-    if (library.isSymbolicLink()) {
+    const sourceLibrary = path.join(sharedLibrarySourceDirectory, library.name);
+    const destinationLibrary = isWindows
+      ? path.join(path.dirname(stagedPython), library.name)
+      : path.join(stagedPythonRoot, 'lib', library.name);
+    if (!isWindows && library.isSymbolicLink()) {
       const sourceTarget = await readlink(sourceLibrary);
       await symlink(path.basename(sourceTarget), destinationLibrary);
     } else {
@@ -530,7 +539,15 @@ try {
   }
 
   const nativeValidation = await validateMacNativeDependencies(stagedRoot, stagedPython);
-  const pythonLicense = path.join(stagedPythonRoot, 'lib', 'python3.12', 'LICENSE.txt');
+  // O layout do cpython-standalone difere por plataforma; no Windows a
+  // LICENSE.txt fica na raiz da instalacao (procurada fora do site-packages).
+  const pythonLicense = isWindows
+    ? await findFile(
+        stagedPythonRoot,
+        (filePath) =>
+          /[\\/]LICENSE\.txt$/iu.test(filePath) && !/site-packages/iu.test(filePath),
+      )
+    : path.join(stagedPythonRoot, 'lib', 'python3.12', 'LICENSE.txt');
   const whisperxLicense = await findFile(
     sitePackages,
     (filePath) =>
@@ -618,6 +635,14 @@ try {
   await rm(destination, { recursive: true, force: true });
   await cp(stagedRoot, destination, { recursive: true, verbatimSymlinks: true });
   if (!isWindows) await chmod(destinationPython, 0o755);
+  if (isWindows) {
+    // As instrucoes do agente usam "python3" nos tres provedores; no Windows
+    // o cpython so instala python.exe — o alias mantem o contrato identico.
+    await cp(
+      destinationPython,
+      path.join(path.dirname(destinationPython), 'python3.exe'),
+    );
+  }
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
 }

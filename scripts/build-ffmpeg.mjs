@@ -49,6 +49,16 @@ const runtimeDestination = path.join(
   'ffmpeg',
 );
 
+if (target === 'win32-x64') {
+  // No Windows o FFmpeg principal nao e compilado aqui: vem do autobuild
+  // BtbN pinado por sha256 (mesma configuracao GPL + libx264 estatico).
+  const delegated = spawnSync(
+    process.execPath,
+    [path.join(desktopRoot, 'scripts', 'fetch-ffmpeg-win.mjs')],
+    { stdio: 'inherit' },
+  );
+  process.exit(delegated.status ?? 1);
+}
 if (target !== supportedTarget) {
   throw new Error(
     `O build FFmpeg esta implementado para ${supportedTarget}; target atual: ${target}.`,

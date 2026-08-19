@@ -3188,9 +3188,17 @@ function broadcastAppUpdateState(state: AppUpdateState): void {
 }
 
 function setupAutoUpdate(): void {
-  if (!app.isPackaged || process.platform !== 'darwin' || !UPDATE_FEED_URL) return;
+  if (!app.isPackaged || !UPDATE_FEED_URL) return;
   try {
-    autoUpdater.setFeedURL({ url: UPDATE_FEED_URL, serverType: 'json' });
+    if (process.platform === 'darwin') {
+      autoUpdater.setFeedURL({ url: UPDATE_FEED_URL, serverType: 'json' });
+    } else if (process.platform === 'win32') {
+      // Squirrel.Windows espera a PASTA que contem RELEASES + os .nupkg
+      // (publish-update.mjs envia tudo sob win32/ no mesmo bucket).
+      autoUpdater.setFeedURL({ url: `${UPDATE_FEED_URL.replace(/\/feed\.json$/u, '')}/win32` });
+    } else {
+      return;
+    }
   } catch {
     return;
   }
