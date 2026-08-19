@@ -23,6 +23,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 150
     env:
+      # stage-uv verifica a attestation dos binarios com o gh CLI.
+      GH_TOKEN: ${{ github.token }}
       EDVID_CF_ACCOUNT_ID: ${{ secrets.EDVID_CF_ACCOUNT_ID }}
       EDVID_CF_API_TOKEN: ${{ secrets.EDVID_CF_API_TOKEN }}
       EDVID_R2_BUCKET: ${{ secrets.EDVID_R2_BUCKET }}
