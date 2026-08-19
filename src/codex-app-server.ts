@@ -55,8 +55,11 @@ type TurnStartResponse = { turn: { id: string } };
 // model/list), que o backend recusa com 400 em contas ChatGPT. O catalogo do
 // proprio binario aponta gpt-5.6-terra como sucessor do antigo padrao
 // (upgrade de gpt-5.4), e a sonda confirmou no rollout que tanto o config.toml
-// quanto o parametro de thread/start cravam o modelo. allowProviderModelFallback
-// deixa o CLI degradar para o default se um dia o terra for aposentado.
+// quanto o parametro de thread/start cravam o modelo — com turno real
+// COMPLETO em conta ChatGPT. NAO enviar allowProviderModelFallback: com true
+// o app-server exige a capability experimentalApi e derruba o thread/start
+// (regressao da 0.13.6, vista em producao); se o terra for aposentado um dia,
+// o erro de modelo ja chega traduzido pelo friendlyAiError.
 const CODEX_CHAT_MODEL = 'gpt-5.6-terra';
 
 // Compartilhadas com o adaptador Claude: o contrato com a interface e o
@@ -512,7 +515,6 @@ export class CodexAppServer {
         serviceName: 'edvid_desktop',
         developerInstructions: EDVID_INSTRUCTIONS,
         model: CODEX_CHAT_MODEL,
-        allowProviderModelFallback: true,
       });
       threadId = started.thread.id;
       this.threadsByProject.set(projectDirectory, threadId);
@@ -548,7 +550,6 @@ export class CodexAppServer {
       sandbox: 'workspace-write',
       serviceName: 'edvid_desktop_imagens',
       model: CODEX_CHAT_MODEL,
-      allowProviderModelFallback: true,
     });
     const threadId = started.thread.id;
     this.utilityThreads.add(threadId);

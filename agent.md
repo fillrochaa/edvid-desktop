@@ -1132,6 +1132,17 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.13.7: hotfix da 0.13.6, minutos depois, por erro em produção: "thread/
+  start.allowProviderModelFallback requires experimentalApi capability" — o
+  campo é gated e derrubava TODO envio de mensagem no ChatGPT. Removido dos
+  dois thread/start (o pin fica só em `model` + config.toml; modelo
+  aposentado no futuro vira mensagem PT-BR do friendlyAiError). LIÇÃO DE
+  SONDA: a sonda da 0.13.6 passou `allowProviderModelFallback: false` e o
+  aplicativo embarcou `true` — o gate só dispara com true, então a sonda não
+  validou o payload embarcado. Sonda tem de enviar o formato EXATO que vai
+  para produção. A re-sonda com o formato do hotfix fechou também a prova
+  que faltava: turno real COMPLETO com `gpt-5.6-terra` em conta ChatGPT
+  (o limite de uso da conta tinha liberado).
 - 0.13.6: três defeitos de uso real (mac do aluno + Windows do fill). (1)
   Modelo do ChatGPT fixado em `gpt-5.6-terra`: o codex-app-server 0.147.0
   passou a ter `gpt-5.6-sol` como default e conta ChatGPT recebe 400 ("not
