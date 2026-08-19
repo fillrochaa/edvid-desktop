@@ -366,6 +366,16 @@ if (!pythonDownload?.url) {
 }
 
 console.log(`Preparando Python ${pythonManifest.version} gerenciado pelo uv...`);
+// O python-install contem junctions no Windows e o cache do CI as corrompe
+// ("The directory name is invalid"). Recriar do zero e barato (as wheels
+// ficam no uv-cache); a remocao tem fallback via cmd para juncoes invalidas.
+try {
+  await rm(pythonInstallDirectory, { recursive: true, force: true });
+} catch {
+  if (isWindows) {
+    spawnSync('cmd', ['/c', 'rmdir', '/s', '/q', pythonInstallDirectory], { stdio: 'ignore' });
+  }
+}
 run(
   uvExecutable,
   [

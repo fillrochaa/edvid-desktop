@@ -46,8 +46,12 @@ jobs:
       - name: Cache dos runtimes
         uses: actions/cache@v4
         with:
-          path: .runtime-cache
-          key: runtime-cache-win32-x64-${{ hashFiles('resources/runtime-manifest.json', 'python/whisperx/uv.lock') }}
+          # python-install fica de fora: contem junctions que o tar do cache
+          # corrompe no Windows (os error 267); o stage recria do zero.
+          path: |
+            .runtime-cache
+            !.runtime-cache/python-whisperx/*/python-install
+          key: runtime-cache-win32-x64-v2-${{ hashFiles('resources/runtime-manifest.json', 'python/whisperx/uv.lock') }}
 
       - run: npm ci
 
