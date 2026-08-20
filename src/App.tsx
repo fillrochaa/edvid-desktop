@@ -2606,7 +2606,7 @@ export function App() {
       ...(style.edit === 'split' || style.edit === 'split2'
         ? [
             '',
-            'Tela dividida — regra de conteúdo: por padrão, GERE IMAGENS com IA ilustrando o que está sendo dito em cada trecho da fala. Peça as imagens em edit/imagens/pedidos.json (o Edvid gera os arquivos em edit/imagens/) e use cada arquivo no campo splits do edit-data.json, cobrindo os principais trechos do vídeo com a imagem correspondente ao assunto daquele momento.',
+            'Tela dividida — regra de conteúdo: por padrão, GERE IMAGENS com IA ilustrando o que está sendo dito em cada trecho da fala. Peça as imagens em edit/imagens/pedidos.json com "proporcao": "4:3" (metade de tela é uma faixa larga; imagem 9:16 entra cortada) e use cada arquivo no campo splits do edit-data.json, cobrindo os principais trechos do vídeo com a imagem correspondente ao assunto daquele momento.',
             `Posição da mídia na divisão: "${style.edit === 'split' ? 'top' : 'bottom'}" (${style.edit === 'split' ? 'imagem em cima, pessoa embaixo' : 'pessoa em cima, imagem embaixo'}).`,
             'NUNCA use o próprio vídeo do aluno como mídia da outra metade da divisão.',
             'Exceção: se a Observação acima indicar outra fonte (por exemplo, "insira as imagens que estão na pasta do projeto"), use a fonte indicada em vez de gerar imagens novas.',

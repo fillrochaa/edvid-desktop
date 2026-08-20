@@ -1208,6 +1208,28 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.14.2: rede de segurança das animações + imagem certa para tela dividida.
+  (1) A 0.14.1 tornou `animations` declarativo, mas o desenho ainda dependia do
+  agente escrever `kind` — e ele aprendeu PELA METADE: no teste seguinte pôs
+  `kind: "flash"` nos três flashes e esqueceu no "Infográfico tela cheia", que
+  saiu mudo de novo. A regra saiu do agente: antes de cada render o app roda
+  `normalizeAnimations` sobre o edit-data.json e resolve o tipo de quem não
+  tem — infere pelo rótulo (flash/estouro → flash, linha do tempo/etapas →
+  timeline, formas → shapes, roteiro/tópico/infográfico → script) e, sem pista
+  alguma, usa o cartão de texto com o próprio rótulo. Uma animação registrada
+  NUNCA mais fica invisível. A normalização roda ANTES do fingerprint, senão a
+  correção só entraria no render seguinte. Provado renderizando o frame 380 do
+  projeto real que estava mudo: o cartão aparece. `npm run test:animations`
+  trava a inferência com os rótulos reais que o agente usou.
+  (2) Imagens de TELA DIVIDIDA em 4:3: cada metade de um 9:16 é uma faixa
+  larga (1080x960) e a IA vinha gerando 9:16, que entrava cortadíssima. A
+  proporção entrou no serviço (`4:3` → 1536x1024, o vizinho mais próximo que a
+  API oferece) e virou padrão nas instruções e no briefing de estilos.
+  (3) ENOENT no Windows continuou aparecendo: o prompt do turno de imagem
+  passou a mandar o caminho ABSOLUTO (com OneDrive e acento em "Área de
+  Trabalho" o relativo se perdia) e, se ainda assim o arquivo não estiver no
+  lugar, o app procura pelo nome dentro do projeto e traz para `edit/imagens`
+  em vez de perder uma imagem já paga na cota do aluno.
 - 0.14.1: teste real completo no mac (corte + estilos + imagens + Fase 2) e
   no Windows. Tres defeitos, todos com prova. (1) ANIMACOES REGISTRADAS SEM
   NADA NO VIDEO: `animations` era so metadata para a timeline — o comentario do

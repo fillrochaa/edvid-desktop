@@ -1763,6 +1763,59 @@ async function phase2Fingerprint(publicDirectory: string): Promise<string | null
   return parts.join('|');
 }
 
+// Animacao registrada SEM `kind` sai muda do render: o template so desenha o
+// que tem tipo. Aconteceu duas vezes em maquina real — na segunda o agente ja
+// tinha escrito kind nos flashes e esqueceu no infografico. Em vez de confiar
+// no agente, o app resolve o tipo antes de renderizar: infere pelo rotulo e,
+// sem pista nenhuma, usa o cartao de texto com o proprio rotulo — uma
+// animacao registrada NUNCA fica invisivel.
+const ANIMATION_KIND_HINTS: Array<[RegExp, string]> = [
+  [/\bflash|estouro|clar(ao|ão)|transi(ca|çã)o\b/iu, 'flash'],
+  [/\blinha do tempo|timeline|cronolog|etapas|passo a passo\b/iu, 'timeline'],
+  [/\bformas|shapes|geom|bolha|elementos gr(a|á)ficos\b/iu, 'shapes'],
+  [/\broteiro|script|texto|frase|t(o|ó)pico|bullet|lista|infogr(a|á)fico|card|cartao|cartão\b/iu, 'script'],
+];
+
+function inferAnimationKind(label: string): string {
+  for (const [pattern, kind] of ANIMATION_KIND_HINTS) {
+    if (pattern.test(label)) return kind;
+  }
+  return 'script';
+}
+
+async function normalizeAnimations(publicDirectory: string): Promise<number> {
+  const file = path.join(publicDirectory, 'edit-data.json');
+  let document: Record<string, unknown>;
+  try {
+    document = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return 0;
+  }
+  const animations = document.animations;
+  if (!Array.isArray(animations) || animations.length === 0) return 0;
+  let fixed = 0;
+  const normalized = animations.map((entry) => {
+    if (!entry || typeof entry !== 'object') return entry;
+    const animation = entry as Record<string, unknown>;
+    if (asText(animation.kind)) return animation;
+    const label = asText(animation.label);
+    const kind = inferAnimationKind(label);
+    fixed += 1;
+    return {
+      ...animation,
+      kind,
+      // O cartao precisa de texto: sem `lines`, mostra o proprio rotulo.
+      ...(kind === 'script' && !Array.isArray(animation.lines) && label
+        ? { lines: [label] }
+        : {}),
+    };
+  });
+  if (fixed === 0) return 0;
+  document.animations = normalized;
+  await writeFile(file, `${JSON.stringify(document, null, 2)}\n`);
+  return fixed;
+}
+
 function renderPhase2(projectDirectory: string): Promise<Phase2RenderState> {
   if (phase2Job) {
     // Um render por vez. Para outro projeto, devolve o andamento atual sem
@@ -1774,6 +1827,9 @@ function renderPhase2(projectDirectory: string): Promise<Phase2RenderState> {
   const promise = (async (): Promise<Phase2RenderState> => {
     const remotionDirectory = path.join(projectDirectory, 'edit', 'remotion');
     const publicDirectory = path.join(remotionDirectory, 'public');
+    // Antes da impressao digital: corrigir o edit-data muda o arquivo e, com
+    // ele, o fingerprint — assim a correcao entra neste render, nao no proximo.
+    await normalizeAnimations(publicDirectory).catch(() => 0);
     const fingerprint = await phase2Fingerprint(publicDirectory);
     if (!fingerprint) return { status: 'idle' };
 
@@ -2470,13 +2526,42 @@ async function syncJcutForProject(projectDirectory: string): Promise<JcutSyncRes
   return { changed: result.applied };
 }
 
+// Procura um arquivo pelo NOME dentro do projeto (profundidade curta): rede de
+// seguranca para quando a IA salva a imagem fora da pasta combinada.
+async function findFileInProject(
+  root: string,
+  fileName: string,
+  depth = 0,
+): Promise<string | null> {
+  if (depth > 3) return null;
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name === fileName) return path.join(root, entry.name);
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+    const found = await findFileInProject(path.join(root, entry.name), fileName, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
 // --- Geracao de imagens pedidas pelo agente --------------------------------
 // O agente de chat escreve edit/imagens/pedidos.json; depois do turno o
 // aplicativo gera cada imagem fora do sandbox com a IA de imagem do aluno
 // (ChatGPT por assinatura via ferramenta do Codex, ou Gemini por chave) e
 // salva em edit/imagens/. Mesmo padrao do render da Fase 2.
 
-const IMAGE_ASPECTS = new Set(['9:16', '1:1', '16:9']);
+// "4:3" existe para a TELA DIVIDIDA: cada metade de um 9:16 e uma faixa larga
+// (1080x960), entao uma imagem vertical 9:16 entra cortadissima — o aluno viu
+// isso em uso real. A API de imagem nao tem 4:3 exato; 3:2 (1536x1024) e o
+// vizinho mais proximo e o template ja enquadra por cover.
+const IMAGE_ASPECTS = new Set(['9:16', '1:1', '16:9', '4:3']);
 let imageGenJob: { directory: string; promise: Promise<ImageGenState> } | null = null;
 let imageGenState: ImageGenState = { status: 'idle' };
 
@@ -2507,6 +2592,8 @@ const OPENAI_IMAGE_SIZES: Record<string, string> = {
   '9:16': '1024x1536',
   '16:9': '1536x1024',
   '1:1': '1024x1024',
+  // Sem 4:3 nativo na API: 3:2 e o tamanho paisagem mais proximo.
+  '4:3': '1536x1024',
 };
 
 async function generateOpenAiImage(
@@ -2621,11 +2708,24 @@ function fulfillImageRequests(projectDirectory: string): Promise<ImageGenState> 
                 'Use a ferramenta de geração de imagens (skill imagegen) para gerar exatamente esta imagem:',
                 request.prompt,
                 request.proporcao ? `Proporção: ${request.proporcao}.` : '',
-                `Salve o resultado EXATAMENTE em edit/imagens/${request.arquivo} e não crie nem modifique nenhum outro arquivo.`,
+                // Caminho ABSOLUTO: relativo dependia do diretorio em que o
+                // comando rodou, e no Windows (OneDrive, acento em "Área de
+                // Trabalho") a imagem acabava fora do lugar esperado.
+                `Salve o resultado EXATAMENTE neste caminho: ${target}`,
+                'Não crie nem modifique nenhum outro arquivo.',
                 'Responda com uma única frase curta.',
               ].filter(Boolean).join('\n'),
             );
-            await stat(target);
+            // O agente pode ter salvo com o nome certo em outro lugar do
+            // projeto; procurar e trazer para cá custa nada e evita perder uma
+            // imagem que JA foi paga na cota do aluno.
+            try {
+              await stat(target);
+            } catch {
+              const recovered = await findFileInProject(projectDirectory, request.arquivo);
+              if (!recovered) throw new Error(`a IA não salvou ${request.arquivo} na pasta do projeto`);
+              await copyFile(recovered, target);
+            }
           }
         }
         done += 1;
