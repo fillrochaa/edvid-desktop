@@ -1213,6 +1213,23 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.14.4: os kinds prontos viraram uma armadilha — defeito que a 0.14.2
+  introduziu. O aluno descreveu um visual ("animação em tela cheia, grid
+  escuro, glassmorphism, destaque #ff5200, fontes tais") e o agente, em vez de
+  escrever o componente, escolheu o preset "script": saiu o cartão "ROTEIRO"
+  padrão. Pior, a rede de segurança do app injetava kind em QUALQUER registro
+  sem tipo — inclusive quando o desenho vinha de código sob medida no
+  CustomGraphics.tsx, e aí o cartão genérico apareceria POR CIMA da animação
+  do agente. Duas correções: (1) `normalizeAnimations` só age quando o
+  CustomGraphics.tsx do projeto é IDÊNTICO ao do template — arquivo tocado
+  significa autor humano/agente no comando, e o registro é respeitado como
+  está; (2) o template passou a aceitar `kind: "custom"`, que declara "o
+  desenho vem do código" sem desenhar nada por cima. As instruções ficaram
+  explícitas: pedido com estilo próprio (cor, fonte, tela cheia, layout
+  descrito) EXIGE código sob medida + `kind: "custom"`; os prontos são para
+  pedido genérico e para o flash, e na dúvida escreve-se o código. LIÇÃO:
+  facilitar o caminho fácil (presets) desloca o agente para ele — a rede de
+  segurança precisa saber distinguir "esqueceu" de "fez à mão".
 - 0.14.3: sandbox por PLATAFORMA, consertando um efeito colateral que eu mesmo
   criei. Com `approval_policy = never` (0.14.1) o Windows parou de perguntar —
   e passou a NEGAR: a sessão inteira virou somente leitura ("esta sessão está
@@ -1262,7 +1279,7 @@ Dependências do Fill:
   `kind` cujo label fala em flash ainda vira flash, entao projetos ja criados
   passam a renderizar sem o agente reescrever nada. Provado renderizando
   frames do projeto real: flash visivel no frame 124, cartao do infografico no
-  340. (2) APROVACOES NO WINDOWS: `approval_policy` passou a `never` (thread e
+  340. (Os prontos viraram armadilha logo depois — ver 0.14.4.) (2) APROVACOES NO WINDOWS: `approval_policy` passou a `never` (thread e
   config.toml). A causa: o sandbox do Windows nao consegue impor restricao de
   arquivo ("windows sandbox backend cannot enforce file_system", string do
   binario) e o Codex escalava tudo; no mac, onde o seatbelt funciona, a sonda

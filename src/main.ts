@@ -1783,7 +1783,29 @@ function inferAnimationKind(label: string): string {
   return 'script';
 }
 
+// O agente escreveu animacao SOB MEDIDA no CustomGraphics.tsx? Entao o desenho
+// vem do codigo dele e o registro sem `kind` esta CORRETO — injetar um preset
+// ali desenharia um cartao generico por cima do trabalho dele (o aluno pediu
+// tela cheia com grid e glassmorphism e recebeu o cartao "ROTEIRO"). A unica
+// pergunta que precisa ser respondida e: este arquivo ainda e o do template?
+async function customGraphicsUntouched(publicDirectory: string): Promise<boolean> {
+  const projectFile = path.join(publicDirectory, '..', 'src', 'CustomGraphics.tsx');
+  const templateFile = path.join(remotionTemplateDirectory(), 'src', 'CustomGraphics.tsx');
+  try {
+    const [projectSource, templateSource] = await Promise.all([
+      readFile(projectFile, 'utf8'),
+      readFile(templateFile, 'utf8'),
+    ]);
+    return projectSource === templateSource;
+  } catch {
+    // Sem conseguir comparar, o mais seguro e nao mexer no registro.
+    return false;
+  }
+}
+
 async function normalizeAnimations(publicDirectory: string): Promise<number> {
+  // Rede de seguranca so vale para quem NAO escreveu codigo proprio.
+  if (!(await customGraphicsUntouched(publicDirectory))) return 0;
   const file = path.join(publicDirectory, 'edit-data.json');
   let document: Record<string, unknown>;
   try {

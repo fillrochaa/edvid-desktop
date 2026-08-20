@@ -59,7 +59,22 @@ try {
   assert.equal(inferAnimationKind('Momento marcante'), 'script');
   assert.equal(inferAnimationKind(''), 'script');
 
-  console.log('test:animations ok — todo rótulo resolve para um tipo desenhável; nenhuma animação fica muda.');
+  // A rede de segurança tem um limite: quando o agente escreve a animação sob
+  // medida no CustomGraphics.tsx, o registro sem `kind` está CERTO e injetar um
+  // preset desenharia um cartão genérico por cima do trabalho dele — foi o que
+  // aconteceu com o pedido de "tela cheia com grid escuro e #ff5200", que virou
+  // o cartão "ROTEIRO". O gatilho é o arquivo estar igual ao do template.
+  const templateSource = readFileSync(
+    path.join(projectRoot, 'resources', 'remotion-template', 'src', 'CustomGraphics.tsx'),
+    'utf8',
+  );
+  const untouched = (source) => source === templateSource;
+  assert.equal(untouched(templateSource), true, 'projeto recém-criado usa o arquivo do template');
+  assert.equal(untouched(`${templateSource}\n// animação sob medida\n`), false, 'arquivo editado é detectado');
+  // E o template precisa reconhecer o tipo que marca "o desenho vem do código".
+  assert.ok(templateSource.includes("'custom'"), 'template aceita kind custom');
+
+  console.log('test:animations ok — todo rótulo resolve para um tipo desenhável, e animação sob medida não recebe preset por cima.');
 } finally {
   rmSync(work, { recursive: true, force: true });
 }

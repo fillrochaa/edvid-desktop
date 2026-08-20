@@ -77,7 +77,9 @@ type Animation = {
   start: number;
   end: number;
   label?: string;
-  kind?: 'flash' | 'timeline' | 'script' | 'shapes';
+  // "custom" = o desenho vive no código deste arquivo, escrito sob medida; o
+  // registro serve só para a timeline do Edvid. Os demais são os prontos.
+  kind?: 'flash' | 'timeline' | 'script' | 'shapes' | 'custom';
   // Só para kind "script": as linhas que aparecem escritas na tela.
   lines?: string[];
   intensity?: number;
