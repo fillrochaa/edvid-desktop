@@ -251,8 +251,11 @@ Claude (Agent SDK — detalhes na seção 13e):
 
 ## 6. Modelo de segurança e aprovações
 
-- O Codex usa `approvalPolicy: never` (desde a 0.14.1) e sandbox
-  `workspace-write`. DECISÃO DO FILL, tomada depois do teste real no Windows
+- O Codex usa `approvalPolicy: never` (desde a 0.14.1) e sandbox POR
+  PLATAFORMA (desde a 0.14.3): `workspace-write` no macOS, onde o seatbelt
+  impõe de verdade, e `danger-full-access` no Windows, onde o backend não
+  impõe nada e a combinação com `never` fazia a sessão virar somente leitura.
+  DECISÃO DO FILL, tomada depois do teste real no Windows
   ("estou tendo que fazer MUUUUITAS aprovações, está irritante… não quero ter
   que fazer aprovações nem no mac nem no Windows"). O aluno veio editar vídeo,
   não auditar shell.
@@ -265,11 +268,13 @@ Claude (Agent SDK — detalhes na seção 13e):
     `workspace-write` continua declarado (escrita no projeto + caches do
     Edvid) e `network_access = false` segue valendo. Onde o sandbox impõe
     (mac), um comando fora do permitido falha em vez de perguntar.
-  - O custo, dito por inteiro: no Windows, onde o backend não impõe
-    filesystem, o agente passa a poder escrever fora da pasta do projeto sem
-    perguntar. É consequência aceita conscientemente; se um dia o sandbox do
-    Windows passar a impor de verdade (`windowsSandbox/setupStart` existe no
-    protocolo e não é usado hoje), vale reavaliar.
+  - O custo, dito por inteiro: no Windows o agente escreve sem sandbox e sem
+    perguntar — o limite prático é a pasta do projeto, para onde todas as
+    instruções apontam, não uma barreira do sistema. É consequência aceita
+    conscientemente, e o risco efetivo é o mesmo de antes (lá o sandbox nunca
+    impôs nada; só mudava quem clicava). Se o sandbox do Windows passar a
+    impor de verdade (`windowsSandbox/setupStart` existe no protocolo e não é
+    usado hoje), vale reavaliar e voltar para `workspace-write`.
 - O `thread/start` aceita `sandbox` **apenas como string** (`read-only`,
   `workspace-write`, `danger-full-access`); não há parâmetros inline. Isso foi
   verificado sondando o app-server: qualquer objeto é recusado com
@@ -1208,6 +1213,20 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.14.3: sandbox por PLATAFORMA, consertando um efeito colateral que eu mesmo
+  criei. Com `approval_policy = never` (0.14.1) o Windows parou de perguntar —
+  e passou a NEGAR: a sessão inteira virou somente leitura ("esta sessão está
+  somente para leitura"), derrubando a Fase 2 e a geração de imagens junto.
+  A razão é a mesma de sempre: o backend de lá não consegue impor
+  `workspace-write`, então o Codex escolhe entre perguntar (on-request, a
+  enxurrada de antes) ou negar (never). Como a restrição no Windows nunca foi
+  real, ficar entre as duas só custava: lá o sandbox passa a ser
+  `danger-full-access`, e no macOS continua `workspace-write`, onde o seatbelt
+  impõe de verdade e a sonda já mediu zero aprovações. LIÇÃO: `never` não é
+  "aprovar sozinho", é "não perguntar" — em sandbox que não impõe, isso vira
+  negação, não permissão. Mudança validada por typecheck e pelo smoke do
+  protocolo; o comportamento no Windows depende do teste real do fill, porque
+  não há máquina Windows aqui e a sonda local foi barrada pelo ambiente.
 - 0.14.2: rede de segurança das animações + imagem certa para tela dividida.
   (1) A 0.14.1 tornou `animations` declarativo, mas o desenho ainda dependia do
   agente escrever `kind` — e ele aprendeu PELA METADE: no teste seguinte pôs

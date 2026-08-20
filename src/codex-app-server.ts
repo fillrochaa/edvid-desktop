@@ -73,6 +73,18 @@ const CODEX_CHAT_MODEL = 'gpt-5.6-terra';
 // permanece negada.
 const CODEX_APPROVAL_POLICY = 'never';
 
+// Sandbox POR PLATAFORMA, e nao por gosto. No macOS o seatbelt impoe
+// workspace-write de verdade: o agente escreve no projeto e nos caches, o
+// resto e negado, sem perguntar nada. No Windows o backend NAO consegue impor
+// restricao de arquivo ("windows sandbox backend cannot enforce file_system")
+// e o Codex precisa escolher entre perguntar ou negar: com 'on-request' virava
+// enxurrada de aprovacoes, e com 'never' a sessao inteira caiu para SOMENTE
+// LEITURA — o agente nao conseguia nem preparar a Fase 2 nem salvar imagem
+// (visto em maquina real). Como a restricao la nunca foi real, o unico modo
+// que entrega o que o aluno precisa e o acesso direto; o limite pratico
+// continua sendo a pasta do projeto, para onde todas as instrucoes apontam.
+const CODEX_SANDBOX = process.platform === 'win32' ? 'danger-full-access' : 'workspace-write';
+
 // Compartilhadas com o adaptador Claude: o contrato com a interface e o
 // mesmo seja qual for o provedor de IA que conduz a conversa.
 export const EDVID_INSTRUCTIONS = `Voce e o agente de edicao do Edvid Desktop. Converse em portugues do Brasil e trate a pasta do projeto como a unica area de trabalho do video. Preserve sempre os arquivos originais. Antes de uma edicao completa, faca primeiro o corte limpo guiado pelo audio e obtenha aprovacao do usuario; depois aplique visuais, legendas, trilha e acabamento.
@@ -150,6 +162,7 @@ export class CodexAppServer {
       // Cinto e suspensorio: a politica tambem vai em cada thread/start. Se uma
       // versao do CLI ignorar o parametro, o aluno nao volta a ver aprovacoes.
       `approval_policy = ${JSON.stringify(CODEX_APPROVAL_POLICY)}`,
+      `sandbox_mode = ${JSON.stringify(CODEX_SANDBOX)}`,
       '[sandbox_workspace_write]',
       'network_access = false',
       `writable_roots = [${roots}]`,
@@ -529,7 +542,7 @@ export class CodexAppServer {
       const started = await this.request<ThreadStartResponse>('thread/start', {
         cwd: projectDirectory,
         approvalPolicy: CODEX_APPROVAL_POLICY,
-        sandbox: 'workspace-write',
+        sandbox: CODEX_SANDBOX,
         serviceName: 'edvid_desktop',
         developerInstructions: EDVID_INSTRUCTIONS,
         model: CODEX_CHAT_MODEL,
@@ -565,7 +578,7 @@ export class CodexAppServer {
     const started = await this.request<ThreadStartResponse>('thread/start', {
       cwd: projectDirectory,
       approvalPolicy: CODEX_APPROVAL_POLICY,
-      sandbox: 'workspace-write',
+      sandbox: CODEX_SANDBOX,
       serviceName: 'edvid_desktop_imagens',
       model: CODEX_CHAT_MODEL,
     });
