@@ -520,6 +520,45 @@ function ensureRuntimePack(): Promise<RuntimePackState> {
   return job;
 }
 
+// O PATH que passamos ao agente NAO sobrevive intacto no macOS: todo shell de
+// login roda /usr/libexec/path_helper, que reconstroi o PATH com as pastas do
+// sistema na frente e joga as nossas para o fim (sondado com command/exec: o
+// pack caiu nas posicoes 14 e 15 e o agente achava /usr/bin/python3 — dai o
+// "WhisperX nao esta disponivel no ambiente" no mac, enquanto no Windows, que
+// nao tem path_helper, tudo funcionava). Duas defesas, porque o agente chama
+// as ferramentas por nome E o proprio whisperx roda `ffmpeg` por subprocess:
+// as instrucoes usam os caminhos absolutos EDVID_*, e este sitecustomize
+// devolve as pastas do pacote para a frente do PATH dentro de qualquer
+// processo Python. Fica no userData (nao no pack), entao nao muda a chave.
+let pythonSiteDirectory: string | null = null;
+
+async function writePythonSiteCustomize(): Promise<string | null> {
+  const siteDirectory = path.join(app.getPath('userData'), 'runtime', 'pythonsite');
+  const script = [
+    '# Gerado pelo Edvid Desktop. Alteracoes manuais sao sobrescritas.',
+    '# Garante que as ferramentas do Edvid venham primeiro no PATH de qualquer',
+    '# processo Python do pacote (o whisperx chama "ffmpeg" por nome).',
+    'import os',
+    '',
+    'try:',
+    '    _dirs = [p for p in os.environ.get("EDVID_TOOL_DIRS", "").split(os.pathsep) if p]',
+    '    if _dirs:',
+    '        _rest = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p not in _dirs]',
+    '        os.environ["PATH"] = os.pathsep.join(_dirs + _rest)',
+    'except Exception:',
+    '    pass',
+    '',
+  ].join('\n');
+  try {
+    await mkdir(siteDirectory, { recursive: true });
+    await writeFile(path.join(siteDirectory, 'sitecustomize.py'), script);
+    return siteDirectory;
+  } catch {
+    // Sem o sitecustomize o agente ainda funciona pelos caminhos absolutos.
+    return null;
+  }
+}
+
 // Os fluxos que dependem das ferramentas aguardam o pacote; quando ele ja
 // esta pronto, o await resolve na hora.
 async function requireRuntimePack(): Promise<void> {
@@ -527,6 +566,8 @@ async function requireRuntimePack(): Promise<void> {
   if (state.status !== 'ready') {
     throw new Error(state.error || 'As ferramentas do Edvid ainda estão sendo preparadas.');
   }
+  // Escrito uma vez por sessao, antes de qualquer agente montar o ambiente.
+  pythonSiteDirectory ??= await writePythonSiteCustomize();
 }
 
 async function inspectProjectMedia(directory: string): Promise<InspectedProjectMedia | null> {
@@ -2019,10 +2060,11 @@ function agentToolsEnvironment(): NodeJS.ProcessEnv {
   const runtimeContext = appRuntimeContext();
   const localRuntimes = ['node', 'ffmpeg', 'ffprobe', 'uv', 'yt-dlp', 'python']
     .map((name) => resolveRuntime(name as RuntimeName, runtimeContext));
-  const runtimePath = [
+  const toolDirectories = [
     ...new Set(localRuntimes.flatMap((runtime) => runtime.command ? [path.dirname(runtime.command)] : [])),
-    process.env.PATH,
-  ].filter((entry): entry is string => Boolean(entry)).join(path.delimiter);
+  ];
+  const runtimePath = [...toolDirectories, process.env.PATH]
+    .filter((entry): entry is string => Boolean(entry)).join(path.delimiter);
   const runtimeCommand = (name: RuntimeName) => (
     localRuntimes.find((runtime) => runtime.name === name)?.command ?? ''
   );
@@ -2031,6 +2073,10 @@ function agentToolsEnvironment(): NodeJS.ProcessEnv {
     PATH: runtimePath,
     PYTHONDONTWRITEBYTECODE: '1',
     PYTHONNOUSERSITE: '1',
+    // Lidos pelo sitecustomize acima para restaurar a ordem do PATH dentro do
+    // Python, mesmo quando o shell de login do macOS reordenou tudo.
+    EDVID_TOOL_DIRS: toolDirectories.join(path.delimiter),
+    ...(pythonSiteDirectory ? { PYTHONPATH: pythonSiteDirectory } : {}),
     EDVID_PYTHON: runtimeCommand('python'),
     EDVID_FFMPEG: runtimeCommand('ffmpeg'),
     EDVID_FFPROBE: runtimeCommand('ffprobe'),

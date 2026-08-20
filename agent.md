@@ -164,6 +164,21 @@ sandbox, e cada transcrição exigia aprovação do usuário.
   --help`, uma vez por chave de pack, marcador em
   `cache/whisperx-ok-<chave>.json`): WhisperX instalado mas que não ABRE
   nesta máquina vira erro exato no banner, em vez do relato vago do agente.
+- PATH NÃO É GARANTIA NO macOS (0.14.0, de máquina real): `/etc/profile` roda
+  o `path_helper` em todo shell de login e RECONSTRÓI o PATH com as pastas do
+  sistema na frente — o que injetamos vai para o fim. Sondado com
+  `command/exec` (executa pelo mesmo caminho do agente, sem gastar turno de
+  modelo): o pack caía nas posições 14/15, `which python3` dava
+  `/usr/bin/python3` e `import whisperx` falhava — exatamente o "o WhisperX
+  não está disponível no ambiente" que o aluno via, enquanto o Windows (sem
+  path_helper) funcionava. `allow_login_shell = false` no config do Codex NÃO
+  resolve (testado). Duas defesas: as instruções mandam chamar tudo por
+  `"$EDVID_PYTHON"`/`"$EDVID_FFMPEG"` (caminho absoluto), e o app escreve um
+  `sitecustomize.py` em `userData/runtime/pythonsite` (exposto por
+  `PYTHONPATH`, alimentado por `EDVID_TOOL_DIRS`) que devolve as pastas do
+  pacote para a frente do PATH DENTRO do Python — necessário porque o
+  `whisperx.audio.load_audio` chama `ffmpeg` por nome via subprocess. Provado
+  ponta a ponta pela sonda: `load_audio` decodificou 4800 amostras.
 
 ## 5. Login e provedores de IA (ChatGPT + Claude + Gemini)
 
@@ -331,6 +346,30 @@ Não depender do volume externo em builds futuros.
   transcrever e cortar todos os arquivos e concatenar num render único, com o
   mapa `sources` no EDL. O J-Cut já resolvia fonte por segmento
   (`resolveJcutSource` por range), então funciona com corte multi-fonte.
+
+### Quem decide os cortes — `helpers/clean_cut.py` (0.14.0)
+
+O agente escolhia os trechos lendo o texto da transcrição e o resultado era
+grosseiro ("o processo está muito burro, não identifica as pausas
+corretamente", teste real no Windows). A decisão saiu do LLM e virou helper
+determinístico, obrigatório nas instruções.
+
+A lição que define o algoritmo, medida em fala com pausas de duração
+conhecida: **o alinhador estica a última palavra da frase por cima do
+silêncio**. Em `Terceira frase depois da pausa longa.` a palavra `longa.`
+ficou marcada de 8,37s a 10,81s, enquanto a voz parou em 8,75s — o intervalo
+entre palavras virou 0,02s e uma pausa de 2 segundos ficou invisível. Por isso
+quem manda é o **silêncio real do áudio** (`silencedetect`), objetivo e imune
+ao alinhamento; a transcrição serve para descartar blocos sem fala nenhuma
+(ruído, batida de mesa). Cada bloco conserva `--keep` (0,12s) de respiração
+DENTRO do silêncio, então nunca corta rente à sílaba. `--min-pause` (0,45s)
+é o limiar do que vira corte. Sem trilha analisável há um plano B pelos
+intervalos da transcrição, com aviso no stderr.
+
+Provado com fala sintetizada (pausas de 1,5s / 0,25s / 2,0s): corta as duas
+longas, preserva a curta, remove 25% do material. `npm run test:clean-cut`
+trava a regra com os tempos REAIS daquela medição, incluindo o caso da
+palavra esticada.
 
 ### Aprovação da Fase 1
 
@@ -1149,6 +1188,17 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.14.0: os dois defeitos do teste real depois da 0.13.9. (1) mac: "o
+  WhisperX não está disponível no ambiente" mesmo com o modelo baixado e o
+  healthcheck do app passando — o `path_helper` do macOS jogava o pack para
+  o fim do PATH do agente (sondado com `command/exec`; detalhes na seção 4).
+  Corrigido com instruções por caminho absoluto `$EDVID_*` + `sitecustomize`
+  que restaura a ordem do PATH dentro do Python (o `load_audio` chama
+  `ffmpeg` por nome). (2) Windows: transcrevia e cortava, mas o corte era
+  grosseiro — a escolha dos trechos saiu do LLM e virou `clean_cut.py`,
+  guiado pelo silêncio real do áudio, com `npm run test:clean-cut`. Lição
+  transversal: quando o agente relata "ferramenta indisponível", desconfie do
+  AMBIENTE dele antes do pacote — o app e o agente não veem o mesmo PATH.
 - 0.13.9: o download da 0.13.8 era 3x maior que o necessário — descoberto
   com o fill esperando na frente do app ("Preparando a transcrição · 562 MB.
   preciso aguardar?"). O repo de alinhamento tem 3,5 GB, mas o whisperx
