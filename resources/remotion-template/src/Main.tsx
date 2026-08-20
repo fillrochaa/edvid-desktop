@@ -112,10 +112,18 @@ export type EditData = {
   inserts: Insert[];
   behind: Behind[];
   splits?: Split[];
-  // REGISTRO das animacoes sob medida do CustomGraphics: o template nao
-  // renderiza nada daqui (o movimento vive no codigo), mas a timeline do
-  // Edvid le estas janelas para desenhar a track de Animacoes.
-  animations?: {start: number; end: number; label?: string}[];
+  // Animacoes DECLARATIVAS: o CustomGraphics desenha cada uma pelo `kind`
+  // (flash, timeline, script, shapes) e a timeline do Edvid usa a mesma janela
+  // para a track de Animacoes. Registrar aqui e o que faz aparecer no video —
+  // antes isto era so metadata e o registro saia mudo no render.
+  animations?: {
+    start: number;
+    end: number;
+    label?: string;
+    kind?: 'flash' | 'timeline' | 'script' | 'shapes';
+    lines?: string[];
+    intensity?: number;
+  }[];
   soundtrack: {enabled: boolean; file: string; volume: number};
 };
 

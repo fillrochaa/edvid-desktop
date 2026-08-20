@@ -251,7 +251,25 @@ Claude (Agent SDK — detalhes na seção 13e):
 
 ## 6. Modelo de segurança e aprovações
 
-- O Codex usa `approvalPolicy: on-request` e sandbox `workspace-write`.
+- O Codex usa `approvalPolicy: never` (desde a 0.14.1) e sandbox
+  `workspace-write`. DECISÃO DO FILL, tomada depois do teste real no Windows
+  ("estou tendo que fazer MUUUUITAS aprovações, está irritante… não quero ter
+  que fazer aprovações nem no mac nem no Windows"). O aluno veio editar vídeo,
+  não auditar shell.
+  - Causa da enxurrada, sondada: o sandbox do Windows não consegue impor
+    restrição de arquivo (`windows sandbox backend cannot enforce
+    file_system`, string do binário) e o Codex escalava tudo por precaução. No
+    mac o seatbelt funciona e a sonda mediu ZERO aprovações mesmo com
+    `on-request` — ou seja, o atrito era só do Windows.
+  - O que `never` muda: quem responde à escalada, não o limite. O sandbox
+    `workspace-write` continua declarado (escrita no projeto + caches do
+    Edvid) e `network_access = false` segue valendo. Onde o sandbox impõe
+    (mac), um comando fora do permitido falha em vez de perguntar.
+  - O custo, dito por inteiro: no Windows, onde o backend não impõe
+    filesystem, o agente passa a poder escrever fora da pasta do projeto sem
+    perguntar. É consequência aceita conscientemente; se um dia o sandbox do
+    Windows passar a impor de verdade (`windowsSandbox/setupStart` existe no
+    protocolo e não é usado hoje), vale reavaliar.
 - O `thread/start` aceita `sandbox` **apenas como string** (`read-only`,
   `workspace-write`, `danger-full-access`); não há parâmetros inline. Isso foi
   verificado sondando o app-server: qualquer objeto é recusado com
@@ -261,9 +279,10 @@ Claude (Agent SDK — detalhes na seção 13e):
 - Esse `config.toml` mantém `network_access = false` e declara os caches do
   aplicativo em `writable_roots`. É o que permite transcrever sem aprovação
   sem abrir rede para o agente.
-- Reduzir atrito nunca é motivo para autoaprovar: a forma correta é remover a
-  causa da escalada (dar caminho gravável e conteúdo já baixado), não aceitar
-  comando automaticamente.
+- Remover a CAUSA da escalada continua sendo o trabalho principal (caminho
+  gravável, conteúdo já baixado, ferramenta achável): `never` cala a pergunta,
+  mas um comando que só funcionava porque o aluno aprovava agora falha calado.
+  Toda causa nova de escalada precisa ser corrigida na raiz, como antes.
 - Aprovações técnicas são necessárias para segurança, mas não pertencem ao
   histórico da conversa.
 - Desde a versão 0.5.2, aprovações de comandos e alterações de arquivos aparecem
@@ -274,7 +293,8 @@ Claude (Agent SDK — detalhes na seção 13e):
   - Permitir uma vez.
 - O modal mostra comando, projeto e contexto, mas não cria uma mensagem no chat.
 - Erros de aprovação ficam no próprio modal.
-- Nunca autoaprovar comandos genéricos apenas para reduzir atrito.
+- O modal continua no código e ainda atende os outros provedores; com o Codex
+  em `never` ele deixou de aparecer na prática.
 
 ## 7. Princípios de UX definidos
 
@@ -1188,6 +1208,29 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.14.1: teste real completo no mac (corte + estilos + imagens + Fase 2) e
+  no Windows. Tres defeitos, todos com prova. (1) ANIMACOES REGISTRADAS SEM
+  NADA NO VIDEO: `animations` era so metadata para a timeline — o comentario do
+  proprio template dizia "o template nao renderiza nada daqui". No projeto real
+  o agente registrou 3 flashes + 1 infografico, deixou `transitions: null` (o
+  campo que o CutFlashes le, nunca documentado nas instrucoes) e o
+  CustomGraphics.tsx ficou IDENTICO ao template — nenhuma linha de codigo. O
+  campo virou DECLARATIVO: `kind` (flash | timeline | script | shapes) escolhe
+  o desenho e o CustomGraphics renderiza; os tres graficos que ja existiam no
+  template e nunca eram montados por dados agora tem uso. Registro antigo sem
+  `kind` cujo label fala em flash ainda vira flash, entao projetos ja criados
+  passam a renderizar sem o agente reescrever nada. Provado renderizando
+  frames do projeto real: flash visivel no frame 124, cartao do infografico no
+  340. (2) APROVACOES NO WINDOWS: `approval_policy` passou a `never` (thread e
+  config.toml). A causa: o sandbox do Windows nao consegue impor restricao de
+  arquivo ("windows sandbox backend cannot enforce file_system", string do
+  binario) e o Codex escalava tudo; no mac, onde o seatbelt funciona, a sonda
+  mostrou zero aprovacoes ja com on-request. O sandbox workspace-write continua
+  declarado e a rede segue negada — muda so quem responde, nao o limite.
+  (3) IMAGENS NAO GERADAS NO WINDOWS (ENOENT): consequencia da mesma causa — a
+  thread utilitaria de imagem RECUSA aprovacoes por design, entao cada pedido
+  do sandbox matava a geracao em silencio. Alem do `never`, o app passou a
+  criar `edit/imagens` fora do sandbox antes do turno.
 - 0.14.0: os dois defeitos do teste real depois da 0.13.9. (1) mac: "o
   WhisperX não está disponível no ambiente" mesmo com o modelo baixado e o
   healthcheck do app passando — o `path_helper` do macOS jogava o pack para

@@ -62,6 +62,17 @@ type TurnStartResponse = { turn: { id: string } };
 // o erro de modelo ja chega traduzido pelo friendlyAiError.
 const CODEX_CHAT_MODEL = 'gpt-5.6-terra';
 
+// O aluno NUNCA aprova comando: ele veio editar video, nao auditar shell. Isso
+// era 'on-request' e no Windows virou enxurrada de pedidos, porque o sandbox de
+// la nao consegue impor restricao de arquivo ("windows sandbox backend cannot
+// enforce file_system", string do proprio binario) e o Codex escala tudo por
+// precaucao. Pior: a thread utilitaria de imagem RECUSA aprovacoes sozinha,
+// entao cada pedido virava imagem nao gerada — o ENOENT visto em maquina real.
+// Com 'never' o Codex nunca pergunta; o limite continua sendo o sandbox
+// workspace-write (escrita so no projeto e nos caches do Edvid) e a rede
+// permanece negada.
+const CODEX_APPROVAL_POLICY = 'never';
+
 // Compartilhadas com o adaptador Claude: o contrato com a interface e o
 // mesmo seja qual for o provedor de IA que conduz a conversa.
 export const EDVID_INSTRUCTIONS = `Voce e o agente de edicao do Edvid Desktop. Converse em portugues do Brasil e trate a pasta do projeto como a unica area de trabalho do video. Preserve sempre os arquivos originais. Antes de uma edicao completa, faca primeiro o corte limpo guiado pelo audio e obtenha aprovacao do usuario; depois aplique visuais, legendas, trilha e acabamento.
@@ -87,7 +98,8 @@ Fase 2 — o visual e renderizado pelo Remotion, nunca improvisado:
 - O segments.json tambem tem gerador oficial, e somar os segundos do EDL dessincroniza o zoom dos cortes: use "$EDVID_PYTHON" "$EDVID_HELPERS/segments_for_remotion.py" <clipes por corte, em ordem> -o public/segments.json quando existirem clipes separados, ou "$EDVID_PYTHON" "$EDVID_HELPERS/segments_for_remotion.py" --edl edit/edl.json --fps <fps do cut> -o public/segments.json quando o corte for um arquivo unico. Nunca edite src/Main.tsx.
 - Os nomes de estilo do briefing sao os mesmos do template: headline outline, card, realce ou misto; legenda karaoke, stacked, scatter, simples, serifada ou classica. Copie a cor escolhida para hook.accent e captions.accent — sao esses campos que pintam realce, misto e a linha serifada da empilhada.
 - TELA DIVIDIDA e OFICIAL e declarativa: escreva no edit-data.json o campo splits, uma lista [{"kind": "image" ou "video", "src": "imagens/arquivo.png" (relativo a public/), "start": segundos, "end": segundos, "position": "top" (default) ou "bottom"}]. O template monta a divisao sozinho (midia numa metade, o video segue na outra) e TODAS as legendas se reposicionam sozinhas no meio da divisa durante o split — nao escreva captions.windows para isso e NUNCA monte tela dividida no CustomGraphics.tsx (ele e so para motion graphics avulsos). Copie a midia usada para dentro de edit/remotion/public/imagens/ antes.
-- Toda animacao sob medida que voce criar ou alterar no CustomGraphics.tsx deve ser REGISTRADA no edit-data.json, no campo animations: [{"start": segundos, "end": segundos, "label": "nome curto em portugues"}]. Sem o registro a animacao nao aparece na timeline do Edvid. Registre no MESMO turno em que mexer no CustomGraphics.
+- ANIMACOES SAO DECLARATIVAS e o campo animations do edit-data.json e o que as faz APARECER no video: [{"start": segundos, "end": segundos, "kind": "...", "label": "nome curto em portugues"}]. O kind e OBRIGATORIO — sem ele nada e desenhado, so aparece a faixa na timeline do Edvid (foi assim que uma edicao real saiu sem nenhum efeito). Os kinds prontos sao: "flash" (estouro de luz no corte; use um por corte quando o briefing pedir flashes de transicao, com start no tempo do corte), "script" (cartao que digita frases na tela — passe tambem lines: ["frase 1", "frase 2"]), "timeline" (uma linha do tempo animada) e "shapes" (formas coloridas que pipocam). Escolha o kind mais proximo do que o aluno pediu; para "infografico" use "script" com as frases dele.
+- Se e so quando NENHUM kind servir, crie a animacao a mao no CustomGraphics.tsx E registre a janela em animations com o label — nesse caso o desenho vem do seu codigo. Nunca registre sem kind achando que o Edvid desenha sozinho.
 - NUNCA invente campos proprios no edit-data.json (ex.: creatorInfographics): o template nao le campos desconhecidos e nada e renderizado a partir deles. Os campos oficiais sao os unicos com efeito: hook, captions, camera, inserts, behind, splits, animations e soundtrack. Se um campo inventado ja existir de sessoes anteriores, migre os dados dele para o campo oficial e apague o campo antigo.
 - Nunca execute remotion render, nem inteiro nem em partes: o Chromium do render nao inicia dentro do sandbox e cada tentativa pediria aprovacao ao usuario. Quando os arquivos de public/ estiverem prontos, encerre o turno com um resumo curto da edicao. O Edvid detecta os dados novos, renderiza sozinho fora do sandbox, mostra o progresso na interface e publica o resultado em edicao/fase_2/. Nao crie renders em out/, nao concatene partes e nao copie arquivos de video para as pastas de saida.
 
@@ -134,6 +146,9 @@ export class CodexAppServer {
       // Chave de topo: precisa vir ANTES de qualquer [secao], senao o TOML a
       // engole como chave da secao e o pin nao vale.
       `model = ${JSON.stringify(CODEX_CHAT_MODEL)}`,
+      // Cinto e suspensorio: a politica tambem vai em cada thread/start. Se uma
+      // versao do CLI ignorar o parametro, o aluno nao volta a ver aprovacoes.
+      `approval_policy = ${JSON.stringify(CODEX_APPROVAL_POLICY)}`,
       '[sandbox_workspace_write]',
       'network_access = false',
       `writable_roots = [${roots}]`,
@@ -512,7 +527,7 @@ export class CodexAppServer {
     if (!threadId) {
       const started = await this.request<ThreadStartResponse>('thread/start', {
         cwd: projectDirectory,
-        approvalPolicy: 'on-request',
+        approvalPolicy: CODEX_APPROVAL_POLICY,
         sandbox: 'workspace-write',
         serviceName: 'edvid_desktop',
         developerInstructions: EDVID_INSTRUCTIONS,
@@ -548,7 +563,7 @@ export class CodexAppServer {
     await this.start();
     const started = await this.request<ThreadStartResponse>('thread/start', {
       cwd: projectDirectory,
-      approvalPolicy: 'on-request',
+      approvalPolicy: CODEX_APPROVAL_POLICY,
       sandbox: 'workspace-write',
       serviceName: 'edvid_desktop_imagens',
       model: CODEX_CHAT_MODEL,

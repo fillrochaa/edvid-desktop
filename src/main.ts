@@ -2611,6 +2611,10 @@ function fulfillImageRequests(projectDirectory: string): Promise<ImageGenState> 
             await mkdir(imagesDirectory, { recursive: true });
             await writeFile(target, image);
           } else {
+            // A pasta e criada AQUI, fora do sandbox: no Windows criar
+            // diretorio dentro do turno virava pedido de aprovacao — que a
+            // thread utilitaria recusa sozinha — e a imagem nunca aparecia.
+            await mkdir(imagesDirectory, { recursive: true });
             await (await codexServer()).runUtilityTurn(
               projectDirectory,
               [

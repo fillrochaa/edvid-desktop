@@ -67,14 +67,67 @@ const LAYOUT = {
 // retimeable without touching code.
 type CutFlash = {at: number; intensity?: number; sfx?: string; volume?: number};
 
+// Uma animação REGISTRADA em edit-data.json vira imagem: `kind` escolhe o
+// desenho e a janela (start/end) manda no tempo. Antes o registro era só
+// metadata para a timeline do Edvid e o desenho tinha de ser escrito à mão
+// aqui — o agente registrava, a faixa aparecia na timeline e o vídeo saía sem
+// nada (caso real: 3 flashes e um infográfico registrados, `transitions` nulo,
+// este arquivo idêntico ao template). Registrar agora É desenhar.
+type Animation = {
+  start: number;
+  end: number;
+  label?: string;
+  kind?: 'flash' | 'timeline' | 'script' | 'shapes';
+  // Só para kind "script": as linhas que aparecem escritas na tela.
+  lines?: string[];
+  intensity?: number;
+};
+
+// Registro antigo, sem `kind`: um label falando em flash ainda vira flash, para
+// os projetos criados antes desta versão não ficarem mudos.
+const kindOf = (a: Animation): Animation['kind'] | null =>
+  a.kind ?? (/\bflash/i.test(a.label ?? '') ? 'flash' : null);
+
 export const CustomGraphics: React.FC = () => {
-  const d = editData as {splitInserts?: SplitInsert[]; transitions?: CutFlash[]};
+  const d = editData as {
+    splitInserts?: SplitInsert[];
+    transitions?: CutFlash[];
+    animations?: Animation[];
+  };
   const splits = d.splitInserts ?? [];
-  const flashes = d.transitions ?? [];
+  const animations = d.animations ?? [];
+  // Flashes vêm de `transitions` (lista explícita de cortes) e/ou das
+  // animações com kind "flash". As duas formas convivem.
+  const flashes: CutFlash[] = [
+    ...(d.transitions ?? []),
+    ...animations
+      .filter((a) => kindOf(a) === 'flash')
+      .map((a) => ({at: a.start, intensity: a.intensity})),
+  ];
   return (
     <>
       {splits.length ? <SplitScreen items={splits} /> : null}
       {flashes.length ? <CutFlashes items={flashes} /> : null}
+      {animations.map((a, i) => {
+        const kind = kindOf(a);
+        if (kind === 'timeline') {
+          return <TimelineGraphic key={`anim-${i}`} startSec={a.start} endSec={a.end} />;
+        }
+        if (kind === 'script') {
+          return (
+            <ScriptGraphic
+              key={`anim-${i}`}
+              startSec={a.start}
+              endSec={a.end}
+              lines={a.lines?.length ? a.lines : [a.label ?? '']}
+            />
+          );
+        }
+        if (kind === 'shapes') {
+          return <ShapesGraphic key={`anim-${i}`} startSec={a.start} endSec={a.end} />;
+        }
+        return null;
+      })}
     </>
   );
 };
