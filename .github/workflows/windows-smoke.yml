@@ -74,11 +74,17 @@ jobs:
           $env:HF_HOME = "$PWD/hf-cache"
           $env:HUGGINGFACE_HUB_CACHE = "$PWD/hf-cache/hub"
           $env:HF_HUB_DISABLE_TELEMETRY = "1"
-          # Transcricao + alinhamento pt, os dois que o ensureWhisperModel baixa.
+          # Transcricao + alinhamento pt, os dois que o ensureWhisperModel baixa,
+          # com os MESMOS filtros do app (so os pesos PyTorch do alinhamento).
           # O smoke antigo pulava o alinhamento (--no_align) e ficou verde
           # enquanto o aluno morria em "modelo de alinhamento nao disponivel".
-          python3 -B -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-small'); snapshot_download('jonatasgrosman/wav2vec2-large-xlsr-53-portuguese')"
+          python3 -B -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-small'); snapshot_download('jonatasgrosman/wav2vec2-large-xlsr-53-portuguese', allow_patterns=['*.json', '*.txt', 'pytorch_model.bin', 'preprocessor_config.json'], ignore_patterns=['language_model/*'])"
           if ($LASTEXITCODE -ne 0) { throw "prefetch dos modelos falhou" }
+          # O filtro tem de valer: o flax nao pode estar no cache e os pesos sim.
+          $align = Get-ChildItem -Recurse -Path "hf-cache/hub/models--jonatasgrosman--wav2vec2-large-xlsr-53-portuguese/snapshots" -File -Force
+          if ($align.Name -contains 'flax_model.msgpack') { throw "flax_model.msgpack baixado a toa" }
+          $pesos = $align | Where-Object { $_.Name -eq 'pytorch_model.bin' }
+          if (-not $pesos) { throw "pytorch_model.bin ausente no cache" }
 
       - name: Transcrição real pela CLI com alinhamento, offline (como o agente)
         run: |

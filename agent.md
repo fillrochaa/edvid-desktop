@@ -145,11 +145,18 @@ sandbox, e cada transcrição exigia aprovação do usuário.
   `WHISPERX_MODEL_NAME`/`WHISPERX_MODEL_REPO` no `main.ts`, senão o agente
   falha offline.
 - O prefetch baixa TAMBÉM o modelo de alinhamento pt
-  (`jonatasgrosman/wav2vec2-large-xlsr-53-portuguese`, ~1,27 GB —
+  (`jonatasgrosman/wav2vec2-large-xlsr-53-portuguese` —
   `WHISPERX_ALIGN_REPO`): o whisperx resolve `--language pt` para esse repo
   e sem ele a transcrição offline morre depois do texto, na etapa de
-  alinhamento (visto em máquina real na 0.13.7). O critério de "pronto"
-  exige os dois no cache; transcrever é sempre com `--language pt`.
+  alinhamento (visto em máquina real na 0.13.7). O repo inteiro tem 3,5 GB,
+  mas só o `pytorch_model.bin` (1,2 GB) é carregado — `allow_patterns` +
+  `ignore_patterns` cortam `flax_model.msgpack` e `language_model/`
+  (1,2 GB + 1,1 GB de peso morto). Transcrever é sempre com `--language pt`.
+- O critério de "modelo pronto" mede ARQUIVO, não diretório
+  (`cachedWeightSize` em `snapshots/<rev>/<peso>`, que o huggingface_hub só
+  cria quando o download termina): somar o diretório contaria blobs
+  `.incomplete` e daria por pronto um cache sem os pesos — cenário real de
+  quem começou a baixar os 3,5 GB na 0.13.8.
 - O modelo de VAD não é baixado: ele acompanha o pacote do WhisperX em
   `whisperx/assets/pytorch_model.bin`. Verificado rodando a transcrição
   completa com `HF_HUB_OFFLINE=1`.
@@ -1142,6 +1149,18 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.13.9: o download da 0.13.8 era 3x maior que o necessário — descoberto
+  com o fill esperando na frente do app ("Preparando a transcrição · 562 MB.
+  preciso aguardar?"). O repo de alinhamento tem 3,5 GB, mas o whisperx
+  carrega só o `pytorch_model.bin` (1,2 GB) via `Wav2Vec2Processor` +
+  `Wav2Vec2ForCTC` (lido no alignment.py): `flax_model.msgpack` (1,2 GB) e
+  `language_model/` (1,1 GB, só o `Wav2Vec2ProcessorWithLM` usaria) eram
+  peso morto. Prova antes de embarcar: cache limpo + download filtrado +
+  transcrição offline alinhada (1,2 GB, 12 palavras com tempo). Junto veio
+  o critério de pronto por ARQUIVO (`cachedWeightSize`) — medir diretório
+  daria por pronto o cache de quem interrompeu a 0.13.8 no meio, com blobs
+  `.incomplete` somando mais de 1 GB e sem os pesos. Smoke win32 passou a
+  usar os mesmos filtros e a exigir que o flax NÃO esteja no cache.
 - 0.13.8: transcrição offline COMPLETA e diagnóstico do WhisperX no banner,
   pelos dois prints do teste real pós-0.13.7. (1) Windows: "o modelo de
   alinhamento em português não está disponível no cache local" — o prefetch

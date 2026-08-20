@@ -1163,7 +1163,9 @@ const WHISPERX_MODEL_REPO = 'Systran/faster-whisper-small';
 // (DEFAULT_ALIGN_MODELS_HF em alignment.py) e o agente roda offline — sem o
 // prefetch o corte morria em "modelo de alinhamento nao disponivel no cache
 // local" (aconteceu no Windows; o smoke antigo mascarava com --no_align).
+// Baixamos so os pesos PyTorch (~1,2 GB) — ver runModelDownload.
 const WHISPERX_ALIGN_REPO = 'jonatasgrosman/wav2vec2-large-xlsr-53-portuguese';
+const WHISPERX_ALIGN_MIN_BYTES = 1_000_000_000;
 
 let modelPrefetch: Promise<WhisperModelState> | null = null;
 let modelState: WhisperModelState = { status: 'unknown', model: WHISPERX_MODEL_NAME };
@@ -1198,11 +1200,45 @@ async function directorySize(directory: string): Promise<number> {
   return total;
 }
 
+// Tamanho de UM arquivo do snapshot (models--<repo>/snapshots/<rev>/<nome>).
+// O huggingface_hub so cria esse link quando o download TERMINA — medir o
+// diretorio inteiro contaria blobs .incomplete e daria o modelo por pronto
+// sem os pesos (cenario real: cache com o flax pela metade da 0.13.8).
+async function cachedWeightSize(modelDirectory: string, fileName: string): Promise<number> {
+  const snapshotsRoot = path.join(modelDirectory, 'snapshots');
+  let revisions;
+  try {
+    revisions = await readdir(snapshotsRoot, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let largest = 0;
+  for (const revision of revisions) {
+    if (!revision.isDirectory()) continue;
+    try {
+      // stat segue o symlink: mede o blob de verdade, nao o link.
+      const info = await stat(path.join(snapshotsRoot, revision.name, fileName));
+      if (info.isFile()) largest = Math.max(largest, info.size);
+    } catch {
+      // Revisao sem esse arquivo; segue.
+    }
+  }
+  return largest;
+}
+
 function runModelDownload(python: string, hubCache: string): Promise<void> {
   const script = [
     'from huggingface_hub import snapshot_download',
     `snapshot_download(${JSON.stringify(WHISPERX_MODEL_REPO)})`,
-    `snapshot_download(${JSON.stringify(WHISPERX_ALIGN_REPO)})`,
+    // O repo de alinhamento tem 3,5 GB, mas o WhisperX carrega so o
+    // pytorch_model.bin (1,2 GB) via Wav2Vec2Processor + Wav2Vec2ForCTC: o
+    // flax_model.msgpack (1,2 GB) e o language_model/ (1,1 GB, usado apenas
+    // pelo Wav2Vec2ProcessorWithLM) sao peso morto. Baixar tudo triplicava a
+    // espera do aluno na primeira abertura. Filtros validados com download
+    // em cache limpo + alinhamento offline de verdade.
+    `snapshot_download(${JSON.stringify(WHISPERX_ALIGN_REPO)},`,
+    `    allow_patterns=['*.json', '*.txt', 'pytorch_model.bin', 'preprocessor_config.json'],`,
+    `    ignore_patterns=['language_model/*'])`,
   ].join('\n');
   return new Promise((resolve, reject) => {
     const child = spawn(python, ['-c', script], {
@@ -1927,12 +1963,12 @@ function ensureWhisperModel(): Promise<WhisperModelState> {
         error: 'Python interno nao esta disponivel nesta plataforma.',
       };
     }
-    // Um snapshot ja baixado tem os pesos; qualquer coisa menor esta pela
-    // metade. O de transcricao (small) passa de 100 MB; o de alinhamento pt
-    // (wav2vec2-large) passa de 1 GB.
+    // Pronto = os DOIS arquivos de peso existem completos no cache: model.bin
+    // do faster-whisper-small (~464 MB) e pytorch_model.bin do alinhamento
+    // (~1,2 GB). Medir arquivo, e nao diretorio, ignora downloads parciais.
     const cached =
-      (await directorySize(modelDirectory)) > 100_000_000 &&
-      (await directorySize(alignDirectory)) > 1_000_000_000;
+      (await cachedWeightSize(modelDirectory, 'model.bin')) > 100_000_000 &&
+      (await cachedWeightSize(alignDirectory, 'pytorch_model.bin')) > WHISPERX_ALIGN_MIN_BYTES;
     if (!cached) {
       broadcastModelState({ status: 'downloading', model: WHISPERX_MODEL_NAME, downloadedBytes: 0 });
       const ticker = setInterval(() => {
