@@ -1966,6 +1966,7 @@ function renderPhase2(projectDirectory: string): Promise<Phase2RenderState> {
     // Antes da impressao digital: corrigir o edit-data muda o arquivo e, com
     // ele, o fingerprint — assim a correcao entra neste render, nao no proximo.
     await normalizeAnimations(publicDirectory).catch(() => 0);
+    await ensureSoundtrackFile(projectDirectory, publicDirectory).catch(() => {});
     const fingerprint = await phase2Fingerprint(publicDirectory);
     if (!fingerprint) return { status: 'idle' };
 
@@ -2918,6 +2919,51 @@ async function findFileInProject(
   return null;
 }
 
+// Liga a trilha no edit-data.json apontando para o arquivo que acabou de ser
+// baixado. Feito pelo app porque o agente ja errou isso: sem o soundtrack
+// certo, a musica existe no disco e nao toca no video.
+async function enableSoundtrack(publicDirectory: string, fileName: string): Promise<void> {
+  const file = path.join(publicDirectory, 'edit-data.json');
+  try {
+    const document = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    const current = (document.soundtrack ?? {}) as { enabled?: unknown; file?: unknown; volume?: unknown };
+    const volume = Number(current.volume);
+    document.soundtrack = {
+      enabled: true,
+      file: fileName,
+      // 0,0445 e a referencia do template: musica presente sem competir com a voz.
+      volume: Number.isFinite(volume) && volume > 0 ? volume : 0.0445,
+    };
+    await writeFile(file, `${JSON.stringify(document, null, 2)}\n`);
+  } catch {
+    // Sem edit-data ainda: o agente liga a trilha quando montar a Fase 2.
+  }
+}
+
+// Rede de seguranca antes do render: o edit-data aponta uma trilha que nao
+// esta em public/? Se a musica existe em edit/musica/, o app leva para la. Sem
+// isso o render morre com "404 ao baixar public/trilha.mp3" — aconteceu em uso
+// real quando o agente nao copiou o arquivo que o Edvid tinha gerado.
+async function ensureSoundtrackFile(projectDirectory: string, publicDirectory: string): Promise<void> {
+  const file = path.join(publicDirectory, 'edit-data.json');
+  const document = JSON.parse(await readFile(file, 'utf8')) as
+    { soundtrack?: { enabled?: unknown; file?: unknown } };
+  const soundtrack = document.soundtrack;
+  if (!soundtrack?.enabled) return;
+  const fileName = path.basename(asText(soundtrack.file));
+  if (!fileName) return;
+  const target = path.join(publicDirectory, fileName);
+  try {
+    await stat(target);
+    return; // Ja esta no lugar.
+  } catch {
+    // Segue para o resgate.
+  }
+  const source = path.join(projectDirectory, 'edit', 'musica', fileName);
+  await stat(source);
+  await copyFile(source, target);
+}
+
 // --- Geracao de TRILHA pedida pelo agente ----------------------------------
 // O agente escreve edit/musica/pedidos.json quando o aluno liga a trilha com
 // IA nos estilos; o Edvid gera pelo Treblo fora do sandbox e salva o arquivo.
@@ -3000,7 +3046,20 @@ async function fulfillMusicRequests(projectDirectory: string): Promise<{ done: n
 
       const audio = await net.fetch(audioUrl);
       if (!audio.ok) throw new Error('não consegui baixar a trilha gerada');
-      await writeFile(path.join(musicDirectory, request.arquivo), Buffer.from(await audio.arrayBuffer()));
+      const bytes = Buffer.from(await audio.arrayBuffer());
+      await writeFile(path.join(musicDirectory, request.arquivo), bytes);
+      // O arquivo tambem vai DIRETO para o public/ do Remotion. Depender do
+      // agente para copiar quebrou em uso real: a musica foi gerada, ele nao
+      // entendeu o recado e o render morreu com 404 em public/trilha.mp3.
+      const publicDirectory = path.join(projectDirectory, 'edit', 'remotion', 'public');
+      try {
+        await stat(publicDirectory);
+        await writeFile(path.join(publicDirectory, request.arquivo), bytes);
+        await enableSoundtrack(publicDirectory, request.arquivo);
+      } catch {
+        // Fase 2 ainda nao montada: o arquivo fica em edit/musica/ e o
+        // scaffold seguinte encontra.
+      }
       done += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

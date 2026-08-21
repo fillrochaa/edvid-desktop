@@ -1213,6 +1213,23 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.17.3: a trilha FOI gerada (o Treblo funcionou) e mesmo assim o vídeo
+  quebrou: o render morreu com "404 ao baixar public/trilha.mp3". O arquivo
+  estava em edit/musica/ e o agente — Ollama conduzindo — não copiou; pior,
+  respondeu em INGLÊS perguntando se "trilha" era um arquivo de log. A cópia
+  saiu das mãos do agente: o app agora grava a música direto em
+  edit/remotion/public/ e liga o `soundtrack` no edit-data (volume 0,0445, a
+  referência do template). Além disso, `ensureSoundtrackFile` roda ANTES de
+  todo render como resgate: soundtrack ligado apontando arquivo ausente em
+  public/, com a música presente em edit/musica/, o app leva para lá — isso
+  conserta inclusive projetos que já quebraram. A mensagem de continuação
+  parou de pedir cópia e passou a dizer "já está aplicada, siga".
+  LIÇÃO (a terceira vez do mesmo padrão): passo manual entregue ao agente é
+  passo que uma hora falha — se o app consegue fazer, o app faz.
+  NOTA SOBRE MODELO PEQUENO: com o Ollama no chat, as regras de PT-BR no topo
+  das instruções NÃO seguraram; ele respondeu em inglês e não entendeu o
+  próprio recado do Edvid. O caminho, se for insistir em modelo pequeno, é o
+  app parar de depender de compreensão para qualquer passo mecânico.
 - 0.17.2: primeira trilha pedida de verdade expôs dois diagnósticos ruins.
   (1) "Não consegui gerar a trilha: O Treblo respondeu HTTP 200" — sucesso
   lido como erro. A API é ASSÍNCRONA e eu tinha deduzido resposta direta:

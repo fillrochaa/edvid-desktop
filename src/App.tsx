@@ -2377,9 +2377,11 @@ export function App() {
     void window.edvidDesktop.fulfillMusicRequests(directory)
       .then((result) => {
         if (result.done > 0) {
+          // O app já colocou o arquivo em public/ e ligou o soundtrack: o
+          // agente só precisa seguir. Pedir cópia falhou em uso real.
           void dispatchMessage(
-            'A trilha sonora pedida está pronta em edit/musica/. Copie o arquivo para edit/remotion/public/ e ligue soundtrack no edit-data.json com volume 0.0445.',
-            'Trilha pronta — aplicando na edição',
+            'A trilha sonora já está aplicada na edição pelo Edvid. Não copie arquivos nem mexa no soundtrack: apenas siga com o restante da edição e encerre o turno.',
+            'Trilha pronta',
           );
         }
       })
