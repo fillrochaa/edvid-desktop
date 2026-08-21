@@ -1213,6 +1213,20 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.16.4: o 401 da OpenAI com o Ollama selecionado CONTINUOU depois da
+  0.16.3 — e desta vez o culpado era o meu ciclo de vida, não o Codex. O
+  config gerado na máquina do fill saía com `model = "gpt-5.6-terra"` e sem
+  nenhuma seção de provedor, mesmo com o catálogo correto
+  (`chatProviderId: ollama`, chave salva). Motivo: trocar de motor derruba e
+  RECRIA o CodexAppServer, e o `setEngine` tinha sido aplicado na instância
+  ANTIGA — a nova nascia sem motor e escrevia o config padrão. O motor passou
+  a viver em variável de módulo (`codexEngine`), aplicada dentro de
+  `getCodexAppServer()`, então qualquer instância nasce configurada.
+  `npm run test:codex-engine` trava o config gerado: id prefixado,
+  `wire_api = "responses"`, chave FORA do arquivo (vai pelo ambiente), chave
+  de topo antes das seções e `setEngine` sinalizando mudança.
+  LIÇÃO: ler o artefato REAL na máquina do usuário (o config.toml gerado)
+  matou em um minuto um bug que duas rodadas de teoria não pegaram.
 - 0.16.3: o motor alternativo do chat NUNCA funcionou até aqui — o config era
   recusado inteiro e o Codex voltava calado para a OpenAI (o aluno via
   "401 Unauthorized ... api.openai.com/v1/responses" ao usar o Ollama). Duas

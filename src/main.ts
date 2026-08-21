@@ -2277,38 +2277,37 @@ function agentToolsEnvironment(): NodeJS.ProcessEnv {
 
 // O Codex (e o PATH de ferramentas que ele recebe) so pode ser construido
 // depois do pacote de runtimes: a resolucao acontece uma unica vez.
+// Motor do chat aplicado ao servidor. Fica em variavel de MODULO porque
+// trocar de motor recria o CodexAppServer: guardar so na instancia fazia o
+// servidor novo nascer sem motor — o config.toml saia sem [model_providers] e
+// o Codex voltava calado para a OpenAI (o aluno via 401 de api.openai.com com
+// o Ollama selecionado).
+type CodexEngine = { providerId: string; label: string; baseUrl: string; model: string; envKey: string } | null;
+let codexEngine: CodexEngine = null;
+let codexEngineEnvironment: NodeJS.ProcessEnv = {};
+
 async function codexServer(): Promise<CodexAppServer> {
   await requireRuntimePack();
-  const server = getCodexAppServer();
-  // Motor do chat pode ter mudado nas Configurações. O config.toml só é lido
-  // no start, então trocar exige derrubar o processo — barato, ele sobe de novo
-  // na próxima mensagem.
   const engine = await catalogChatEngine();
-  if (engine) {
-    codexEngineEnvironment = { [engine.envKey]: engine.apiKey };
-    if (server.setEngine({
+  const desired: CodexEngine = engine
+    ? {
       providerId: engine.providerId,
       label: engine.label,
       baseUrl: engine.baseUrl,
       model: engine.model,
       envKey: engine.envKey,
-    })) {
-      server.stop();
-      codexAppServer = null;
-      return getCodexAppServer();
     }
-  } else if (server.setEngine(null)) {
-    codexEngineEnvironment = {};
-    server.stop();
+    : null;
+  const changed = JSON.stringify(desired) !== JSON.stringify(codexEngine);
+  codexEngine = desired;
+  codexEngineEnvironment = engine ? { [engine.envKey]: engine.apiKey } : {};
+  // O config.toml so e lido no start: mudou o motor, o processo cai e sobe.
+  if (changed && codexAppServer) {
+    codexAppServer.stop();
     codexAppServer = null;
-    return getCodexAppServer();
   }
-  return server;
+  return getCodexAppServer();
 }
-
-// Chave do motor alternativo, injetada no ambiente do processo do Codex — é
-// de lá que ele lê o `env_key` declarado em [model_providers].
-let codexEngineEnvironment: NodeJS.ProcessEnv = {};
 
 function getCodexAppServer(): CodexAppServer {
   if (codexAppServer) return codexAppServer;
@@ -2324,6 +2323,7 @@ function getCodexAppServer(): CodexAppServer {
     { ...agentToolsEnvironment(), ...codexEngineEnvironment },
     [cachePaths().root],
   );
+  codexAppServer.setEngine(codexEngine);
   return codexAppServer;
 }
 
