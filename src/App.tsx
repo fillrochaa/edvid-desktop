@@ -2006,6 +2006,9 @@ export function App() {
   const [aiRoles, setAiRoles] = useState<AiRolesState>({ chat: 'chatgpt', image: null, chatPinned: false, imagePinned: false });
   const [imageGen, setImageGen] = useState<ImageGenState>({ status: 'idle' });
   const [imageContinuationAt, setImageContinuationAt] = useState<number | null>(null);
+  // Cobrança da animação sob medida prometida e não escrita: uma por projeto.
+  const [customAnimationRequest, setCustomAnimationRequest] = useState<{ directory: string; labels: string[] } | null>(null);
+  const customAnimationChasedRef = useRef<Set<string>>(new Set());
   const [aiOnboardingDismissed, setAiOnboardingDismissed] = useState(false);
   const [claudeCode, setClaudeCode] = useState('');
   // Entrada de chave de API: qual provedor esta com o campo aberto.
@@ -2262,8 +2265,21 @@ export function App() {
   function requestPhase2Render() {
     const directory = activeProjectDirectoryRef.current;
     if (!directory) return;
-    // O andamento e o desfecho chegam por onPhase2RenderState.
-    void window.edvidDesktop.renderPhase2(directory).catch(() => {});
+    // Antes de renderizar: o agente prometeu uma animação sob medida (kind
+    // "custom") e não escreveu o componente? Renderizar agora gastaria minutos
+    // para entregar um vídeo sem ela. Cobra o turno que falta — uma vez por
+    // projeto, para nunca virar pingue-pongue — e o render vem depois dele.
+    void window.edvidDesktop.pendingCustomAnimations(directory).then((pendentes) => {
+      if (pendentes.length > 0 && !customAnimationChasedRef.current.has(directory)) {
+        customAnimationChasedRef.current.add(directory);
+        setCustomAnimationRequest({ directory, labels: pendentes });
+        return;
+      }
+      // O andamento e o desfecho chegam por onPhase2RenderState.
+      void window.edvidDesktop.renderPhase2(directory).catch(() => {});
+    }).catch(() => {
+      void window.edvidDesktop.renderPhase2(directory).catch(() => {});
+    });
   }
 
   function requestImageFulfillment() {
@@ -2875,6 +2891,24 @@ export function App() {
       'Imagens prontas — aplicando na edição',
     );
   }, [imageContinuationAt]);
+
+  // Animação sob medida prometida e não escrita: o agente marcou "custom" no
+  // edit-data.json e deixou o CustomGraphics.tsx intacto, então o vídeo sairia
+  // sem ela. O app cobra sozinho, com o rótulo que ele mesmo escreveu.
+  useEffect(() => {
+    if (!customAnimationRequest) return;
+    const { labels } = customAnimationRequest;
+    setCustomAnimationRequest(null);
+    const lista = labels.map((label) => `- ${label}`).join('\n');
+    void dispatchMessage(
+      [
+        'Você registrou como "custom" a(s) animação(ões) abaixo, mas o edit/remotion/src/CustomGraphics.tsx continua idêntico ao template — nenhum componente foi escrito, então elas não aparecem no vídeo:',
+        lista,
+        'Escreva agora o componente de cada uma no CustomGraphics.tsx, com exatamente o visual que o aluno descreveu (cores, tipografia, layout, tela cheia se foi pedido), monte no return do CustomGraphics dentro da janela registrada e mantenha o "kind": "custom" no edit-data.json. Não troque por um efeito pronto.',
+      ].join('\n'),
+      'Escrevendo a animação que faltou',
+    );
+  }, [customAnimationRequest]);
 
   // Onboarding da conexão de IA: logo depois do login do aluno, se nenhuma
   // IA estiver conectada, o Edvid oferece ChatGPT, Claude e Gemini. O clique

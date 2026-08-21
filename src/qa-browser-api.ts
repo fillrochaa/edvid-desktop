@@ -243,6 +243,7 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     fulfillImageRequests: async () => ({ status: 'idle' }),
     applyJcut: async () => ({ applied: true, cuts: 2, error: null }),
     syncJcut: async () => ({ changed: false }),
+    pendingCustomAnimations: async () => [],
     onImageGenState: (listener) => {
       // QA da geracao de imagens: ?imagens simula uma fila de tres pedidos.
       if (qaSearch().has('imagens')) {

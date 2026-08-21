@@ -1213,6 +1213,22 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.14.5: o agente aprendeu a MARCAR e não a ESCREVER. No projeto real ele
+  registrou `{"kind": "custom", "label": "Infográfico em tela cheia…"}` e
+  deixou o CustomGraphics.tsx byte a byte igual ao template — "custom" diz ao
+  template "o desenho vem do código", o código não existia, e a animação saiu
+  muda de novo (terceira variação do mesmo defeito: 1ª registrar sem desenhar,
+  2ª escolher preset em vez do visual pedido, 3ª prometer código e não
+  escrever). O app parou de confiar na promessa: `pendingCustomAnimations`
+  detecta "custom" + arquivo intacto e, ANTES de gastar um render, dispara uma
+  continuação automática cobrando o componente com o rótulo que o próprio
+  agente escreveu — mesmo mecanismo já usado quando as imagens ficam prontas.
+  A cobrança é uma por projeto (`customAnimationChasedRef`), para não virar
+  pingue-pongue, e se ainda assim o código não vier, `normalizeAnimations`
+  passa a tratar "custom" órfão como registro sem tipo e desenha um efeito
+  padrão — melhor pobre que invisível. LIÇÃO: quando um campo declara trabalho
+  que vive em OUTRO arquivo, o app precisa verificar o outro arquivo; promessa
+  declarativa não é entrega.
 - 0.14.4: os kinds prontos viraram uma armadilha — defeito que a 0.14.2
   introduziu. O aluno descreveu um visual ("animação em tela cheia, grid
   escuro, glassmorphism, destaque #ff5200, fontes tais") e o agente, em vez de

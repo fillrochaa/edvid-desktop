@@ -347,6 +347,9 @@ export type EdvidDesktopApi = {
   onImageGenState: (listener: (state: ImageGenState) => void) => () => void;
   applyJcut: (directory: string) => Promise<JcutApplyResult>;
   syncJcut: (directory: string) => Promise<JcutSyncResult>;
+  // Animacoes marcadas como "custom" que o agente prometeu escrever no
+  // CustomGraphics.tsx e nao escreveu. Devolve os rotulos pendentes.
+  pendingCustomAnimations: (directory: string) => Promise<string[]>;
   loginCodexWithApiKey: (apiKey: string) => Promise<CodexAccountState>;
   getClaudeAccount: () => Promise<ClaudeAccountState>;
   loginWithClaude: () => Promise<ClaudeAccountState>;

@@ -40,6 +40,7 @@ const api: EdvidDesktopApi = {
   fulfillImageRequests: (directory) => ipcRenderer.invoke('image:fulfill', { directory }),
   applyJcut: (directory) => ipcRenderer.invoke('jcut:apply', { directory }),
   syncJcut: (directory) => ipcRenderer.invoke('jcut:sync', { directory }),
+  pendingCustomAnimations: (directory) => ipcRenderer.invoke('animations:pending-custom', { directory }),
   onImageGenState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: ImageGenState) => listener(state);
     ipcRenderer.on('image-gen:state', handler);

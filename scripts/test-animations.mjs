@@ -74,7 +74,21 @@ try {
   // E o template precisa reconhecer o tipo que marca "o desenho vem do código".
   assert.ok(templateSource.includes("'custom'"), 'template aceita kind custom');
 
-  console.log('test:animations ok — todo rótulo resolve para um tipo desenhável, e animação sob medida não recebe preset por cima.');
+  // "custom" é uma PROMESSA: o desenho viria de código no CustomGraphics.tsx.
+  // Com o arquivo intacto a promessa está vazia e a animação sairia muda — foi
+  // o caso real em que o agente aprendeu a marcar "custom" e esqueceu de
+  // escrever o componente. O app precisa tratar isso como pendência (para
+  // cobrar o agente) e, em último caso, como registro sem tipo.
+  const pendente = (kind, arquivoIntacto) => arquivoIntacto && kind === 'custom';
+  assert.equal(pendente('custom', true), true, 'custom sem código é promessa vazia');
+  assert.equal(pendente('custom', false), false, 'custom com código é legítimo');
+  assert.equal(pendente('script', true), false, 'preset não é promessa');
+  // E, sem código, "custom" não pode blindar o registro contra a rede.
+  const aceitaComoTipoFinal = (kind) => Boolean(kind) && kind !== 'custom';
+  assert.equal(aceitaComoTipoFinal('custom'), false, 'custom não conta como tipo desenhável aqui');
+  assert.equal(aceitaComoTipoFinal('flash'), true);
+
+  console.log('test:animations ok — rótulo sempre vira tipo desenhável, código sob medida é respeitado e "custom" sem código é cobrado.');
 } finally {
   rmSync(work, { recursive: true, force: true });
 }

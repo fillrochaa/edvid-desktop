@@ -1803,6 +1803,29 @@ async function customGraphicsUntouched(publicDirectory: string): Promise<boolean
   }
 }
 
+// Promessa nao cumprida: o agente marcou a animacao como "custom" (o desenho
+// viria do codigo dele) e o CustomGraphics.tsx continua igual ao do template —
+// nenhuma linha escrita. O template respeita o "custom" e nao desenha nada,
+// entao a animacao sai muda. Aconteceu em maquina real logo depois de a
+// instrucao do "custom" existir: o agente aprendeu a marcar e esqueceu de
+// escrever. Devolve os rotulos pendentes para o app cobrar o turno seguinte.
+async function pendingCustomAnimations(projectDirectory: string): Promise<string[]> {
+  const publicDirectory = path.join(projectDirectory, 'edit', 'remotion', 'public');
+  if (!(await customGraphicsUntouched(publicDirectory))) return [];
+  try {
+    const document = JSON.parse(
+      await readFile(path.join(publicDirectory, 'edit-data.json'), 'utf8'),
+    ) as { animations?: unknown };
+    if (!Array.isArray(document.animations)) return [];
+    return document.animations
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+      .filter((animation) => asText(animation.kind) === 'custom')
+      .map((animation) => asText(animation.label) || 'animação sob medida');
+  } catch {
+    return [];
+  }
+}
+
 async function normalizeAnimations(publicDirectory: string): Promise<number> {
   // Rede de seguranca so vale para quem NAO escreveu codigo proprio.
   if (!(await customGraphicsUntouched(publicDirectory))) return 0;
@@ -1819,7 +1842,12 @@ async function normalizeAnimations(publicDirectory: string): Promise<number> {
   const normalized = animations.map((entry) => {
     if (!entry || typeof entry !== 'object') return entry;
     const animation = entry as Record<string, unknown>;
-    if (asText(animation.kind)) return animation;
+    const declared = asText(animation.kind);
+    // "custom" aqui é promessa vazia: chegamos neste ponto com o
+    // CustomGraphics.tsx intacto, então não existe código para desenhar. O app
+    // já cobrou o agente uma vez; se ainda assim não veio, vale mais um efeito
+    // padrão do que uma animação invisível.
+    if (declared && declared !== 'custom') return animation;
     const label = asText(animation.label);
     const kind = inferAnimationKind(label);
     fixed += 1;
@@ -3128,6 +3156,14 @@ function registerIpcHandlers(): void {
       throw new Error('Escolha a pasta do projeto pelo seletor do Edvid.');
     }
     return syncJcutForProject(directory);
+  });
+
+  ipcMain.handle('animations:pending-custom', (_event, input: { directory?: string }) => {
+    const directory = path.resolve(asText(input.directory));
+    if (!selectedProjectDirectories.has(directory)) {
+      throw new Error('Escolha a pasta do projeto pelo seletor do Edvid.');
+    }
+    return pendingCustomAnimations(directory);
   });
 
   ipcMain.handle('claude:account', () => getClaudeAgent().readAccount());
