@@ -22,6 +22,8 @@ export type RuntimeCheck = {
 export type DesktopInfo = {
   platform: NodeJS.Platform;
   arch: string;
+  // Mostrada em Configurações → Geral, ao lado de "Verificar atualização".
+  appVersion: string;
   electronVersion: string;
   embeddedNodeVersion: string;
 };
@@ -399,6 +401,11 @@ export type EdvidDesktopApi = {
   connectCatalogProvider: (id: string, fields: Record<string, string>) => Promise<CatalogState>;
   disconnectCatalogProvider: (id: string) => Promise<CatalogState>;
   setCatalogFreeOnly: (freeOnly: boolean) => Promise<CatalogState>;
+  // Valida a credencial ANTES de salvar, contra a API do provedor.
+  testCatalogProvider: (
+    id: string,
+    fields: Record<string, string>,
+  ) => Promise<{ ok: boolean; detail: string }>;
   onAiCatalog: (listener: (state: CatalogState) => void) => () => void;
   onActiveModel: (listener: (state: ActiveModelState) => void) => () => void;
   saveTimelineModel: (
@@ -417,6 +424,8 @@ export type EdvidDesktopApi = {
   scaffoldRemotionProject: (directory: string) => Promise<void>;
   getSourceWaveform: (mediaUrl: string) => Promise<SourceWaveform | null>;
   installAppUpdate: () => Promise<void>;
+  // Procura atualização sob demanda (o app já checa sozinho no boot).
+  checkForUpdates: () => Promise<AppUpdateState>;
   onAppUpdateState: (listener: (state: AppUpdateState) => void) => () => void;
   getMemberAuth: () => Promise<MemberAuthState>;
   memberLogin: (email: string, password: string) => Promise<MemberAuthState>;

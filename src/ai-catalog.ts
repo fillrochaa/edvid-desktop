@@ -29,11 +29,21 @@ export type AiCredentialField = {
   placeholder?: string;
 };
 
+// Como o aluno entra. "login" e o fluxo pelo navegador com a conta que ele ja
+// paga; "apikey" e a chave colada. Hoje so ChatGPT e Claude tem login.
+export type AiAuthMode = 'login' | 'apikey';
+
 export type AiCatalogEntry = {
   id: string;
   name: string;
   capabilities: AiCapability[];
   pricing: AiPricing;
+  // Formas de conexao oferecidas no modal, na ordem em que aparecem.
+  auth: AiAuthMode[];
+  // Provedores que o aplicativo ja conduzia antes do catalogo (ChatGPT, Claude
+  // e Gemini): a conexao deles tem fluxo proprio no main, mas o CARD e o modal
+  // sao os mesmos dos demais — era isso que fazia a tela ter duas listas.
+  builtIn?: 'chatgpt' | 'claude' | 'gemini';
   // Pagina onde o aluno cria a chave. O catalogo leva ele ate la.
   keyUrl: string;
   credentials: AiCredentialField[];
@@ -44,11 +54,50 @@ export type AiCatalogEntry = {
 };
 
 export const AI_CATALOG: AiCatalogEntry[] = [
+  // Os tres primeiros ja existiam como "Conexao de IA"; entraram no catalogo
+  // para a tela ter UMA lista so, com o mesmo card e o mesmo modal.
+  {
+    id: 'chatgpt',
+    name: 'ChatGPT',
+    capabilities: ['texto', 'imagem'],
+    pricing: 'mixed',
+    auth: ['login', 'apikey'],
+    builtIn: 'chatgpt',
+    keyUrl: 'https://platform.openai.com/api-keys',
+    credentials: [{ key: 'apiKey', label: 'Chave de API', secret: true }],
+    models: [],
+    note: 'Entrando com a assinatura, as imagens saem da cota do plano; por chave, são cobradas por imagem.',
+  },
+  {
+    id: 'claude',
+    name: 'Claude',
+    capabilities: ['texto'],
+    pricing: 'mixed',
+    auth: ['login', 'apikey'],
+    builtIn: 'claude',
+    keyUrl: 'https://console.anthropic.com/settings/keys',
+    credentials: [{ key: 'apiKey', label: 'Chave de API', secret: true }],
+    models: [],
+    note: 'Conduz a conversa e a edição. Não gera imagens.',
+  },
+  {
+    id: 'gemini',
+    name: 'Gemini',
+    capabilities: ['texto', 'imagem'],
+    pricing: 'mixed',
+    auth: ['apikey'],
+    builtIn: 'gemini',
+    keyUrl: 'https://aistudio.google.com/apikey',
+    credentials: [{ key: 'apiKey', label: 'Chave de API', secret: true }],
+    models: [],
+    note: 'Chave criada no Google AI Studio, com limite diário na camada gratuita.',
+  },
   {
     id: 'cloudflare',
     name: 'Cloudflare Workers AI',
     capabilities: ['imagem', 'texto'],
     pricing: 'free',
+    auth: ['apikey'],
     keyUrl: 'https://dash.cloudflare.com/profile/api-tokens',
     credentials: [
       { key: 'accountId', label: 'Account ID', secret: false, placeholder: 'ID da conta Cloudflare' },
@@ -64,6 +113,7 @@ export const AI_CATALOG: AiCatalogEntry[] = [
     name: 'Ollama Cloud',
     capabilities: ['texto'],
     pricing: 'mixed',
+    auth: ['apikey'],
     keyUrl: 'https://ollama.com/settings/keys',
     credentials: [{ key: 'apiKey', label: 'Chave de API', secret: true }],
     models: [
@@ -82,6 +132,7 @@ export const AI_CATALOG: AiCatalogEntry[] = [
     name: 'OpenRouter',
     capabilities: ['texto', 'imagem'],
     pricing: 'mixed',
+    auth: ['apikey'],
     keyUrl: 'https://openrouter.ai/keys',
     credentials: [{ key: 'apiKey', label: 'Chave de API', secret: true }],
     models: [

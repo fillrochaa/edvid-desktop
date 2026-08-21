@@ -1213,6 +1213,29 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.16.0: ajuste fino de UI/UX pedido pelo fill. (1) Configurações viraram
+  PÁGINA (era modal): a tela vai crescer com mais IAs, MCPs e preferências, e
+  um modal de 440px já apertava. Seção Geral no topo (aluno, versão do app e
+  "Verificar atualização" — novo IPC `update:check`), depois Conexões de IA,
+  Dependências e MCPs. (2) UMA lista só de IAs: antes havia "Conexão de IA"
+  (ChatGPT/Claude/Gemini, um formato) e "Catálogo de IAs" (o resto, outro
+  formato) para a mesma coisa. Os três provedores antigos entraram no
+  `AI_CATALOG` com `builtIn` e `auth: ['login','apikey']`; o card é o mesmo
+  para todos — logo, nome, estado e badges — e o botão único abre um modal por
+  IA com "Entrar com a conta" (só quem tem login) e "Chave de API" com botão
+  TESTAR, que valida a credencial contra a API do provedor antes de salvar
+  (`ai-catalog:test`; na Cloudflare confere Account ID junto). O toggle de
+  "apenas gratuitos" mora nesse modal. O parágrafo longo sobre assinatura vs
+  chave saiu — a informação virou a `note` de cada card. (3) Seletores do chat
+  passam a usar ÍCONE do papel (chat/imagem) em vez da palavra, e listam
+  também as IAs do catálogo conectadas. QA visual: `?catalogo`.
+  Descoberta sobre a página de sucesso do login do ChatGPT ("Open Codex"): ela
+  é servida pelo PRÓPRIO codex-app-server, com HTML embutido no binário
+  (títulos "Signed in to Codex" / "You're signed in and may close this tab"),
+  então não dá para editar sem alterar um binário que é verificado por sha256.
+  Alternativa real, ainda não feita: abrir o login numa BrowserWindow do
+  Electron e fechá-la ao detectar o callback — resolve de vez, mas arrisca o
+  provedor recusar login em janela embutida.
 - 0.15.0: CATÁLOGO DE IAs (primeira fatia: imagem). Ideia trazida pelo fill a
   partir do OmniRoute: em vez de três contas fixas, o aluno conecta os
   provedores que tiver — de preferência os de camada gratuita — e o Edvid

@@ -69,6 +69,8 @@ const api: EdvidDesktopApi = {
     return () => ipcRenderer.removeListener('gemini:account', handler);
   },
   getAiCatalog: () => ipcRenderer.invoke('ai-catalog:read'),
+  testCatalogProvider: (id, fields) => ipcRenderer.invoke('ai-catalog:test', { id, fields }),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
   connectCatalogProvider: (id, fields) => ipcRenderer.invoke('ai-catalog:connect', { id, fields }),
   disconnectCatalogProvider: (id) => ipcRenderer.invoke('ai-catalog:disconnect', { id }),
   setCatalogFreeOnly: (freeOnly) => ipcRenderer.invoke('ai-catalog:free-only', { freeOnly }),

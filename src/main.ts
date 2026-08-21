@@ -3179,6 +3179,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('desktop:get-info', () => ({
     platform: process.platform,
     arch: process.arch,
+    appVersion: app.getVersion(),
     electronVersion: process.versions.electron,
     embeddedNodeVersion: process.versions.node,
   }));
@@ -3491,6 +3492,48 @@ function registerIpcHandlers(): void {
     broadcastCatalog(state);
     return state;
   });
+
+  // Testa a credencial contra a API do provedor ANTES de salvar. Uma chamada
+  // barata que devolve "ok" ou o motivo — melhor que o aluno descobrir que
+  // colou errado só quando a edição precisar da imagem.
+  ipcMain.handle(
+    'ai-catalog:test',
+    async (_event, input: { id?: string; fields?: Record<string, string> }) => {
+      const entry = catalogEntry(asText(input.id));
+      if (!entry) return { ok: false, detail: 'Provedor desconhecido.' };
+      const fields = input.fields ?? {};
+      const apiKey = asText(fields.apiKey);
+      if (!apiKey) return { ok: false, detail: 'Informe a chave.' };
+      try {
+        if (entry.id === 'cloudflare') {
+          const accountId = asText(fields.accountId);
+          if (!accountId) return { ok: false, detail: 'Informe o Account ID.' };
+          const response = await net.fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/models/search?per_page=1`,
+            { headers: { Authorization: `Bearer ${apiKey}` } },
+          );
+          if (response.ok) return { ok: true, detail: 'Chave e Account ID válidos.' };
+          return {
+            ok: false,
+            detail: response.status === 403 || response.status === 401
+              ? 'Chave ou Account ID recusados pela Cloudflare.'
+              : `A Cloudflare respondeu HTTP ${response.status}.`,
+          };
+        }
+        const url = entry.id === 'ollama'
+          ? 'https://ollama.com/api/tags'
+          : 'https://openrouter.ai/api/v1/key';
+        const response = await net.fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+        if (response.ok) return { ok: true, detail: 'Chave válida.' };
+        return {
+          ok: false,
+          detail: response.status === 401 ? 'Chave recusada pelo provedor.' : `O provedor respondeu HTTP ${response.status}.`,
+        };
+      } catch (error) {
+        return { ok: false, detail: error instanceof Error ? error.message : 'Falha ao falar com o provedor.' };
+      }
+    },
+  );
 
   ipcMain.handle('ai-catalog:free-only', async (_event, input: { freeOnly?: boolean }) => {
     const stored = await readStoredCatalog();
@@ -3887,6 +3930,22 @@ function setupAutoUpdate(): void {
 registerIpcHandlers();
 ipcMain.handle('update:install', () => {
   if (appUpdateState.status === 'ready') autoUpdater.quitAndInstall();
+});
+
+// Procura atualizacao sob demanda (Configuracoes → Geral). O app ja checa no
+// boot; este botao existe para quem quer conferir na hora. Em desenvolvimento
+// o autoUpdater nao roda, entao devolve o estado atual sem tentar.
+ipcMain.handle('update:check', async () => {
+  if (!app.isPackaged) return appUpdateState;
+  try {
+    autoUpdater.checkForUpdates();
+    // O resultado chega pelos eventos do autoUpdater; espera curta para o
+    // caso comum de "ja esta atualizado" responder na mesma interacao.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+  } catch {
+    // Sem rede ou canal indisponivel: o estado atual ja diz o que da.
+  }
+  return appUpdateState;
 });
 ipcMain.handle('member:get', () => memberAuthState);
 ipcMain.handle('member:login', (_event, input: { email?: string; password?: string }) =>

@@ -215,6 +215,7 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     getDesktopInfo: async () => ({
       platform: 'darwin',
       arch: 'arm64',
+      appVersion: '0.16.0-qa',
       electronVersion: 'QA',
       embeddedNodeVersion: 'QA',
     }),
@@ -356,6 +357,12 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     // Catálogo de IAs no QA visual: "?catalogo" já abre com o Cloudflare
     // conectado, para conferir badges, máscara da chave e o botão de remover.
     getAiCatalog: async () => qaCatalog,
+    testCatalogProvider: async (_id, fields) => (
+      (fields.apiKey ?? '').trim().length >= 8
+        ? { ok: true, detail: 'Chave válida (QA).' }
+        : { ok: false, detail: 'Chave curta demais para ser válida.' }
+    ),
+    checkForUpdates: async () => ({ status: 'idle' }),
     connectCatalogProvider: async (id, fields) => {
       const secret = Object.entries(fields).find(([key]) => key.toLowerCase().includes('key'));
       emitCatalog({
