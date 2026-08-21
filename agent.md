@@ -1213,6 +1213,20 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.14.7: whoosh -60% e o render que começava sozinho. (1) O SFX de entrada
+  das animações chamava mais atenção que a animação: virou a constante
+  `WHOOSH_VOLUME` (0,036, era 0,09 e 0,1 em alguns pontos) usada por TODOS os
+  whooshes; pop e clique do corte ficaram como estavam. (2) Abrir o Edvid ou
+  trocar de projeto disparava um render inteiro do nada — `activateWorkspace`
+  chama `requestPhase2Render` de propósito (cobre dados que ficaram prontos
+  com o app fechado), e a impressão digital DEVERIA evitar o trabalho. Só que
+  ela era `tamanho:mtime` e o app reescreve arquivos por conta própria: o
+  scaffold reaplica o CustomGraphics.tsx DEPOIS do fingerprint ser calculado,
+  então a digital gravada no carimbo já nascia velha e nunca batia. Agora a
+  digital é o SHA do CONTEÚDO (só o cut.mp4, de centenas de MB, segue por
+  tamanho+data): reescrever igual é invisível, mudança real ainda dispara.
+  `npm run test:fingerprint` cobre os dois lados. Mesma família de defeito da
+  0.14.6 — o app mexendo em arquivo do agente sem se dar conta.
 - 0.14.6: A CAUSA RAIZ das animações que nunca apareciam — e não era o
   agente. O `scaffoldRemotionProject` roda ANTES de cada render ("reaplica o
   template para que correções em src/ cheguem aos projetos montados") e

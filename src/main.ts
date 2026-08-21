@@ -1798,8 +1798,20 @@ async function phase2Fingerprint(publicDirectory: string): Promise<string | null
   ];
   for (const [name, filePath] of inputs) {
     try {
-      const info = await stat(filePath);
-      parts.push(`${name}:${info.size}:${Math.floor(info.mtimeMs)}`);
+      if (name === 'cut.mp4') {
+        // Video de centenas de MB: tamanho + data bastam, e ninguem o
+        // reescreve com o mesmo conteudo (o J-Cut muda os dois).
+        const info = await stat(filePath);
+        parts.push(`${name}:${info.size}:${Math.floor(info.mtimeMs)}`);
+        continue;
+      }
+      // CONTEUDO, nao data. O app reescreve estes arquivos por conta propria
+      // (o scaffold reaplica o CustomGraphics.tsx, a normalizacao regrava o
+      // edit-data.json), e com mtime a impressao digital nunca batia com a
+      // gravada: bastava abrir o aplicativo ou trocar de projeto para um
+      // render inteiro comecar do nada. Pelo conteudo, reescrever igual e
+      // invisivel e so mudanca de verdade dispara render.
+      parts.push(`${name}:${createHash('sha256').update(await readFile(filePath)).digest('hex')}`);
     } catch {
       parts.push(`${name}:ausente`);
     }

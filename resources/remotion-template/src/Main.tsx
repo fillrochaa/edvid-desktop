@@ -9,7 +9,7 @@
  *
  * The ONE editable file is CustomGraphics.tsx — bespoke motion graphics only.
  *
- * Audio: keep layers low (whoosh ~0.09, pop ~0.12, music ~0.0445) and always run
+ * Audio: keep layers low (whoosh WHOOSH_VOLUME, pop ~0.12, music ~0.0445) and always run
  * a final loudnorm pass on the render — voice + music + SFX summed will clip.
  */
 import {
@@ -120,7 +120,7 @@ export type EditData = {
     start: number;
     end: number;
     label?: string;
-    kind?: 'flash' | 'timeline' | 'script' | 'shapes';
+    kind?: 'flash' | 'timeline' | 'script' | 'shapes' | 'custom';
     lines?: string[];
     intensity?: number;
   }[];
@@ -145,8 +145,13 @@ export const EDVID_ACCENT = '#ff5200';
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const clamp01 = (v: number) => clamp(v, 0, 1);
 
+// Volume unico do whoosh de entrada. Era 0,09 (e 0,1 em alguns pontos) e
+// chamava atencao mais que a propria animacao; o pedido foi -60%, para ficar
+// sutil ao fundo. Mexer aqui muda TODOS os whooshes de uma vez.
+export const WHOOSH_VOLUME = 0.036;
+
 // SFX played at an appearance (whoosh) or a pop for shapes
-export const Sfx: React.FC<{src: string; volume?: number}> = ({src, volume = 0.09}) => (
+export const Sfx: React.FC<{src: string; volume?: number}> = ({src, volume = WHOOSH_VOLUME}) => (
   <Audio src={staticFile(`sfx/${src}`)} volume={volume} />
 );
 
@@ -621,7 +626,7 @@ const HookInner: React.FC<{totalFrames: number}> = ({totalFrames}) => {
   if (styleId === 'realce') {
     return (
       <AbsoluteFill style={{justifyContent: 'flex-start', alignItems: 'center', paddingTop: top}}>
-        <Sfx src="whoosh.mp3" volume={0.1} />
+        <Sfx src="whoosh.mp3" volume={WHOOSH_VOLUME} />
         <div style={{...shell, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10}}>
           {lines.filter(Boolean).map((l, i) => (
             <div
@@ -647,7 +652,7 @@ const HookInner: React.FC<{totalFrames: number}> = ({totalFrames}) => {
   if (styleId === 'misto') {
     return (
       <AbsoluteFill style={{justifyContent: 'flex-start', alignItems: 'center', paddingTop: top}}>
-        <Sfx src="whoosh.mp3" volume={0.1} />
+        <Sfx src="whoosh.mp3" volume={WHOOSH_VOLUME} />
         <div style={{...shell, filter: 'drop-shadow(0 6px 16px rgba(0,0,0,0.55))'}}>
           <div style={{fontWeight: 400, fontSize: size, color: '#fff'}}>{lines[0]}</div>
           <div style={{fontWeight: 900, fontSize: size, color: accent}}>{lines[1]}</div>
@@ -659,7 +664,7 @@ const HookInner: React.FC<{totalFrames: number}> = ({totalFrames}) => {
   if (styleId === 'card') {
     return (
       <AbsoluteFill style={{justifyContent: 'flex-start', alignItems: 'center', paddingTop: top}}>
-        <Sfx src="whoosh.mp3" volume={0.1} />
+        <Sfx src="whoosh.mp3" volume={WHOOSH_VOLUME} />
         <div style={{opacity: op, translate: `0px ${y}px`, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 28}}>
           {H.logo || H.sign ? (
             <div style={{display: 'flex', alignItems: 'center', gap: 34}}>
@@ -678,7 +683,7 @@ const HookInner: React.FC<{totalFrames: number}> = ({totalFrames}) => {
   const stroke = H.strokePx ?? 7;
   return (
     <AbsoluteFill style={{justifyContent: 'flex-start', alignItems: 'center', paddingTop: top}}>
-      <Sfx src="whoosh.mp3" volume={0.1} />
+      <Sfx src="whoosh.mp3" volume={WHOOSH_VOLUME} />
       <div
         style={{
           ...shell,
