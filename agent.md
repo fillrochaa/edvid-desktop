@@ -1213,6 +1213,21 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.17.2: primeira trilha pedida de verdade expôs dois diagnósticos ruins.
+  (1) "Não consegui gerar a trilha: O Treblo respondeu HTTP 200" — sucesso
+  lido como erro. A API é ASSÍNCRONA e eu tinha deduzido resposta direta:
+  `POST /v1/generations/v3` devolve `{task_id}`, e a música sai em
+  `GET /v1/generations/{task_id}` no campo `song_paths` (sondado: esses
+  caminhos respondem 400 e os sem `/v1` respondem 404). Agora o app aguarda a
+  composição (janela de 5 min, consulta a cada 4 s), entende status de falha e
+  baixa o arquivo — as URLs expiram em uma semana, então guardar localmente é
+  obrigatório. (2) "O render da edição estilizada falhou: at
+  process.processTicksAndRejections" — a mensagem vinha da ÚLTIMA linha do
+  stderr, que quase sempre é quadro de pilha. `renderFailureMessage` passa a
+  descartar pilha, preferir a linha que nomeia o erro e cortar despejo de
+  bundler; `npm run test:render-message` trava isso com o stderr real do caso.
+  LIÇÃO: quando a integração é nova, o formato da resposta é suposição até
+  alguém rodar — e a mensagem de erro precisa ser boa JUSTAMENTE aí.
 - 0.17.1: "não consigo gerar ou compor arquivos de áudio" — o agente recusou a
   trilha porque a instrução dela morava só no BRIEFING DE ESTILOS, enviado
   quando o aluno aplica os estilos. Pedindo direto no chat, o agente não tinha

@@ -1936,6 +1936,22 @@ async function normalizeAnimations(publicDirectory: string): Promise<number> {
   return fixed;
 }
 
+// A ultima linha do stderr costuma ser stack trace ("at process.
+// processTicksAndRejections ..."), que nao diz NADA ao aluno — foi o que ele
+// viu quando o render falhou. Aqui a escolha e pela linha que informa:
+// descarta quadros de pilha e prefere a que nomeia o erro.
+export function renderFailureMessage(stderr: string, code: number | null): string {
+  const lines = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^at\s/u.test(line) && !/^\{|^\}/u.test(line));
+  const named = [...lines].reverse().find((line) => /error|erro|failed|falhou|cannot|not found|missing/iu.test(line));
+  const chosen = named ?? lines.at(-1);
+  if (!chosen) return `O render terminou com código ${code ?? 'desconhecido'} e não deixou mensagem.`;
+  // Mensagens do bundler vêm gigantes; o aluno lê a primeira frase útil.
+  return chosen.length > 240 ? `${chosen.slice(0, 240)}…` : chosen;
+}
+
 function renderPhase2(projectDirectory: string): Promise<Phase2RenderState> {
   if (phase2Job) {
     // Um render por vez. Para outro projeto, devolve o andamento atual sem
@@ -2049,14 +2065,7 @@ function renderPhase2(projectDirectory: string): Promise<Phase2RenderState> {
       child.on('error', rejectRender);
       child.on('close', (code) => {
         if (code === 0) resolveRender();
-        else {
-          const lastLine = stderrTail
-            .trim()
-            .split(/\r?\n/)
-            .filter((line) => line.trim())
-            .at(-1);
-          rejectRender(new Error(lastLine || `Render falhou (${code}).`));
-        }
+        else rejectRender(new Error(renderFailureMessage(stderrTail, code)));
       });
     });
 
@@ -2949,7 +2958,10 @@ async function fulfillMusicRequests(projectDirectory: string): Promise<{ done: n
   let done = 0;
   for (const request of requests) {
     try {
-      const response = await net.fetch('https://api.treblo.com/v1/generations/v3', {
+      // A API do Treblo e ASSINCRONA: o POST devolve um task_id e a musica
+      // fica pronta depois. A primeira versao esperava a URL na resposta e
+      // falhava com "respondeu HTTP 200" — sucesso lido como erro.
+      const start = await net.fetch('https://api.treblo.com/v1/generations/v3', {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2957,20 +2969,42 @@ async function fulfillMusicRequests(projectDirectory: string): Promise<{ done: n
           ...(request.duracao ? { duration: Math.round(request.duracao) } : {}),
         }),
       });
-      const payload = (await response.json().catch(() => null)) as
-        | { detail?: string; audio_url?: string; url?: string; song?: { audio_url?: string } }
+      const started = (await start.json().catch(() => null)) as
+        | { task_id?: string; detail?: string }
         | null;
-      const audioUrl = payload?.audio_url ?? payload?.url ?? payload?.song?.audio_url ?? null;
-      if (!response.ok || !audioUrl) {
-        throw new Error(payload?.detail ?? `O Treblo respondeu HTTP ${response.status}.`);
+      if (!start.ok || !started?.task_id) {
+        throw new Error(started?.detail ?? `o Treblo respondeu HTTP ${start.status} ao receber o pedido`);
       }
+
+      // Espera a composicao ficar pronta. Limite generoso: a documentacao fala
+      // em ~15 s para o primeiro audio, mas a musica inteira demora mais.
+      const deadline = Date.now() + 5 * 60_000;
+      let audioUrl: string | null = null;
+      let lastStatus = 'iniciando';
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 4_000));
+        const poll = await net.fetch(`https://api.treblo.com/v1/generations/${encodeURIComponent(started.task_id)}`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+        const payload = (await poll.json().catch(() => null)) as
+          | { status?: string; song_paths?: string[]; detail?: string }
+          | null;
+        lastStatus = asText(payload?.status) || lastStatus;
+        const path0 = payload?.song_paths?.find((item) => asText(item));
+        if (path0) { audioUrl = path0; break; }
+        if (/fail|error|cancel/iu.test(lastStatus)) {
+          throw new Error(`o Treblo encerrou a composição com status "${lastStatus}"`);
+        }
+      }
+      if (!audioUrl) throw new Error(`a composição não ficou pronta a tempo (último status: ${lastStatus})`);
+
       const audio = await net.fetch(audioUrl);
-      if (!audio.ok) throw new Error('Não consegui baixar a trilha gerada.');
+      if (!audio.ok) throw new Error('não consegui baixar a trilha gerada');
       await writeFile(path.join(musicDirectory, request.arquivo), Buffer.from(await audio.arrayBuffer()));
       done += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      broadcastCodexEvent({ type: 'error', message: `Não consegui gerar a trilha: ${message}` });
+      broadcastCodexEvent({ type: 'error', message: `Não consegui gerar a trilha: ${message}.` });
       return { done, error: message };
     }
   }
