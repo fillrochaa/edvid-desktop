@@ -1679,11 +1679,55 @@ async function scaffoldRemotionProject(projectDirectory: string): Promise<void> 
   const template = remotionTemplateDirectory();
   const destination = path.join(projectDirectory, 'edit', 'remotion');
   await mkdir(destination, { recursive: true });
+
+  // O CustomGraphics.tsx e o UNICO arquivo de src/ que o agente escreve — e
+  // era apagado aqui a cada render, porque src/ inteiro vinha com force:true.
+  // O agente escrevia a animacao sob medida, o app restaurava o template
+  // logo antes de renderizar e o video saia sem ela; o arquivo terminava
+  // identico ao template, o que fazia parecer que o agente nao tinha feito
+  // nada. Defeito de origem das animacoes que "nunca apareciam".
+  // O carimbo guarda o sha do TEMPLATE aplicado por ultimo: se o arquivo do
+  // projeto ainda bate com ele, ninguem editou e vale atualizar para o
+  // template novo; se difere, e trabalho do agente e fica de pe.
+  const editableRelative = path.join('src', 'CustomGraphics.tsx');
+  const projectEditable = path.join(destination, editableRelative);
+  const stampFile = path.join(destination, '.edvid-scaffold.json');
+  const templateEditableSource = await readFile(path.join(template, editableRelative), 'utf8')
+    .catch(() => null);
+  const sha = (value: string) => createHash('sha256').update(value).digest('hex');
+  let preservedEditable: string | null = null;
+  const currentEditable = await readFile(projectEditable, 'utf8').catch(() => null);
+  if (currentEditable !== null && templateEditableSource !== null) {
+    let appliedSha: string | null = null;
+    try {
+      const stamp = JSON.parse(await readFile(stampFile, 'utf8')) as { customGraphicsSha?: unknown };
+      appliedSha = asText(stamp.customGraphicsSha) || null;
+    } catch {
+      // Projeto montado antes do carimbo existir: compara com o template.
+    }
+    const untouched = appliedSha
+      ? sha(currentEditable) === appliedSha
+      : currentEditable === templateEditableSource;
+    if (!untouched) preservedEditable = currentEditable;
+  }
+
   for (const entry of ['src', 'remotion.config.ts', 'tsconfig.json', 'package.json']) {
     await cp(path.join(template, entry), path.join(destination, entry), {
       recursive: true,
       force: true,
     });
+  }
+
+  if (preservedEditable !== null) {
+    // Devolve o trabalho do agente por cima da copia do template. O carimbo
+    // NAO e atualizado: o arquivo segue diferente do template aplicado, entao
+    // continuara preservado nos proximos renders.
+    await writeFile(projectEditable, preservedEditable);
+  } else if (templateEditableSource !== null) {
+    await writeFile(
+      stampFile,
+      `${JSON.stringify({ customGraphicsSha: sha(templateEditableSource) }, null, 2)}\n`,
+    ).catch(() => {});
   }
   // public/ guarda os dados da edicao: nunca sobrescrever o que ja existe.
   await cp(path.join(template, 'public'), path.join(destination, 'public'), {
@@ -1792,11 +1836,21 @@ async function customGraphicsUntouched(publicDirectory: string): Promise<boolean
   const projectFile = path.join(publicDirectory, '..', 'src', 'CustomGraphics.tsx');
   const templateFile = path.join(remotionTemplateDirectory(), 'src', 'CustomGraphics.tsx');
   try {
-    const [projectSource, templateSource] = await Promise.all([
-      readFile(projectFile, 'utf8'),
-      readFile(templateFile, 'utf8'),
-    ]);
-    return projectSource === templateSource;
+    const projectSource = await readFile(projectFile, 'utf8');
+    // Mesma referencia que o scaffold usa: o sha do template aplicado. Sem o
+    // carimbo (projeto antigo), compara com o template atual.
+    try {
+      const stamp = JSON.parse(
+        await readFile(path.join(publicDirectory, '..', '.edvid-scaffold.json'), 'utf8'),
+      ) as { customGraphicsSha?: unknown };
+      const appliedSha = asText(stamp.customGraphicsSha);
+      if (appliedSha) {
+        return createHash('sha256').update(projectSource).digest('hex') === appliedSha;
+      }
+    } catch {
+      // Sem carimbo: cai na comparacao direta.
+    }
+    return projectSource === (await readFile(templateFile, 'utf8'));
   } catch {
     // Sem conseguir comparar, o mais seguro e nao mexer no registro.
     return false;

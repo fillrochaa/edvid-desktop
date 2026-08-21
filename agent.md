@@ -1213,6 +1213,32 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.14.6: A CAUSA RAIZ das animações que nunca apareciam — e não era o
+  agente. O `scaffoldRemotionProject` roda ANTES de cada render ("reaplica o
+  template para que correções em src/ cheguem aos projetos montados") e
+  copiava `src/` inteiro com `force: true`. Junto ia o CustomGraphics.tsx, que
+  o cabeçalho do próprio template chama de "The ONE editable file" — o único
+  arquivo que o agente escreve. Ciclo do desastre: o agente escrevia a
+  animação, o app restaurava o template segundos depois, o render saía sem
+  ela e o arquivo terminava idêntico ao template, o que fazia parecer que o
+  agente não tinha feito nada. Foi o que me levou a diagnosticar errado três
+  vezes seguidas (0.14.2/0.14.4/0.14.5 trataram sintomas: registro sem tipo,
+  preset no lugar do visual, promessa sem código). `public/` já tinha a
+  proteção `force: false` com comentário "nunca sobrescrever o que já existe";
+  `src/` não tinha. Correção: carimbo `.edvid-scaffold.json` com o sha do
+  TEMPLATE aplicado — se o arquivo do projeto ainda bate com ele, ninguém
+  editou e o template novo entra; se difere, é trabalho do agente e fica de
+  pé (o carimbo não é atualizado, então segue preservado nos próximos
+  renders). `customGraphicsUntouched` passou a usar o mesmo carimbo.
+  `npm run test:scaffold` reproduz o defeito antigo (arquivo volta ao
+  template), prova a correção sobrevivendo a três renders seguidos e garante
+  que projeto intocado ainda recebe atualização. Prova visual: componente sob
+  medida (grid escuro + #ff5200 em tela cheia) escrito, passado pelo scaffold
+  e RENDERIZADO no frame 225 do projeto real.
+  LIÇÃO GRANDE: quando o agente jura que fez e o arquivo diz que não, suspeite
+  do APP antes do agente — havia um processo do próprio Edvid apagando o
+  trabalho dele. E toda pasta que o agente escreve precisa de política
+  explícita de sobrescrita, como `public/` já tinha.
 - 0.14.5: o agente aprendeu a MARCAR e não a ESCREVER. No projeto real ele
   registrou `{"kind": "custom", "label": "Infográfico em tela cheia…"}` e
   deixou o CustomGraphics.tsx byte a byte igual ao template — "custom" diz ao
