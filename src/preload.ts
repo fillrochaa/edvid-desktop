@@ -74,6 +74,7 @@ const api: EdvidDesktopApi = {
   connectCatalogProvider: (id, fields) => ipcRenderer.invoke('ai-catalog:connect', { id, fields }),
   disconnectCatalogProvider: (id) => ipcRenderer.invoke('ai-catalog:disconnect', { id }),
   setCatalogFreeOnly: (freeOnly) => ipcRenderer.invoke('ai-catalog:free-only', { freeOnly }),
+  setCatalogChatProvider: (id) => ipcRenderer.invoke('ai-catalog:chat-provider', { id }),
   onAiCatalog: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: CatalogState) => listener(state);
     ipcRenderer.on('ai-catalog:state', handler);

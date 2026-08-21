@@ -732,3 +732,58 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .settings-page .account-action:hover,
 .connect-modal .account-action:hover { border-color: rgba(255,119,19,.5); background: rgba(255,255,255,.05); }
 .settings-page a.account-action { text-decoration: none; display: inline-block; }
+
+/* --- Refino dos cards e do modal de conexão (0.16.1) --------------------- */
+/* Card mais baixo: ícone de capacidade no lugar de etiqueta escrita. */
+.capability-icons { display: flex; gap: 8px; }
+.capability { display: grid; place-items: center; color: var(--dim); }
+.capability svg { width: 14px; height: 14px; }
+.ai-card { padding: 11px 12px; gap: 7px; }
+.ai-card-head img { width: 22px; height: 22px; }
+.ai-card-head strong { font-size: 13px; }
+.ai-card-head small { font-size: 11px; }
+.connected-label { color: #4fd08b; }
+.settings-page .ai-card .account-action { padding: 5px 10px; font-size: 10px; }
+
+/* Campo de chave com o teste colado e a lixeira dentro, na ponta direita. */
+.key-field { position: relative; display: flex; align-items: center; }
+.key-field input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 88px 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--stroke);
+  background: rgba(255,255,255,.04);
+  color: #e7ecf3;
+}
+.key-field input[readonly] { color: var(--dim); }
+.key-test, .key-remove {
+  position: absolute;
+  right: 6px;
+  border-radius: 6px;
+  border: 1px solid var(--stroke);
+  background: rgba(255,255,255,.06);
+  color: #e7ecf3;
+  cursor: pointer;
+}
+.key-test { padding: 5px 10px; font-size: 11px; }
+.key-test:disabled { opacity: .45; cursor: not-allowed; }
+.key-remove { display: grid; place-items: center; width: 28px; height: 28px; border-color: rgba(255,90,80,.35); color: #ff6b5e; }
+.key-remove:hover { background: rgba(255,90,80,.12); }
+.key-remove svg { width: 14px; height: 14px; }
+
+/* Versão do Edvid no canto direito da barra do topo. */
+.topbar-version {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.topbar-version:hover { border-color: rgba(255,119,19,.45); color: #e7ecf3; }
+.topbar-version-hint { font-size: 9px; opacity: .7; }

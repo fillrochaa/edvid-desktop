@@ -2279,8 +2279,36 @@ function agentToolsEnvironment(): NodeJS.ProcessEnv {
 // depois do pacote de runtimes: a resolucao acontece uma unica vez.
 async function codexServer(): Promise<CodexAppServer> {
   await requireRuntimePack();
-  return getCodexAppServer();
+  const server = getCodexAppServer();
+  // Motor do chat pode ter mudado nas Configurações. O config.toml só é lido
+  // no start, então trocar exige derrubar o processo — barato, ele sobe de novo
+  // na próxima mensagem.
+  const engine = await catalogChatEngine();
+  if (engine) {
+    codexEngineEnvironment = { [engine.envKey]: engine.apiKey };
+    if (server.setEngine({
+      providerId: engine.providerId,
+      label: engine.label,
+      baseUrl: engine.baseUrl,
+      model: engine.model,
+      envKey: engine.envKey,
+    })) {
+      server.stop();
+      codexAppServer = null;
+      return getCodexAppServer();
+    }
+  } else if (server.setEngine(null)) {
+    codexEngineEnvironment = {};
+    server.stop();
+    codexAppServer = null;
+    return getCodexAppServer();
+  }
+  return server;
 }
+
+// Chave do motor alternativo, injetada no ambiente do processo do Codex — é
+// de lá que ele lê o `env_key` declarado em [model_providers].
+let codexEngineEnvironment: NodeJS.ProcessEnv = {};
 
 function getCodexAppServer(): CodexAppServer {
   if (codexAppServer) return codexAppServer;
@@ -2293,7 +2321,7 @@ function getCodexAppServer(): CodexAppServer {
     path.join(app.getPath('userData'), 'codex'),
     app.getVersion(),
     broadcastCodexEvent,
-    agentToolsEnvironment(),
+    { ...agentToolsEnvironment(), ...codexEngineEnvironment },
     [cachePaths().root],
   );
   return codexAppServer;
@@ -2651,7 +2679,13 @@ async function syncJcutForProject(projectDirectory: string): Promise<JcutSyncRes
 // outras contas. O arquivo guarda a chave; a interface so recebe a mascara.
 
 type StoredCatalogEntry = { fields: Record<string, string>; cooldownUntil?: number | null };
-type StoredCatalog = { freeOnly?: boolean; providers?: Record<string, StoredCatalogEntry> };
+type StoredCatalog = {
+  freeOnly?: boolean;
+  providers?: Record<string, StoredCatalogEntry>;
+  // Provedor do catálogo escolhido para CONDUZIR a conversa (motor do Codex).
+  // Vazio = ChatGPT/Claude/Gemini, como antes.
+  chatProviderId?: string | null;
+};
 
 function catalogFile(): string {
   return path.join(app.getPath('userData'), 'ai-catalog.json');
@@ -2694,7 +2728,11 @@ function catalogStateFrom(stored: StoredCatalog): CatalogState {
       cooldownUntil: saved?.cooldownUntil ?? null,
     };
   });
-  return { connections, freeOnly: stored.freeOnly ?? false };
+  return {
+    connections,
+    freeOnly: stored.freeOnly ?? false,
+    chatProviderId: stored.chatProviderId ?? null,
+  };
 }
 
 function broadcastCatalog(state: CatalogState): void {
@@ -2818,6 +2856,32 @@ async function generateImageFromCatalog(prompt: string): Promise<Buffer | null> 
   }
   if (lastError) throw lastError;
   return null;
+}
+
+// Motor de chat vindo do catálogo (ex.: Ollama). Devolve o que o Codex precisa
+// para falar com o provedor, ou null quando o chat é de uma conta fixa.
+async function catalogChatEngine(): Promise<
+  { providerId: string; label: string; baseUrl: string; model: string; envKey: string; apiKey: string } | null
+> {
+  const stored = await readStoredCatalog();
+  const providerId = asText(stored.chatProviderId);
+  if (!providerId) return null;
+  const entry = catalogEntry(providerId);
+  const apiKey = asText(stored.providers?.[providerId]?.fields?.apiKey);
+  if (!entry?.openaiBaseUrl || !entry.envKey || !apiKey) return null;
+  const freeOnly = stored.freeOnly ?? false;
+  const model = entry.models.find((item) => (
+    item.capability === 'texto' && (!freeOnly || item.free)
+  ));
+  if (!model) return null;
+  return {
+    providerId: entry.id,
+    label: entry.name,
+    baseUrl: entry.openaiBaseUrl,
+    model: model.id,
+    envKey: entry.envKey,
+    apiKey,
+  };
 }
 
 // Procura um arquivo pelo NOME dentro do projeto (profundidade curta): rede de
@@ -3534,6 +3598,15 @@ function registerIpcHandlers(): void {
       }
     },
   );
+
+  ipcMain.handle('ai-catalog:chat-provider', async (_event, input: { id?: string | null }) => {
+    const stored = await readStoredCatalog();
+    const next = { ...stored, chatProviderId: input.id ? asText(input.id) : null };
+    await writeStoredCatalog(next);
+    const state = catalogStateFrom(next);
+    broadcastCatalog(state);
+    return state;
+  });
 
   ipcMain.handle('ai-catalog:free-only', async (_event, input: { freeOnly?: boolean }) => {
     const stored = await readStoredCatalog();

@@ -2005,7 +2005,7 @@ export function App() {
   const [claudeAccount, setClaudeAccount] = useState<ClaudeAccountState>({ status: 'signed-out', email: null });
   const [claudeLoaded, setClaudeLoaded] = useState(false);
   const [geminiAccount, setGeminiAccount] = useState<GeminiAccountState>({ status: 'signed-out', maskedKey: null });
-  const [aiCatalog, setAiCatalog] = useState<CatalogState>({ connections: [], freeOnly: false });
+  const [aiCatalog, setAiCatalog] = useState<CatalogState>({ connections: [], freeOnly: false, chatProviderId: null });
   // Modal de conexão: qual IA está aberta e o resultado do teste da chave.
   const [connectTarget, setConnectTarget] = useState<string | null>(null);
   const [connectTesting, setConnectTesting] = useState(false);
@@ -2091,11 +2091,13 @@ export function App() {
   const activeApproval = approvals[0] ?? null;
   // Versão mostrada em Configurações → Geral, junto do botão de atualizar.
   const appVersion = desktopInfo?.appVersion ?? null;
-  const updateLabel = appUpdate.status === 'ready'
-    ? `Atualização ${appUpdate.version ?? ''} pronta para instalar`
-    : updateChecking
-      ? 'Procurando atualização…'
-      : updateChecked ?? 'Mantenha o Edvid atualizado';
+  const capabilityIcons: Record<string, IconName> = {
+    texto: 'chat',
+    imagem: 'image',
+    video: 'video',
+    musica: 'music',
+    voz: 'waveform',
+  };
   const aiMarks: Record<string, string> = {
     chatgpt: chatgptMark,
     claude: claudeMark,
@@ -2104,6 +2106,15 @@ export function App() {
   const connectEntry = connectTarget ? catalogEntry(connectTarget) : null;
   // IAs do catálogo (não-builtIn) conectadas e capazes de imagem: entram no
   // seletor junto das contas, porque para o aluno é tudo a mesma lista.
+  const catalogChatProviders = AI_CATALOG.filter((entry) => (
+    !entry.builtIn
+    && Boolean(entry.openaiBaseUrl)
+    && entry.models.some((model) => model.capability === 'texto')
+    && aiCatalog.connections.some((item) => item.id === entry.id && item.connected)
+  ));
+  const chatSelection = aiCatalog.chatProviderId
+    ? `catalogo:${aiCatalog.chatProviderId}`
+    : aiProvider;
   const catalogImageProviders = AI_CATALOG.filter((entry) => (
     !entry.builtIn
     && entry.capabilities.includes('imagem')
@@ -2111,6 +2122,17 @@ export function App() {
   ));
   const imageSelection = aiRoles.image
     ?? (catalogImageProviders[0] ? `catalogo:${catalogImageProviders[0].id}` : '');
+  // Já conectada: o modal mostra o que está valendo (e-mail do login ou chave
+  // mascarada) em vez de abrir vazio, como se não houvesse conexão.
+  const connectSaved = Boolean(connectEntry && providerStatus(connectEntry).connected);
+  const fieldValue = (entry: AiCatalogEntry, field: { key: string; secret: boolean }) => {
+    if (!providerStatus(entry).connected) return catalogDraft[entry.id]?.[field.key] ?? '';
+    if (entry.builtIn === 'chatgpt') return account.account?.email ?? 'Chave de API conectada';
+    if (entry.builtIn === 'claude') return claudeAccount.email ?? 'Conta conectada';
+    if (entry.builtIn === 'gemini') return geminiAccount.maskedKey ?? '';
+    const connection = aiCatalog.connections.find((item) => item.id === entry.id);
+    return field.secret ? (connection?.maskedKey ?? '') : (connection?.fields[field.key] ?? '');
+  };
   const connectReady = Boolean(
     connectEntry?.credentials.every((field) => (catalogDraft[connectEntry.id]?.[field.key] ?? '').trim()),
   );
@@ -2376,18 +2398,24 @@ export function App() {
   // main; aqui eles só emprestam o estado para o MESMO card dos demais.
   function providerStatus(entry: AiCatalogEntry): { connected: boolean; label: string } {
     if (entry.builtIn === 'chatgpt') {
-      return { connected: chatgptConnected, label: accountLabel };
+      return { connected: chatgptConnected, label: chatgptConnected ? 'Conectado' : 'Não conectado' };
     }
     if (entry.builtIn === 'claude') {
-      return { connected: claudeAccount.status === 'signed-in', label: claudeLabel };
+      return {
+        connected: claudeAccount.status === 'signed-in',
+        label: claudeAccount.status === 'signed-in' ? 'Conectado' : 'Não conectado',
+      };
     }
     if (entry.builtIn === 'gemini') {
-      return { connected: Boolean(geminiAccount.maskedKey), label: geminiLabel };
+      return {
+        connected: Boolean(geminiAccount.maskedKey),
+        label: geminiAccount.maskedKey ? 'Conectado' : 'Não conectado',
+      };
     }
     const connection = aiCatalog.connections.find((item) => item.id === entry.id);
     return {
       connected: Boolean(connection?.connected),
-      label: connection?.connected ? `Conectado · chave ${connection.maskedKey}` : 'Não conectado',
+      label: connection?.connected ? 'Conectado' : 'Não conectado',
     };
   }
 
@@ -3250,6 +3278,27 @@ export function App() {
             </div>
           )}
           <div className="topbar-actions">
+            {/* Versão e checagem ficam à mão no topo, não escondidas nas
+                Configurações. */}
+            <button
+              type="button"
+              className="topbar-version"
+              onClick={() => {
+                setUpdateChecking(true);
+                setUpdateChecked(null);
+                void window.edvidDesktop.checkForUpdates()
+                  .then((state) => setUpdateChecked(state.status === 'ready'
+                    ? `Atualização ${state.version ?? ''} pronta`
+                    : 'Você já está na versão mais recente'))
+                  .catch((error) => setUpdateChecked(errorMessage(error)))
+                  .finally(() => setUpdateChecking(false));
+              }}
+              disabled={updateChecking}
+              title={updateChecked ?? 'Verificar atualização'}
+            >
+              Edvid {appVersion ?? ''}
+              <span className="topbar-version-hint">{updateChecking ? 'verificando…' : updateChecked ? '✓' : 'verificar'}</span>
+            </button>
             {appUpdate.status === 'ready' && (
               <button
                 type="button"
@@ -3423,8 +3472,23 @@ export function App() {
                 <label className="role-select" title="IA que conduz a conversa">
                   <Icon name="chat" />
                   <select
-                    value={aiProvider}
-                    onChange={(event) => switchAiProvider(event.target.value as AiProvider)}
+                    value={chatSelection}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value.startsWith('catalogo:')) {
+                        // Provedor do catálogo conduz a conversa: o Codex passa
+                        // a falar com ele, mantendo sandbox e ferramentas.
+                        void window.edvidDesktop
+                          .setCatalogChatProvider(value.slice('catalogo:'.length))
+                          .then(setAiCatalog)
+                          .catch(() => {});
+                        return;
+                      }
+                      if (aiCatalog.chatProviderId) {
+                        void window.edvidDesktop.setCatalogChatProvider(null).then(setAiCatalog).catch(() => {});
+                      }
+                      switchAiProvider(value as AiProvider);
+                    }}
                   >
                     {(['chatgpt', 'claude', 'gemini'] as AiProvider[])
                       .filter((provider) => aiConnected[provider] || provider === aiProvider)
@@ -3433,6 +3497,9 @@ export function App() {
                           {provider === 'chatgpt' ? 'ChatGPT' : provider === 'claude' ? 'Claude' : 'Gemini'}
                         </option>
                       ))}
+                    {catalogChatProviders.map((entry) => (
+                      <option key={entry.id} value={`catalogo:${entry.id}`}>{entry.name}</option>
+                    ))}
                   </select>
                 </label>
                 <label className="role-select" title="IA que gera as imagens pedidas pela edição">
@@ -3623,30 +3690,6 @@ export function App() {
                   <button type="button" className="account-action" onClick={() => void window.edvidDesktop.memberLogout().then(setMemberAuth)}>Sair</button>
                 )}
               </div>
-              <div className="settings-row">
-                <div>
-                  <strong>Edvid {appVersion ?? ''}</strong>
-                  <small>{updateLabel}</small>
-                </div>
-                <button
-                  type="button"
-                  className="account-action"
-                  onClick={() => {
-                    if (appUpdate.status === 'ready') { void window.edvidDesktop.installAppUpdate(); return; }
-                    setUpdateChecking(true);
-                    setUpdateChecked(null);
-                    void window.edvidDesktop.checkForUpdates()
-                      .then((state) => setUpdateChecked(state.status === 'ready'
-                        ? `Atualização ${state.version ?? ''} pronta`
-                        : 'Você já está na versão mais recente'))
-                      .catch((error) => setUpdateChecked(errorMessage(error)))
-                      .finally(() => setUpdateChecking(false));
-                  }}
-                  disabled={updateChecking}
-                >
-                  {appUpdate.status === 'ready' ? 'Reiniciar e atualizar' : 'Verificar atualização'}
-                </button>
-              </div>
             </div>
 
             {/* UMA lista só de IAs. Antes eram duas seções com formatos
@@ -3662,14 +3705,17 @@ export function App() {
                         {aiMarks[entry.id] ? <img src={aiMarks[entry.id]} alt="" /> : <span className="ai-mark-fallback">{entry.name.slice(0, 1)}</span>}
                         <div>
                           <strong>{entry.name}</strong>
-                          <small>{status.label}</small>
+                          <small className={status.connected ? 'connected-label' : undefined}>{status.label}</small>
                         </div>
                       </div>
-                      <div className="badges">
+                      {/* Ícone por capacidade em vez de etiqueta escrita: o
+                          card fica baixo e o aluno lê de relance. */}
+                      <div className="capability-icons">
                         {entry.capabilities.map((capability) => (
-                          <span className="badge" key={capability}>{capability}</span>
+                          <span className="capability" key={capability} title={capability}>
+                            <Icon name={capabilityIcons[capability]} />
+                          </span>
                         ))}
-                        {entry.models.some((model) => model.free) && <span className="badge free">Gratuito</span>}
                       </div>
                       <button type="button" className="account-action" onClick={() => { setConnectTarget(entry.id); setConnectError(null); setConnectTested(null); }}>
                         {status.connected ? 'Gerenciar' : 'Conectar'}
@@ -3735,44 +3781,63 @@ export function App() {
 
               <div className="connect-section">
                 <h4>Chave de API</h4>
-                <p className="settings-note">
-                  <a href={connectEntry.keyUrl} target="_blank" rel="noreferrer">Criar chave em {new URL(connectEntry.keyUrl).host}</a>
-                </p>
-                <div className="catalog-fields">
-                  {connectEntry.credentials.map((field) => (
+                {!connectSaved && (
+                  <p className="settings-note">
+                    <a href={connectEntry.keyUrl} target="_blank" rel="noreferrer">Criar chave em {new URL(connectEntry.keyUrl).host}</a>
+                  </p>
+                )}
+                {/* Campo com o TESTE colado nele e a lixeira dentro, na ponta.
+                    Antes eram três botões soltos embaixo (Testar/Salvar/Remover),
+                    e a IA já conectada abria o modal sem nenhum sinal disso. */}
+                {connectEntry.credentials.map((field, index) => (
+                  <div className="key-field" key={field.key}>
                     <input
-                      key={field.key}
                       type={field.secret ? 'password' : 'text'}
                       placeholder={field.placeholder ?? field.label}
-                      value={catalogDraft[connectEntry.id]?.[field.key] ?? ''}
-                      onChange={(event) => setCatalogDraft((current) => ({
-                        ...current,
-                        [connectEntry.id]: { ...current[connectEntry.id], [field.key]: event.target.value },
-                      }))}
+                      value={fieldValue(connectEntry, field)}
+                      readOnly={connectSaved}
+                      onChange={(event) => {
+                        setConnectTested(null);
+                        setCatalogDraft((current) => ({
+                          ...current,
+                          [connectEntry.id]: { ...current[connectEntry.id], [field.key]: event.target.value },
+                        }));
+                      }}
                     />
-                  ))}
-                </div>
-                <div className="connect-actions">
-                  <button
-                    type="button"
-                    className="account-action"
-                    disabled={!connectReady || connectTesting}
-                    onClick={() => void testConnection(connectEntry)}
-                  >
-                    {connectTesting ? 'Testando…' : 'Testar'}
-                  </button>
+                    {connectSaved
+                      ? (
+                        <button
+                          type="button"
+                          className="key-remove"
+                          title="Remover conexão"
+                          onClick={() => void removeConnection(connectEntry)}
+                        >
+                          <Icon name="trash" />
+                        </button>
+                      )
+                      // O teste fica ao lado do ÚLTIMO campo, quando tudo está preenchido.
+                      : index === connectEntry.credentials.length - 1 && (
+                        <button
+                          type="button"
+                          className="key-test"
+                          disabled={!connectReady || connectTesting}
+                          onClick={() => void testConnection(connectEntry)}
+                        >
+                          {connectTesting ? 'Testando…' : 'Testar'}
+                        </button>
+                      )}
+                  </div>
+                ))}
+                {/* Salvar só aparece depois do teste passar — e some ao salvar. */}
+                {!connectSaved && connectTested && (
                   <button
                     type="button"
                     className="account-action primary"
-                    disabled={!connectReady}
                     onClick={() => void saveConnection(connectEntry)}
                   >
                     Salvar
                   </button>
-                  {providerStatus(connectEntry).connected && (
-                    <button type="button" className="account-action" onClick={() => void removeConnection(connectEntry)}>Remover</button>
-                  )}
-                </div>
+                )}
                 {connectTested && <p className="settings-note ok">{connectTested}</p>}
                 {connectError && <p className="settings-note error">{connectError}</p>}
               </div>

@@ -239,6 +239,9 @@ export type CatalogState = {
   connections: CatalogConnection[];
   // Ligado pelo aluno: so usa modelo que nao gasta dinheiro dele.
   freeOnly: boolean;
+  // Provedor do catalogo escolhido para CONDUZIR a conversa. Vazio = uma das
+  // contas fixas (ChatGPT/Claude/Gemini).
+  chatProviderId: string | null;
 };
 
 // Quem atendeu (ou vai atender) o papel agora — mostrado abaixo do campo de
@@ -401,6 +404,8 @@ export type EdvidDesktopApi = {
   connectCatalogProvider: (id: string, fields: Record<string, string>) => Promise<CatalogState>;
   disconnectCatalogProvider: (id: string) => Promise<CatalogState>;
   setCatalogFreeOnly: (freeOnly: boolean) => Promise<CatalogState>;
+  // Escolhe (ou limpa) o provedor do catalogo que conduz a conversa.
+  setCatalogChatProvider: (id: string | null) => Promise<CatalogState>;
   // Valida a credencial ANTES de salvar, contra a API do provedor.
   testCatalogProvider: (
     id: string,

@@ -141,6 +141,7 @@ const claudeListeners = new Set<(state: ClaudeAccountState) => void>();
 const qaCatalogConnected = new URLSearchParams(window.location.search).has('catalogo');
 let qaCatalog: CatalogState = {
   freeOnly: qaCatalogConnected,
+  chatProviderId: null,
   connections: [
     {
       id: 'cloudflare',
@@ -385,6 +386,10 @@ export function createQaBrowserApi(): EdvidDesktopApi {
           ? { ...connection, connected: false, maskedKey: null, fields: {} }
           : connection),
       });
+      return qaCatalog;
+    },
+    setCatalogChatProvider: async (id) => {
+      emitCatalog({ ...qaCatalog, chatProviderId: id });
       return qaCatalog;
     },
     setCatalogFreeOnly: async (freeOnly) => {

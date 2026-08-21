@@ -1213,6 +1213,23 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.16.1: refino dos cards/modal e o BUG do seletor. (1) BUG: conectar uma IA
+  de texto do catálogo (Ollama) não a fazia aparecer no seletor de chat — o
+  seletor listava só `['chatgpt','claude','gemini']` e, pior, não havia como o
+  catálogo conduzir a conversa. Resolvido de verdade: o `CodexAppServer` ganhou
+  `setEngine`, que escreve `[model_providers.<id>]` + `model_provider` no
+  config.toml (o Codex aceita provedor próprio em formato OpenAI, e o Ollama
+  fala esse formato — sondado). A chave vai no ambiente do processo pelo
+  `env_key`; trocar de motor derruba e sobe o app-server, porque o config só é
+  lido no start. A escolha mora em `chatProviderId` no ai-catalog.json.
+  (2) Cards: altura menor, ÍCONE por capacidade no lugar da etiqueta escrita,
+  badge "Gratuito" sai do card (fica só no modal, junto do toggle) e conectado
+  vira só "Conectado" em verde, sem expor a chave. (3) Modal: abrir uma IA já
+  conectada agora MOSTRA o que está valendo (e-mail do login ou chave
+  mascarada) em vez de parecer desconectada; "Testar" fica colado ao campo,
+  "Salvar" só aparece depois do teste passar e some ao salvar, e a exclusão é
+  uma lixeira vermelha dentro do próprio campo. (4) Versão do Edvid +
+  "verificar atualização" foram para o canto direito da barra do topo.
 - 0.16.0: ajuste fino de UI/UX pedido pelo fill. (1) Configurações viraram
   PÁGINA (era modal): a tela vai crescer com mais IAs, MCPs e preferências, e
   um modal de 440px já apertava. Seção Geral no topo (aluno, versão do app e

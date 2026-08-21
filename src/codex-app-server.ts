@@ -151,19 +151,45 @@ export class CodexAppServer {
   // O sandbox workspace-write so permite escrever no projeto. Os caches dos
   // runtimes internos ficam fora dele, entao entram como writable_roots — sem
   // isso o usuario teria de aprovar cada transcricao. A rede continua negada.
+  // Motor alternativo do chat: um provedor do catalogo (ex.: Ollama Cloud) no
+  // lugar do ChatGPT. O Codex aceita provedores proprios em [model_providers]
+  // desde que falem o formato da OpenAI — e o Ollama fala (sondado:
+  // ollama.com/v1/chat/completions responde 401 sem chave). Sem isso, conectar
+  // uma IA de texto no catalogo nao servia para nada: ela nem aparecia no
+  // seletor do chat, que era o defeito relatado.
+  private engine: { providerId: string; label: string; baseUrl: string; model: string; envKey: string } | null = null;
+
+  setEngine(engine: CodexAppServer['engine']): boolean {
+    const before = JSON.stringify(this.engine);
+    this.engine = engine;
+    // O config.toml so e lido no start: mudou o motor, o processo reinicia.
+    return before !== JSON.stringify(engine);
+  }
+
   private async writeSandboxConfig(): Promise<void> {
     const roots = this.sandboxWritableRoots
       .map((root) => JSON.stringify(root))
       .join(', ');
+    const engine = this.engine;
     const config = [
       '# Gerado pelo Edvid Desktop. Alteracoes manuais sao sobrescritas.',
       // Chave de topo: precisa vir ANTES de qualquer [secao], senao o TOML a
       // engole como chave da secao e o pin nao vale.
-      `model = ${JSON.stringify(CODEX_CHAT_MODEL)}`,
+      `model = ${JSON.stringify(engine ? engine.model : CODEX_CHAT_MODEL)}`,
+      ...(engine ? [`model_provider = ${JSON.stringify(engine.providerId)}`] : []),
       // Cinto e suspensorio: a politica tambem vai em cada thread/start. Se uma
       // versao do CLI ignorar o parametro, o aluno nao volta a ver aprovacoes.
       `approval_policy = ${JSON.stringify(CODEX_APPROVAL_POLICY)}`,
       `sandbox_mode = ${JSON.stringify(CODEX_SANDBOX)}`,
+      ...(engine
+        ? [
+          `[model_providers.${engine.providerId}]`,
+          `name = ${JSON.stringify(engine.label)}`,
+          `base_url = ${JSON.stringify(engine.baseUrl)}`,
+          `env_key = ${JSON.stringify(engine.envKey)}`,
+          'wire_api = "chat"',
+        ]
+        : []),
       '[sandbox_workspace_write]',
       'network_access = false',
       `writable_roots = [${roots}]`,

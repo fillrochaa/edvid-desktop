@@ -50,6 +50,12 @@ export type AiCatalogEntry = {
   // Modelos por papel, na ordem de preferencia. `free` marca o que nao gasta
   // dinheiro do aluno — e o que sobra quando ele liga "apenas gratuitos".
   models: { id: string; label: string; capability: AiCapability; free: boolean }[];
+  // Endpoint no formato da OpenAI. Quem tem isto pode virar MOTOR DO CHAT: o
+  // Codex aceita provedores proprios em [model_providers] e o agente inteiro
+  // (sandbox, ferramentas, instrucoes) continua funcionando por cima.
+  openaiBaseUrl?: string;
+  // Nome da variavel de ambiente onde o Codex procura a chave desse provedor.
+  envKey?: string;
   note?: string;
 };
 
@@ -116,6 +122,8 @@ export const AI_CATALOG: AiCatalogEntry[] = [
     auth: ['apikey'],
     keyUrl: 'https://ollama.com/settings/keys',
     credentials: [{ key: 'apiKey', label: 'Chave de API', secret: true }],
+    openaiBaseUrl: 'https://ollama.com/v1',
+    envKey: 'OLLAMA_API_KEY',
     models: [
       // Sondado em ollama.com/api/tags. Modelos grandes de texto, sem imagem.
       { id: 'gpt-oss:120b', label: 'GPT-OSS 120B', capability: 'texto', free: true },
@@ -135,7 +143,10 @@ export const AI_CATALOG: AiCatalogEntry[] = [
     auth: ['apikey'],
     keyUrl: 'https://openrouter.ai/keys',
     credentials: [{ key: 'apiKey', label: 'Chave de API', secret: true }],
+    openaiBaseUrl: 'https://openrouter.ai/api/v1',
+    envKey: 'OPENROUTER_API_KEY',
     models: [
+      { id: 'openai/gpt-oss-120b:free', label: 'GPT-OSS 120B (grátis)', capability: 'texto', free: true },
       { id: 'google/gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image', capability: 'imagem', free: false },
       { id: 'openai/gpt-5-image-mini', label: 'GPT-5 Image Mini', capability: 'imagem', free: false },
     ],
