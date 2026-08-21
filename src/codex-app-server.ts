@@ -176,18 +176,26 @@ export class CodexAppServer {
       // Chave de topo: precisa vir ANTES de qualquer [secao], senao o TOML a
       // engole como chave da secao e o pin nao vale.
       `model = ${JSON.stringify(engine ? engine.model : CODEX_CHAT_MODEL)}`,
-      ...(engine ? [`model_provider = ${JSON.stringify(engine.providerId)}`] : []),
+      // Prefixo proprio: `ollama` e id RESERVADO no Codex (provedor embutido,
+      // que aponta para a instalacao local) e o config inteiro e recusado ao
+      // tentar sobrescrever — "Built-in providers cannot be overridden".
+      ...(engine ? [`model_provider = ${JSON.stringify(`edvid-${engine.providerId}`)}`] : []),
       // Cinto e suspensorio: a politica tambem vai em cada thread/start. Se uma
       // versao do CLI ignorar o parametro, o aluno nao volta a ver aprovacoes.
       `approval_policy = ${JSON.stringify(CODEX_APPROVAL_POLICY)}`,
       `sandbox_mode = ${JSON.stringify(CODEX_SANDBOX)}`,
       ...(engine
         ? [
-          `[model_providers.${engine.providerId}]`,
+          `[model_providers.edvid-${engine.providerId}]`,
           `name = ${JSON.stringify(engine.label)}`,
           `base_url = ${JSON.stringify(engine.baseUrl)}`,
           `env_key = ${JSON.stringify(engine.envKey)}`,
-          'wire_api = "chat"',
+          // "chat" foi DESCONTINUADO pelo Codex ("`wire_api = \"chat\"` is no
+          // longer supported") e um config invalido e ignorado INTEIRO: o
+          // agente voltava para api.openai.com e o aluno via 401 da OpenAI ao
+          // usar o Ollama. Os dois provedores do catalogo expoem /v1/responses
+          // (401 com chave ausente; rota inexistente responde 404).
+          'wire_api = "responses"',
         ]
         : []),
       '[sandbox_workspace_write]',

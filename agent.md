@@ -1213,6 +1213,20 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.16.3: o motor alternativo do chat NUNCA funcionou até aqui — o config era
+  recusado inteiro e o Codex voltava calado para a OpenAI (o aluno via
+  "401 Unauthorized ... api.openai.com/v1/responses" ao usar o Ollama). Duas
+  causas, ambas descobertas lendo a mensagem de erro do `thread/start`, que a
+  interface engolia: (1) `wire_api = "chat"` foi DESCONTINUADO ("`wire_api =
+  \"chat\"` is no longer supported. How to fix: set `wire_api = "responses"`");
+  (2) `ollama` é ID RESERVADO (provedor embutido do Codex, apontando para a
+  instalação local) e "Built-in providers cannot be overridden". Agora o id
+  vai prefixado (`edvid-ollama`) e o wire_api é `responses` — os dois
+  provedores do catálogo expõem `/v1/responses` (401 sem chave; rota
+  inexistente responde 404, então o 401 prova que existe). Sondado: a thread
+  passa a abrir com `modelProvider = edvid-ollama`. LIÇÃO: config inválido no
+  Codex não degrada com aviso, ele é IGNORADO por completo — e o sintoma
+  aparece três camadas adiante, como erro de autenticação de outro provedor.
 - 0.16.2: três defeitos do teste real da 0.16.1. (1) O modal do ChatGPT LOGADO
   mostrava bolinhas de senha como se houvesse chave salva — `fieldValue` caía
   num texto genérico quando a conexão era por conta. Agora o modal distingue
