@@ -2932,7 +2932,11 @@ async function fulfillMusicRequests(projectDirectory: string): Promise<{ done: n
   if (requests.length === 0) return { done: 0 };
 
   const stored = await readStoredCatalog();
-  const apiKey = asText(stored.providers?.treblo?.fields?.apiKey);
+  const state = catalogStateFrom(stored);
+  const musicProvider = state.connections.find((connection) => (
+    connection.connected && (catalogEntry(connection.id)?.capabilities.includes('musica') ?? false)
+  ));
+  const apiKey = musicProvider ? asText(stored.providers?.[musicProvider.id]?.fields?.apiKey) : '';
   if (!apiKey) {
     broadcastCodexEvent({
       type: 'error',

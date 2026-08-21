@@ -1213,6 +1213,17 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.17.1: "não consigo gerar ou compor arquivos de áudio" — o agente recusou a
+  trilha porque a instrução dela morava só no BRIEFING DE ESTILOS, enviado
+  quando o aluno aplica os estilos. Pedindo direto no chat, o agente não tinha
+  como saber que existe o caminho `edit/musica/pedidos.json` e respondeu com a
+  recusa padrão de um modelo de texto. A trilha virou seção FIXA das
+  instruções (ao lado da de imagens), com a frase explícita "nunca responda
+  que não consegue gerar áudio: o caminho existe e é esse". LIÇÃO: capacidade
+  que só existe em instrução condicional não existe para o agente na conversa
+  livre. Junto: seletor de MÚSICA no rodapé do chat (terceiro papel, com
+  ícone) e o provedor de música passou a sair do catálogo em vez de ser fixo
+  no Treblo.
 - 0.17.0: primeiro chat conduzido por IA gratuita FUNCIONANDO (Ollama), e o
   que ele revelou. (1) O modelo respondeu em INGLÊS listando arquivo e campo
   JSON ("Updated edit/remotion/public/edit-data.json — Set `hook`

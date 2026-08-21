@@ -2112,6 +2112,10 @@ export function App() {
   const connectEntry = connectTarget ? catalogEntry(connectTarget) : null;
   // IAs do catálogo (não-builtIn) conectadas e capazes de imagem: entram no
   // seletor junto das contas, porque para o aluno é tudo a mesma lista.
+  const catalogMusicProviders = AI_CATALOG.filter((entry) => (
+    entry.capabilities.includes('musica')
+    && aiCatalog.connections.some((item) => item.id === entry.id && item.connected)
+  ));
   const catalogChatProviders = AI_CATALOG.filter((entry) => (
     !entry.builtIn
     && Boolean(entry.openaiBaseUrl)
@@ -3477,6 +3481,21 @@ export function App() {
                         </option>
                       ))}
                     {catalogImageProviders.map((entry) => (
+                      <option key={entry.id} value={`catalogo:${entry.id}`}>{entry.name}</option>
+                    ))}
+                    <option value="__conectar">Conectar…</option>
+                  </select>
+                </label>
+                <label className="role-select" title="IA que compõe a trilha sonora">
+                  <Icon name="music" />
+                  <select
+                    value={catalogMusicProviders[0] ? `catalogo:${catalogMusicProviders[0].id}` : ''}
+                    onChange={(event) => {
+                      if (event.target.value === '__conectar') setSettingsOpen(true);
+                    }}
+                  >
+                    {catalogMusicProviders.length === 0 && <option value="">Nenhuma</option>}
+                    {catalogMusicProviders.map((entry) => (
                       <option key={entry.id} value={`catalogo:${entry.id}`}>{entry.name}</option>
                     ))}
                     <option value="__conectar">Conectar…</option>

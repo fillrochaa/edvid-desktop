@@ -152,6 +152,7 @@ let qaCatalog: CatalogState = {
       cooldownUntil: null,
     },
     { id: 'openrouter', connected: false, maskedKey: null, fields: {}, cooldownUntil: null },
+    { id: 'treblo', connected: qaCatalogConnected, maskedKey: qaCatalogConnected ? '••••9b4e' : null, fields: {}, cooldownUntil: null },
     { id: 'ollama', connected: qaSemChatGpt, maskedKey: qaSemChatGpt ? '••••3c1d' : null, fields: {}, cooldownUntil: null },
   ],
 };
