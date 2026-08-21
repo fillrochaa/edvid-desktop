@@ -1234,6 +1234,20 @@ Dependências do Fill:
   sempre avisada. `npm run test:ai-catalog` cobre preferência pelo gratuito,
   descanso por limite, filtro respeitado e failover só no erro que adianta
   (429/5xx sim; chave inválida e prompt recusado não). QA visual: `?catalogo`.
+  Ollama Cloud entrou no catálogo (texto): tem chave de API em
+  ollama.com/settings/keys e 19 modelos grandes (gpt-oss:120b, qwen3.5:397b,
+  deepseek-v4-flash…), nenhum de imagem. A doc oficial diz que o endpoint
+  compatível com OpenAI é só local — está DESATUALIZADA: sondado,
+  `POST ollama.com/v1/chat/completions` responde 401 (existe, exige chave) e
+  `/v1/models` responde 200. Isso o torna plugável como motor do chat via
+  `model_providers` do Codex. Lição repetida: testar o endpoint vale mais que
+  ler a documentação dele.
+  Pendência honesta sobre o Gemini: o fill afirma que existe camada gratuita
+  para geração de imagem. A página de pricing diz "Free Tier: Not available"
+  nos modelos de imagem, mas o Google parou de publicar a tabela de free tier
+  (limites agora são por projeto, visíveis no AI Studio) e a métrica IPM
+  existe justamente para o Nano Banana — ou seja, a documentação pública NÃO
+  resolve. Só uma chamada real com uma chave do AI Studio crava a resposta.
   A ressalva registrada para o papel de CHAT (ainda não implementado): o
   agente executa comandos e segue instruções longas, e modelo gratuito pequeno
   tende a falhar de formas novas — o Codex aceita `model_providers`

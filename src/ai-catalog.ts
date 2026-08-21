@@ -60,6 +60,24 @@ export const AI_CATALOG: AiCatalogEntry[] = [
     note: 'Camada gratuita diária generosa (cerca de 2 mil imagens por dia).',
   },
   {
+    id: 'ollama',
+    name: 'Ollama Cloud',
+    capabilities: ['texto'],
+    pricing: 'mixed',
+    keyUrl: 'https://ollama.com/settings/keys',
+    credentials: [{ key: 'apiKey', label: 'Chave de API', secret: true }],
+    models: [
+      // Sondado em ollama.com/api/tags. Modelos grandes de texto, sem imagem.
+      { id: 'gpt-oss:120b', label: 'GPT-OSS 120B', capability: 'texto', free: true },
+      { id: 'qwen3.5:397b', label: 'Qwen3.5 397B', capability: 'texto', free: true },
+      { id: 'deepseek-v4-flash:preview', label: 'DeepSeek V4 Flash', capability: 'texto', free: true },
+    ],
+    // Fala o formato da OpenAI em https://ollama.com/v1/chat/completions
+    // (verificado: responde 401 sem chave, 200 em /v1/models) — e por isso
+    // pode virar motor do chat quando o papel de texto entrar no catalogo.
+    note: 'Modelos grandes de texto na nuvem. Não gera imagem.',
+  },
+  {
     id: 'openrouter',
     name: 'OpenRouter',
     capabilities: ['texto', 'imagem'],
