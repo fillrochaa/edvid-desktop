@@ -787,3 +787,7 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 }
 .topbar-version:hover { border-color: rgba(255,119,19,.45); color: #e7ecf3; }
 .topbar-version-hint { font-size: 9px; opacity: .7; }
+/* Conta conectada por login dentro do modal: e-mail + botão Sair. */
+.connect-account { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.connect-account strong { display: block; font-size: 12px; }
+.connect-account small { color: var(--dim); font-size: 11px; }

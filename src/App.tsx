@@ -2070,7 +2070,14 @@ export function App() {
   // O chat conversa com o provedor do papel "chat"; os outros ficam
   // conectados em espera. A troca acontece nos seletores do composer, nas
   // Configurações, ou sozinha (regras automáticas abaixo).
-  const activeAiConnected = aiConnected[aiProvider];
+  // Com um provedor do CATÁLOGO conduzindo a conversa, o chat está conectado
+  // mesmo sem ChatGPT/Claude/Gemini. Sem isto, remover o ChatGPT travava o
+  // campo de texto com "Conecte a conta" enquanto o Ollama já estava escolhido.
+  const catalogChatConnected = Boolean(
+    aiCatalog.chatProviderId
+    && aiCatalog.connections.some((item) => item.id === aiCatalog.chatProviderId && item.connected),
+  );
+  const activeAiConnected = catalogChatConnected || aiConnected[aiProvider];
   const canChat = Boolean(projectDirectory) && activeAiConnected;
   const readyRuntimes = runtimes.filter((runtime) => runtime.available).length;
   const accountLabel = account.account?.type === 'apiKey'
@@ -2125,11 +2132,26 @@ export function App() {
   // Já conectada: o modal mostra o que está valendo (e-mail do login ou chave
   // mascarada) em vez de abrir vazio, como se não houvesse conexão.
   const connectSaved = Boolean(connectEntry && providerStatus(connectEntry).connected);
+  const connectedByLogin = Boolean(
+    connectEntry
+    && ((connectEntry.builtIn === 'chatgpt' && account.account?.type === 'chatgpt')
+      || (connectEntry.builtIn === 'claude' && claudeAccount.status === 'signed-in' && claudeAccount.mode !== 'api-key')),
+  );
+  // Chave salva de verdade: só aí o campo aparece preenchido com a lixeira.
+  const connectedByKey = connectSaved && !connectedByLogin;
+  const loginEmail = connectEntry?.builtIn === 'chatgpt'
+    ? account.account?.email ?? null
+    : connectEntry?.builtIn === 'claude' ? claudeAccount.email ?? null : null;
   const fieldValue = (entry: AiCatalogEntry, field: { key: string; secret: boolean }) => {
-    if (!providerStatus(entry).connected) return catalogDraft[entry.id]?.[field.key] ?? '';
-    if (entry.builtIn === 'chatgpt') return account.account?.email ?? 'Chave de API conectada';
-    if (entry.builtIn === 'claude') return claudeAccount.email ?? 'Conta conectada';
-    if (entry.builtIn === 'gemini') return geminiAccount.maskedKey ?? '';
+    const draft = catalogDraft[entry.id]?.[field.key] ?? '';
+    if (!providerStatus(entry).connected) return draft;
+    if (entry.builtIn === 'chatgpt') {
+      return account.account?.type === 'apiKey' ? 'chave conectada' : draft;
+    }
+    if (entry.builtIn === 'claude') {
+      return claudeAccount.mode === 'api-key' ? (claudeAccount.email ?? 'chave conectada') : draft;
+    }
+    if (entry.builtIn === 'gemini') return geminiAccount.maskedKey ?? draft;
     const connection = aiCatalog.connections.find((item) => item.id === entry.id);
     return field.secret ? (connection?.maskedKey ?? '') : (connection?.fields[field.key] ?? '');
   };
@@ -3765,23 +3787,37 @@ export function App() {
               {connectEntry.auth.includes('login') && (
                 <div className="connect-section">
                   <h4>Entrar com a conta</h4>
-                  <p className="settings-note">Usa a assinatura que você já paga.</p>
-                  <button
-                    type="button"
-                    className="account-action primary"
-                    onClick={() => {
-                      if (connectEntry.builtIn === 'chatgpt') void login();
-                      if (connectEntry.builtIn === 'claude') void claudeLogin();
-                    }}
-                  >
-                    Entrar
-                  </button>
+                  {connectedByLogin
+                    ? (
+                      <div className="connect-account">
+                        <div>
+                          <strong className="connected-label">Conectado</strong>
+                          <small>{loginEmail ?? 'Conta conectada'}</small>
+                        </div>
+                        <button type="button" className="account-action" onClick={() => void removeConnection(connectEntry)}>Sair</button>
+                      </div>
+                    )
+                    : (
+                      <>
+                        <p className="settings-note">Usa a assinatura que você já paga.</p>
+                        <button
+                          type="button"
+                          className="account-action primary"
+                          onClick={() => {
+                            if (connectEntry.builtIn === 'chatgpt') void login();
+                            if (connectEntry.builtIn === 'claude') void claudeLogin();
+                          }}
+                        >
+                          Entrar
+                        </button>
+                      </>
+                    )}
                 </div>
               )}
 
               <div className="connect-section">
                 <h4>Chave de API</h4>
-                {!connectSaved && (
+                {!connectedByKey && (
                   <p className="settings-note">
                     <a href={connectEntry.keyUrl} target="_blank" rel="noreferrer">Criar chave em {new URL(connectEntry.keyUrl).host}</a>
                   </p>
@@ -3795,7 +3831,7 @@ export function App() {
                       type={field.secret ? 'password' : 'text'}
                       placeholder={field.placeholder ?? field.label}
                       value={fieldValue(connectEntry, field)}
-                      readOnly={connectSaved}
+                      readOnly={connectedByKey}
                       onChange={(event) => {
                         setConnectTested(null);
                         setCatalogDraft((current) => ({
@@ -3804,7 +3840,7 @@ export function App() {
                         }));
                       }}
                     />
-                    {connectSaved
+                    {connectedByKey
                       ? (
                         <button
                           type="button"
@@ -3829,7 +3865,7 @@ export function App() {
                   </div>
                 ))}
                 {/* Salvar só aparece depois do teste passar — e some ao salvar. */}
-                {!connectSaved && connectTested && (
+                {!connectedByKey && connectTested && (
                   <button
                     type="button"
                     className="account-action primary"

@@ -1213,6 +1213,22 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.16.2: três defeitos do teste real da 0.16.1. (1) O modal do ChatGPT LOGADO
+  mostrava bolinhas de senha como se houvesse chave salva — `fieldValue` caía
+  num texto genérico quando a conexão era por conta. Agora o modal distingue
+  login de chave: logado mostra "Conectado" em verde, o e-mail e um botão
+  Sair, e o campo de chave fica vazio (dá para adicionar uma chave depois);
+  conectado por chave é que traz o valor mascarado com a lixeira. (2) CHAT
+  TRAVADO: removendo o ChatGPT e escolhendo o Ollama, o campo de texto ficava
+  desabilitado com "Conecte a conta" — `canChat` só olhava
+  `aiConnected[aiProvider]`, e provedor do catálogo não entrava na conta.
+  Corrigido com `catalogChatConnected`. (3) "Codex App Server encerrou
+  (SIGTERM)" aparecia em vermelho no chat: era o reinício INTENCIONAL do motor
+  ao trocar de provedor vazando como falha; `stop()` passou a marcar o
+  encerramento como pedido e o `handleExit` não emite erro nesse caso. Junto,
+  o `thread/start` passou a usar o modelo DO MOTOR (antes forçava
+  gpt-5.6-terra mesmo com o Ollama configurado). QA: `?semchatgpt` reproduz o
+  cenário do chat sem ChatGPT com o catálogo conduzindo.
 - 0.16.1: refino dos cards/modal e o BUG do seletor. (1) BUG: conectar uma IA
   de texto do catálogo (Ollama) não a fazia aparecer no seletor de chat — o
   seletor listava só `['chatgpt','claude','gemini']` e, pior, não havia como o

@@ -128,7 +128,7 @@ let approvalPreviewScheduled = false;
 // QA das conexões de IA: ?ia abre o app com nenhuma IA conectada (mostra o
 // onboarding); ?ia=manual força o fluxo de colar o código do Claude.
 const qaSearch = () => new URLSearchParams(window.location.search);
-let qaChatGptConnected = !qaSearch().has('ia');
+let qaChatGptConnected = !qaSearch().has('ia') && !qaSearch().has('semchatgpt');
 let qaRoles: AiRolesState = { chat: 'chatgpt', image: null, chatPinned: false, imagePinned: false };
 const rolesListeners = new Set<(state: AiRolesState) => void>();
 
@@ -139,9 +139,10 @@ let qaClaude: ClaudeAccountState = { status: 'signed-out', email: null };
 const claudeListeners = new Set<(state: ClaudeAccountState) => void>();
 // Catálogo de IAs no QA: "?catalogo" abre com o gratuito já conectado.
 const qaCatalogConnected = new URLSearchParams(window.location.search).has('catalogo');
+const qaSemChatGpt = new URLSearchParams(window.location.search).has('semchatgpt');
 let qaCatalog: CatalogState = {
   freeOnly: qaCatalogConnected,
-  chatProviderId: null,
+  chatProviderId: qaSemChatGpt ? 'ollama' : null,
   connections: [
     {
       id: 'cloudflare',
@@ -151,6 +152,7 @@ let qaCatalog: CatalogState = {
       cooldownUntil: null,
     },
     { id: 'openrouter', connected: false, maskedKey: null, fields: {}, cooldownUntil: null },
+    { id: 'ollama', connected: qaSemChatGpt, maskedKey: qaSemChatGpt ? '••••3c1d' : null, fields: {}, cooldownUntil: null },
   ],
 };
 const catalogListeners = new Set<(state: CatalogState) => void>();

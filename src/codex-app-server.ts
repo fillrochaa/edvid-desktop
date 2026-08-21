@@ -247,6 +247,20 @@ export class CodexAppServer {
   }
 
   private handleExit(error: Error): void {
+    if (this.stopping) {
+      this.stopping = false;
+      this.child = null;
+      this.startPromise = null;
+      for (const { reject, timer } of this.pending.values()) {
+        clearTimeout(timer);
+        reject(error);
+      }
+      this.pending.clear();
+      this.approvals.clear();
+      this.threadsByProject.clear();
+      this.activeTurns.clear();
+      return;
+    }
     if (!this.child && this.pending.size === 0) return;
     this.child = null;
     this.startPromise = null;
@@ -572,7 +586,7 @@ export class CodexAppServer {
         sandbox: CODEX_SANDBOX,
         serviceName: 'edvid_desktop',
         developerInstructions: EDVID_INSTRUCTIONS,
-        model: CODEX_CHAT_MODEL,
+        model: this.engine?.model ?? CODEX_CHAT_MODEL,
       });
       threadId = started.thread.id;
       this.threadsByProject.set(projectDirectory, threadId);
@@ -607,7 +621,7 @@ export class CodexAppServer {
       approvalPolicy: CODEX_APPROVAL_POLICY,
       sandbox: CODEX_SANDBOX,
       serviceName: 'edvid_desktop_imagens',
-      model: CODEX_CHAT_MODEL,
+      model: this.engine?.model ?? CODEX_CHAT_MODEL,
     });
     const threadId = started.thread.id;
     this.utilityThreads.add(threadId);
@@ -647,6 +661,12 @@ export class CodexAppServer {
     const child = this.child;
     this.child = null;
     this.startPromise = null;
+    // Sinaliza que o encerramento foi pedido por nos: trocar o motor do chat
+    // derruba o processo de proposito, e o aluno via "Codex App Server
+    // encerrou (SIGTERM)" em vermelho como se algo tivesse quebrado.
+    this.stopping = true;
     if (child && !child.killed) child.kill();
   }
+
+  private stopping = false;
 }
