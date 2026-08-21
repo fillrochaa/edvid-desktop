@@ -40,6 +40,7 @@ const api: EdvidDesktopApi = {
     return () => ipcRenderer.removeListener('ai:roles', handler);
   },
   fulfillImageRequests: (directory) => ipcRenderer.invoke('image:fulfill', { directory }),
+  fulfillMusicRequests: (directory) => ipcRenderer.invoke('music:fulfill', { directory }),
   applyJcut: (directory) => ipcRenderer.invoke('jcut:apply', { directory }),
   syncJcut: (directory) => ipcRenderer.invoke('jcut:sync', { directory }),
   pendingCustomAnimations: (directory) => ipcRenderer.invoke('animations:pending-custom', { directory }),

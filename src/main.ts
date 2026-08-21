@@ -2909,6 +2909,71 @@ async function findFileInProject(
   return null;
 }
 
+// --- Geracao de TRILHA pedida pelo agente ----------------------------------
+// O agente escreve edit/musica/pedidos.json quando o aluno liga a trilha com
+// IA nos estilos; o Edvid gera pelo Treblo fora do sandbox e salva o arquivo.
+async function fulfillMusicRequests(projectDirectory: string): Promise<{ done: number; error?: string }> {
+  const musicDirectory = path.join(projectDirectory, 'edit', 'musica');
+  const requestsFile = path.join(musicDirectory, 'pedidos.json');
+  let requests: { arquivo: string; prompt: string; duracao?: number }[];
+  try {
+    const parsed = JSON.parse(await readFile(requestsFile, 'utf8')) as unknown;
+    requests = (Array.isArray(parsed) ? parsed : []).flatMap((entry) => {
+      const item = entry as { arquivo?: unknown; prompt?: unknown; duracao?: unknown };
+      const arquivo = path.basename(asText(item.arquivo));
+      const prompt = asText(item.prompt);
+      if (!arquivo || !prompt) return [];
+      const duracao = Number(item.duracao);
+      return [{ arquivo, prompt, duracao: Number.isFinite(duracao) ? duracao : undefined }];
+    });
+  } catch {
+    return { done: 0 };
+  }
+  if (requests.length === 0) return { done: 0 };
+
+  const stored = await readStoredCatalog();
+  const apiKey = asText(stored.providers?.treblo?.fields?.apiKey);
+  if (!apiKey) {
+    broadcastCodexEvent({
+      type: 'error',
+      message: 'A edição pediu uma trilha sonora, mas nenhuma IA de música está conectada. Conecte o Treblo em Configurações → Conexões.',
+    });
+    return { done: 0, error: 'Sem IA de música conectada.' };
+  }
+
+  await mkdir(musicDirectory, { recursive: true });
+  let done = 0;
+  for (const request of requests) {
+    try {
+      const response = await net.fetch('https://api.treblo.com/v1/generations/v3', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: request.prompt,
+          ...(request.duracao ? { duration: Math.round(request.duracao) } : {}),
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | { detail?: string; audio_url?: string; url?: string; song?: { audio_url?: string } }
+        | null;
+      const audioUrl = payload?.audio_url ?? payload?.url ?? payload?.song?.audio_url ?? null;
+      if (!response.ok || !audioUrl) {
+        throw new Error(payload?.detail ?? `O Treblo respondeu HTTP ${response.status}.`);
+      }
+      const audio = await net.fetch(audioUrl);
+      if (!audio.ok) throw new Error('Não consegui baixar a trilha gerada.');
+      await writeFile(path.join(musicDirectory, request.arquivo), Buffer.from(await audio.arrayBuffer()));
+      done += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      broadcastCodexEvent({ type: 'error', message: `Não consegui gerar a trilha: ${message}` });
+      return { done, error: message };
+    }
+  }
+  await rm(requestsFile, { force: true });
+  return { done };
+}
+
 // --- Geracao de imagens pedidas pelo agente --------------------------------
 // O agente de chat escreve edit/imagens/pedidos.json; depois do turno o
 // aplicativo gera cada imagem fora do sandbox com a IA de imagem do aluno
@@ -3454,6 +3519,14 @@ function registerIpcHandlers(): void {
     },
   );
 
+  ipcMain.handle('music:fulfill', async (_event, input: { directory?: string }) => {
+    const directory = path.resolve(asText(input.directory));
+    if (!selectedProjectDirectories.has(directory)) {
+      throw new Error('Escolha a pasta do projeto pelo seletor do Edvid.');
+    }
+    return fulfillMusicRequests(directory);
+  });
+
   ipcMain.handle('image:fulfill', (_event, input: { directory?: string }) => {
     const directory = path.resolve(asText(input.directory));
     if (!selectedProjectDirectories.has(directory)) {
@@ -3583,6 +3656,21 @@ function registerIpcHandlers(): void {
               ? 'Chave ou Account ID recusados pela Cloudflare.'
               : `A Cloudflare respondeu HTTP ${response.status}.`,
           };
+        }
+        if (entry.id === 'treblo') {
+          const response = await net.fetch('https://api.treblo.com/v1/generations/v3', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            // Corpo vazio de proposito: se a chave for boa, o erro fala do
+            // PEDIDO; se for ruim, fala da chave. Assim o teste nao gera
+            // musica nem consome credito do aluno.
+            body: '{}',
+          });
+          const detail = ((await response.json().catch(() => null)) as { detail?: string } | null)?.detail ?? '';
+          if (/api key|authorization/iu.test(detail)) {
+            return { ok: false, detail: 'Chave recusada pelo Treblo.' };
+          }
+          return { ok: true, detail: 'Chave válida.' };
         }
         const url = entry.id === 'ollama'
           ? 'https://ollama.com/api/tags'

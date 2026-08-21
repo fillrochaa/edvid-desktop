@@ -2024,7 +2024,6 @@ export function App() {
   // Cobrança da animação sob medida prometida e não escrita: uma por projeto.
   const [customAnimationRequest, setCustomAnimationRequest] = useState<{ directory: string; labels: string[] } | null>(null);
   const customAnimationChasedRef = useRef<Set<string>>(new Set());
-  const [aiOnboardingDismissed, setAiOnboardingDismissed] = useState(false);
   const [claudeCode, setClaudeCode] = useState('');
   // Entrada de chave de API: qual provedor esta com o campo aberto.
   const [keyEntry, setKeyEntry] = useState<AiProvider | null>(null);
@@ -2370,6 +2369,17 @@ export function App() {
     if (!directory) return;
     // O andamento chega por onImageGenState; sem pedidos o main devolve idle.
     void window.edvidDesktop.fulfillImageRequests(directory).catch(() => {});
+    // Trilha segue o mesmo caminho: sem pedido em edit/musica/, volta na hora.
+    void window.edvidDesktop.fulfillMusicRequests(directory)
+      .then((result) => {
+        if (result.done > 0) {
+          void dispatchMessage(
+            'A trilha sonora pedida está pronta em edit/musica/. Copie o arquivo para edit/remotion/public/ e ligue soundtrack no edit-data.json com volume 0.0445.',
+            'Trilha pronta — aplicando na edição',
+          );
+        }
+      })
+      .catch(() => {});
   }
 
   // Se o J-Cut ja foi aplicado e o agente re-renderizou o corte neste turno,
@@ -2774,6 +2784,13 @@ export function App() {
       `- Elementos incluídos: ${enabled}`,
       `- Elementos fora: ${disabled}`,
       `- Observação: ${style.note.trim() || 'nenhuma'}`,
+      // Trilha com IA: o Edvid gera fora do sandbox, como as imagens.
+      ...(style.elements.musicAI
+        ? [
+            '',
+            'Trilha sonora: peça a música em edit/musica/pedidos.json com uma lista [{"arquivo": "trilha.mp3", "prompt": "descrição do clima em inglês", "duracao": <segundos do corte>}]. O Edvid gera fora do sandbox com a IA de música conectada e avisa quando terminar; nesse turno, copie o arquivo para edit/remotion/public/ e ligue soundtrack no edit-data.json com volume baixo (0.0445 é a referência). Não tente compor nem baixar música por conta própria.',
+          ]
+        : []),
       // Tela dividida sem conteúdo definido fazia o agente improvisar (já
       // duplicou o próprio vídeo nas duas metades). A regra padrão é gerar
       // imagens com IA ilustrando a fala; a Observação pode apontar outra
@@ -3074,97 +3091,8 @@ export function App() {
     );
   }, [customAnimationRequest]);
 
-  // Onboarding da conexão de IA: logo depois do login do aluno, se nenhuma
-  // IA estiver conectada, o Edvid oferece ChatGPT, Claude e Gemini. O clique
-  // no logo abre o login daquele provedor (assinatura); cada card também
-  // aceita chave de API — no Gemini ela é o único caminho.
-  const showAiOnboarding =
-    claudeLoaded &&
-    geminiLoaded &&
-    account.status !== 'starting' &&
-    !chatgptConnected &&
-    !claudeConnected &&
-    !geminiConnected &&
-    !aiOnboardingDismissed;
-
   const claudeWaiting = claudeAccount.status === 'waiting-for-browser';
   const someLoginWaiting = account.status === 'waiting-for-browser' || claudeWaiting;
-  const aiModal = showAiOnboarding && (
-    <div className="modal-overlay ai-overlay">
-      <section className="ai-onboarding" role="dialog" aria-modal="true" aria-label="Conecte sua IA">
-        <h2>Conecte sua IA</h2>
-        <p>O Edvid edita com a inteligência da sua própria conta. Escolha qual conectar — dá para trocar depois em Configurações.</p>
-        <div className="ai-choices three">
-          <div className="ai-choice-cell">
-            <button
-              type="button"
-              className={`ai-choice ${account.status === 'waiting-for-browser' ? 'busy' : ''}`}
-              onClick={() => { setKeyEntry(null); if (account.status !== 'waiting-for-browser' && account.status !== 'starting') void login(); }}
-              disabled={claudeWaiting}
-            >
-              <img src={chatgptMark} alt="" />
-              <strong>ChatGPT</strong>
-              <small>{account.status === 'waiting-for-browser' ? 'Conclua no navegador…' : account.status === 'starting' ? 'Preparando…' : 'Entrar com sua conta'}</small>
-            </button>
-            <button type="button" className="ai-key-link" onClick={() => openKeyEntry('chatgpt')} disabled={someLoginWaiting}>ou usar chave de API</button>
-          </div>
-          <div className="ai-choice-cell">
-            <button
-              type="button"
-              className={`ai-choice ${claudeWaiting ? 'busy' : ''}`}
-              onClick={() => { setKeyEntry(null); if (!claudeWaiting) void claudeLogin(); }}
-              disabled={account.status === 'waiting-for-browser'}
-            >
-              <img src={claudeMark} alt="" />
-              <strong>Claude</strong>
-              <small>{claudeWaiting ? (claudeAccount.finishing ? 'Concluindo o login…' : claudeAccount.manual ? 'Cole o código abaixo' : 'Conclua no navegador…') : 'Entrar com sua conta'}</small>
-            </button>
-            <button type="button" className="ai-key-link" onClick={() => openKeyEntry('claude')} disabled={someLoginWaiting}>ou usar chave de API</button>
-          </div>
-          <div className="ai-choice-cell">
-            <button
-              type="button"
-              className={`ai-choice ${keyEntry === 'gemini' ? 'busy' : ''}`}
-              onClick={() => openKeyEntry('gemini')}
-              disabled={someLoginWaiting}
-            >
-              <img src={geminiMark} alt="" />
-              <strong>Gemini</strong>
-              <small>Conectar com chave de API</small>
-            </button>
-            <span className="ai-key-link ghost">chave do Google AI Studio</span>
-          </div>
-        </div>
-        {claudeWaiting && claudeAccount.manual && !claudeAccount.finishing && (
-          <div className="ai-code-row">
-            <input
-              type="text"
-              value={claudeCode}
-              placeholder="Cole aqui o código exibido pelo site"
-              onChange={(event) => setClaudeCode(event.target.value)}
-              onKeyDown={(event) => { if (event.key === 'Enter') void claudeSubmitCode(); }}
-            />
-            <button type="button" className="btn primary small" onClick={() => void claudeSubmitCode()} disabled={!claudeCode.trim()}>Confirmar</button>
-          </div>
-        )}
-        {!someLoginWaiting && keyEntryRow}
-        {(keyEntryError || account.error || claudeAccount.error) && (
-          <div className="inline-error">{keyEntryError ?? claudeAccount.error ?? account.error}</div>
-        )}
-        {someLoginWaiting ? (
-          <button
-            type="button"
-            className="ai-skip"
-            onClick={() => { if (claudeWaiting) void claudeCancelLogin(); else void cancelLogin(); }}
-          >
-            Cancelar login
-          </button>
-        ) : (
-          <button type="button" className="ai-skip" onClick={() => setAiOnboardingDismissed(true)}>Conectar depois</button>
-        )}
-      </section>
-    </div>
-  );
 
   // Modal do primeiro boot: o pacote de ferramentas baixando com o app
   // inteiro desfocado atrás. Aparece sobre o gate e sobre o estúdio.
@@ -3227,7 +3155,6 @@ export function App() {
   return (
     <div className={`studio-shell ${railPinned ? 'rail-pinned' : ''}`}>
       {packModal}
-      {aiModal}
       {/* Menu ⋯ aberto força a rail expandida: o backdrop fica fora dela e
           mataria o hover, colapsando a rail com o menu no ar. */}
       <aside className={`project-rail ${railPinned || projectMenu ? 'pinned' : ''}`}>
@@ -3359,10 +3286,10 @@ export function App() {
               {workspace && !activeAiConnected && messages.length === 0 && (
                 <div className="auth-inline">
                   <span className="chat-empty-icon"><Icon name="chat" /></span>
-                  <h2>Conecte sua IA</h2>
-                  <p>Entre com ChatGPT, Claude ou Gemini para começar a editar.</p>
+                  <h2>Conecte uma IA</h2>
+                  <p>Entre com a conta que você já paga ou use uma chave — há opções com camada gratuita.</p>
                   {account.error && <div className="inline-error">{account.error}</div>}
-                  <button type="button" className="btn primary" onClick={() => setAiOnboardingDismissed(false)}>Conectar IA</button>
+                  <button type="button" className="btn primary" onClick={() => setSettingsOpen(true)}>Conectar IA</button>
                 </div>
               )}
               {workspace && activeAiConnected && messages.length === 0 && (

@@ -1213,6 +1213,24 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.17.0: primeiro chat conduzido por IA gratuita FUNCIONANDO (Ollama), e o
+  que ele revelou. (1) O modelo respondeu em INGLÊS listando arquivo e campo
+  JSON ("Updated edit/remotion/public/edit-data.json — Set `hook`
+  {enabled:false}"). Modelo menor não obedece regra enterrada no meio de 100
+  linhas: PT-BR e "fale do efeito, não do arquivo" viraram REGRA 1 e REGRA 2,
+  no topo absoluto das instruções, com a lista do que é proibido no chat
+  (caminho de arquivo, campo JSON, código, crase). (2) O modal de conexão de
+  IA aparecia a CADA abertura para quem só tinha provedor do catálogo — a
+  condição olhava apenas ChatGPT/Claude/Gemini. O modal foi ELIMINADO: quem
+  não tem IA vê um convite no próprio chat com botão que abre Configurações,
+  sem bloquear a tela. (3) TREBLO no catálogo (trilha sonora): sondado,
+  `POST api.treblo.com/v1/generations/v3` com `Authorization: Bearer <chave>`
+  (a API diz explicitamente que o header precisa começar com "Bearer "). O
+  teste de chave manda corpo vazio de propósito — chave ruim reclama da
+  CHAVE, chave boa reclama do PEDIDO — então validar não gera música nem
+  gasta crédito. Ligando "Trilha sonora com IA" nos estilos, o agente pede em
+  edit/musica/pedidos.json e o Edvid gera fora do sandbox, no mesmo padrão
+  das imagens (a chave nunca entra no ambiente do agente).
 - 0.16.4: o 401 da OpenAI com o Ollama selecionado CONTINUOU depois da
   0.16.3 — e desta vez o culpado era o meu ciclo de vida, não o Codex. O
   config gerado na máquina do fill saía com `model = "gpt-5.6-terra"` e sem

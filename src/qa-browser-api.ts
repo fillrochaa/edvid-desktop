@@ -273,6 +273,7 @@ export function createQaBrowserApi(): EdvidDesktopApi {
       return () => rolesListeners.delete(listener);
     },
     fulfillImageRequests: async () => ({ status: 'idle' }),
+    fulfillMusicRequests: async () => ({ done: 0 }),
     applyJcut: async () => ({ applied: true, cuts: 2, error: null }),
     syncJcut: async () => ({ changed: false }),
     pendingCustomAnimations: async () => [],

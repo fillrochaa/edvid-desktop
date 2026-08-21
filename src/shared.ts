@@ -380,6 +380,8 @@ export type EdvidDesktopApi = {
   setAiRole: (role: AiRole, provider: AiProvider | null, pinned: boolean) => Promise<AiRolesState>;
   onAiRoles: (listener: (state: AiRolesState) => void) => () => void;
   fulfillImageRequests: (directory: string) => Promise<ImageGenState>;
+  // Trilha sonora pedida pelo agente quando o aluno liga a música com IA.
+  fulfillMusicRequests: (directory: string) => Promise<{ done: number; error?: string }>;
   onImageGenState: (listener: (state: ImageGenState) => void) => () => void;
   applyJcut: (directory: string) => Promise<JcutApplyResult>;
   syncJcut: (directory: string) => Promise<JcutSyncResult>;

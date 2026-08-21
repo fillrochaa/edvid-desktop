@@ -136,6 +136,22 @@ export const AI_CATALOG: AiCatalogEntry[] = [
     note: 'Modelos grandes de texto na nuvem. Não gera imagem.',
   },
   {
+    id: 'treblo',
+    name: 'Treblo',
+    capabilities: ['musica'],
+    pricing: 'mixed',
+    auth: ['apikey'],
+    keyUrl: 'https://treblo.com/developers',
+    credentials: [{ key: 'apiKey', label: 'Chave de API', secret: true }],
+    models: [
+      // Sondado: POST api.treblo.com/v1/generations/v3 com
+      // "Authorization: Bearer <chave>" (a propria API diz que o header
+      // precisa comecar com "Bearer ").
+      { id: 'melodia-v3', label: 'Melodia v3', capability: 'musica', free: false },
+    ],
+    note: 'Trilha sonora sob medida. Créditos gratuitos no cadastro; depois é por assinatura.',
+  },
+  {
     id: 'openrouter',
     name: 'OpenRouter',
     capabilities: ['texto', 'imagem'],
