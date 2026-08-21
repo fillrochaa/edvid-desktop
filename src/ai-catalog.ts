@@ -1,0 +1,137 @@
+// Catalogo de IAs conectaveis e escolha de quem atende cada papel.
+//
+// A ideia veio do OmniRoute: em vez de tres provedores fixos, o aluno conecta
+// as contas que tiver — de preferencia as de camada gratuita — e o Edvid
+// escolhe sozinho, trocando de provedor quando um bate no limite. Modulo PURO
+// de proposito: a decisao de "quem gera esta imagem" precisa ser testavel sem
+// rede, sem Electron e sem chave de ninguem.
+//
+// Levantamento que definiu o catalogo inicial (agosto/2026, medido na API de
+// cada um, nao em promessa de marketing):
+// - OpenRouter tem 11 modelos de imagem e NENHUM gratuito; serve por dar
+//   muitos modelos com uma chave so, e o mais barato sai por fracao de centavo.
+// - Gemini nao tem camada gratuita para imagem — todo modelo de imagem e pago.
+// - Cloudflare Workers AI e quem realmente entrega imagem de graca: 10 mil
+//   neurons por dia (~2 mil imagens FLUX.1 Schnell 512x512).
+
+export type AiCapability = 'texto' | 'imagem' | 'video' | 'musica' | 'voz';
+
+// Como a conta e cobrada. "mixed" e o caso do OpenRouter: a mesma chave da
+// acesso a modelo gratuito e pago, e por isso existe o filtro do aluno.
+export type AiPricing = 'free' | 'paid' | 'mixed';
+
+export type AiCredentialField = {
+  key: string;
+  label: string;
+  // Campo que nao e a chave em si (ex.: o Account ID da Cloudflare). Fica
+  // visivel na interface; a chave, nunca.
+  secret: boolean;
+  placeholder?: string;
+};
+
+export type AiCatalogEntry = {
+  id: string;
+  name: string;
+  capabilities: AiCapability[];
+  pricing: AiPricing;
+  // Pagina onde o aluno cria a chave. O catalogo leva ele ate la.
+  keyUrl: string;
+  credentials: AiCredentialField[];
+  // Modelos por papel, na ordem de preferencia. `free` marca o que nao gasta
+  // dinheiro do aluno — e o que sobra quando ele liga "apenas gratuitos".
+  models: { id: string; label: string; capability: AiCapability; free: boolean }[];
+  note?: string;
+};
+
+export const AI_CATALOG: AiCatalogEntry[] = [
+  {
+    id: 'cloudflare',
+    name: 'Cloudflare Workers AI',
+    capabilities: ['imagem', 'texto'],
+    pricing: 'free',
+    keyUrl: 'https://dash.cloudflare.com/profile/api-tokens',
+    credentials: [
+      { key: 'accountId', label: 'Account ID', secret: false, placeholder: 'ID da conta Cloudflare' },
+      { key: 'apiKey', label: 'API Token', secret: true },
+    ],
+    models: [
+      { id: '@cf/black-forest-labs/flux-1-schnell', label: 'FLUX.1 Schnell', capability: 'imagem', free: true },
+    ],
+    note: 'Camada gratuita diária generosa (cerca de 2 mil imagens por dia).',
+  },
+  {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    capabilities: ['texto', 'imagem'],
+    pricing: 'mixed',
+    keyUrl: 'https://openrouter.ai/keys',
+    credentials: [{ key: 'apiKey', label: 'Chave de API', secret: true }],
+    models: [
+      { id: 'google/gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image', capability: 'imagem', free: false },
+      { id: 'openai/gpt-5-image-mini', label: 'GPT-5 Image Mini', capability: 'imagem', free: false },
+    ],
+    note: 'Uma chave, muitos modelos. Os modelos de imagem são pagos (frações de centavo por imagem).',
+  },
+];
+
+export type ConnectedProvider = {
+  id: string;
+  // Provedor conectado mas em descanso ate este horario (bateu no limite).
+  cooldownUntil?: number | null;
+};
+
+export type RouteRequest = {
+  capability: AiCapability;
+  connected: ConnectedProvider[];
+  // Ligado pelo aluno: so entra modelo que nao gasta dinheiro dele.
+  freeOnly: boolean;
+  // Agora, em ms. Recebido de fora para o modulo continuar puro.
+  now: number;
+};
+
+export type RouteChoice = {
+  providerId: string;
+  providerName: string;
+  modelId: string;
+  modelLabel: string;
+  free: boolean;
+};
+
+export function catalogEntry(providerId: string): AiCatalogEntry | null {
+  return AI_CATALOG.find((entry) => entry.id === providerId) ?? null;
+}
+
+// Todos os candidatos capazes de atender o papel, do melhor para o pior.
+// Ordem: gratuito antes de pago (o aluno nao paga sem precisar) e, dentro do
+// mesmo preco, a ordem em que o provedor aparece no catalogo.
+export function routeCandidates(request: RouteRequest): RouteChoice[] {
+  const candidates: RouteChoice[] = [];
+  for (const connected of request.connected) {
+    if (connected.cooldownUntil && connected.cooldownUntil > request.now) continue;
+    const entry = catalogEntry(connected.id);
+    if (!entry) continue;
+    for (const model of entry.models) {
+      if (model.capability !== request.capability) continue;
+      if (request.freeOnly && !model.free) continue;
+      candidates.push({
+        providerId: entry.id,
+        providerName: entry.name,
+        modelId: model.id,
+        modelLabel: model.label,
+        free: model.free,
+      });
+    }
+  }
+  return candidates.sort((a, b) => Number(b.free) - Number(a.free));
+}
+
+export function routeFor(request: RouteRequest): RouteChoice | null {
+  return routeCandidates(request)[0] ?? null;
+}
+
+// Erro que significa "tente outro provedor" em vez de "desista": limite de uso
+// e indisponibilidade passam; prompt recusado ou chave errada, nao.
+export function shouldFailover(status: number | null, message: string): boolean {
+  if (status === 429 || (status !== null && status >= 500)) return true;
+  return /limit|quota|exceeded|unavailable|sem conexão|timeout|esgotad/iu.test(message);
+}

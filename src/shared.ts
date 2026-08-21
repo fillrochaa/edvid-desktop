@@ -218,6 +218,37 @@ export type AiRolesState = {
   imagePinned: boolean;
 };
 
+// CATALOGO DE IAs (0.15.0): alem das tres contas fixas, o aluno conecta
+// provedores do catalogo com a propria chave — de preferencia os de camada
+// gratuita — e o Edvid escolhe sozinho quem atende cada papel, trocando
+// quando um bate no limite. O catalogo em si vive em ai-catalog.ts.
+export type CatalogConnection = {
+  id: string;
+  connected: boolean;
+  // Só o que pode ser mostrado: nunca a chave, apenas os últimos dígitos.
+  maskedKey: string | null;
+  // Campos nao secretos (ex.: Account ID da Cloudflare) voltam inteiros.
+  fields: Record<string, string>;
+  // Preenchido quando o provedor bateu no limite; o roteamento o ignora ate la.
+  cooldownUntil: number | null;
+};
+
+export type CatalogState = {
+  connections: CatalogConnection[];
+  // Ligado pelo aluno: so usa modelo que nao gasta dinheiro dele.
+  freeOnly: boolean;
+};
+
+// Quem atendeu (ou vai atender) o papel agora — mostrado abaixo do campo de
+// texto do chat, para o aluno nunca ficar no escuro sobre qual IA respondeu.
+export type ActiveModelState = {
+  role: AiRole;
+  providerId: string;
+  providerName: string;
+  modelLabel: string;
+  free: boolean;
+} | null;
+
 // Geracao das imagens pedidas pelo agente em edit/imagens/pedidos.json,
 // executada pelo aplicativo fora do sandbox depois do turno (mesmo padrao do
 // render da Fase 2).
@@ -362,6 +393,14 @@ export type EdvidDesktopApi = {
   connectGeminiApiKey: (apiKey: string) => Promise<GeminiAccountState>;
   disconnectGemini: () => Promise<GeminiAccountState>;
   onGeminiAccount: (listener: (state: GeminiAccountState) => void) => () => void;
+  // Catalogo de IAs: conectar/desconectar por provedor, filtro de gratuitos e
+  // quem esta atendendo cada papel no momento.
+  getAiCatalog: () => Promise<CatalogState>;
+  connectCatalogProvider: (id: string, fields: Record<string, string>) => Promise<CatalogState>;
+  disconnectCatalogProvider: (id: string) => Promise<CatalogState>;
+  setCatalogFreeOnly: (freeOnly: boolean) => Promise<CatalogState>;
+  onAiCatalog: (listener: (state: CatalogState) => void) => () => void;
+  onActiveModel: (listener: (state: ActiveModelState) => void) => () => void;
   saveTimelineModel: (
     directory: string,
     model: TimelineModel,

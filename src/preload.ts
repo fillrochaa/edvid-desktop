@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  ActiveModelState,
   AiRolesState,
   AppUpdateState,
+  CatalogState,
   ClaudeAccountState,
   CodexEvent,
   EdvidDesktopApi,
@@ -65,6 +67,20 @@ const api: EdvidDesktopApi = {
     const handler = (_event: Electron.IpcRendererEvent, state: GeminiAccountState) => listener(state);
     ipcRenderer.on('gemini:account', handler);
     return () => ipcRenderer.removeListener('gemini:account', handler);
+  },
+  getAiCatalog: () => ipcRenderer.invoke('ai-catalog:read'),
+  connectCatalogProvider: (id, fields) => ipcRenderer.invoke('ai-catalog:connect', { id, fields }),
+  disconnectCatalogProvider: (id) => ipcRenderer.invoke('ai-catalog:disconnect', { id }),
+  setCatalogFreeOnly: (freeOnly) => ipcRenderer.invoke('ai-catalog:free-only', { freeOnly }),
+  onAiCatalog: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: CatalogState) => listener(state);
+    ipcRenderer.on('ai-catalog:state', handler);
+    return () => ipcRenderer.removeListener('ai-catalog:state', handler);
+  },
+  onActiveModel: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: ActiveModelState) => listener(state);
+    ipcRenderer.on('ai-catalog:active-model', handler);
+    return () => ipcRenderer.removeListener('ai-catalog:active-model', handler);
   },
   saveTimelineModel: (directory, model, loadStamp) =>
     ipcRenderer.invoke('timeline:save', { directory, model, loadStamp }),

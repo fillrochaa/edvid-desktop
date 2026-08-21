@@ -1,7 +1,9 @@
 import type {
+  ActiveModelState,
   AiProvider,
   AiRole,
   AiRolesState,
+  CatalogState,
   ClaudeAccountState,
   CodexEvent,
   EdvidDesktopApi,
@@ -135,6 +137,32 @@ function emitRoles(): void {
 }
 let qaClaude: ClaudeAccountState = { status: 'signed-out', email: null };
 const claudeListeners = new Set<(state: ClaudeAccountState) => void>();
+// Catálogo de IAs no QA: "?catalogo" abre com o gratuito já conectado.
+const qaCatalogConnected = new URLSearchParams(window.location.search).has('catalogo');
+let qaCatalog: CatalogState = {
+  freeOnly: qaCatalogConnected,
+  connections: [
+    {
+      id: 'cloudflare',
+      connected: qaCatalogConnected,
+      maskedKey: qaCatalogConnected ? '••••7f2a' : null,
+      fields: qaCatalogConnected ? { accountId: 'a1b2c3d4e5' } : {},
+      cooldownUntil: null,
+    },
+    { id: 'openrouter', connected: false, maskedKey: null, fields: {}, cooldownUntil: null },
+  ],
+};
+const catalogListeners = new Set<(state: CatalogState) => void>();
+const qaActiveModel: ActiveModelState = qaCatalogConnected
+  ? { role: 'image', providerId: 'cloudflare', providerName: 'Cloudflare Workers AI', modelLabel: 'FLUX.1 Schnell', free: true }
+  : null;
+const activeModelListeners = new Set<(state: ActiveModelState) => void>();
+
+function emitCatalog(state: CatalogState): void {
+  qaCatalog = state;
+  for (const listener of catalogListeners) listener(state);
+}
+
 let qaGemini: GeminiAccountState = { status: 'signed-out', maskedKey: null };
 const geminiListeners = new Set<(state: GeminiAccountState) => void>();
 
@@ -324,6 +352,46 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     onGeminiAccount: (listener) => {
       geminiListeners.add(listener);
       return () => geminiListeners.delete(listener);
+    },
+    // Catálogo de IAs no QA visual: "?catalogo" já abre com o Cloudflare
+    // conectado, para conferir badges, máscara da chave e o botão de remover.
+    getAiCatalog: async () => qaCatalog,
+    connectCatalogProvider: async (id, fields) => {
+      const secret = Object.entries(fields).find(([key]) => key.toLowerCase().includes('key'));
+      emitCatalog({
+        ...qaCatalog,
+        connections: qaCatalog.connections.map((connection) => connection.id === id
+          ? {
+            ...connection,
+            connected: true,
+            maskedKey: secret ? `••••${secret[1].slice(-4)}` : '••••',
+            fields: Object.fromEntries(Object.entries(fields).filter(([key]) => !key.toLowerCase().includes('key'))),
+          }
+          : connection),
+      });
+      return qaCatalog;
+    },
+    disconnectCatalogProvider: async (id) => {
+      emitCatalog({
+        ...qaCatalog,
+        connections: qaCatalog.connections.map((connection) => connection.id === id
+          ? { ...connection, connected: false, maskedKey: null, fields: {} }
+          : connection),
+      });
+      return qaCatalog;
+    },
+    setCatalogFreeOnly: async (freeOnly) => {
+      emitCatalog({ ...qaCatalog, freeOnly });
+      return qaCatalog;
+    },
+    onAiCatalog: (listener) => {
+      catalogListeners.add(listener);
+      return () => catalogListeners.delete(listener);
+    },
+    onActiveModel: (listener) => {
+      if (qaActiveModel) setTimeout(() => listener(qaActiveModel), 0);
+      activeModelListeners.add(listener);
+      return () => activeModelListeners.delete(listener);
     },
     saveTimelineModel: async () => {
       // O QA visual não persiste; as edições ficam apenas em memória.

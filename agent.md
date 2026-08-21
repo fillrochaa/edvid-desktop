@@ -1213,6 +1213,31 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.15.0: CATÁLOGO DE IAs (primeira fatia: imagem). Ideia trazida pelo fill a
+  partir do OmniRoute: em vez de três contas fixas, o aluno conecta os
+  provedores que tiver — de preferência os de camada gratuita — e o Edvid
+  escolhe sozinho quem atende, trocando quando um bate no limite. O que o
+  levantamento mostrou, medido na API de cada um e não no marketing:
+  **OpenRouter tem 11 modelos de imagem e NENHUM gratuito**; **o Gemini
+  também não tem camada gratuita para imagem** (todo modelo de imagem é pago);
+  quem entrega imagem de graça de verdade é a **Cloudflare Workers AI**
+  (10 mil neurons/dia, ~2 mil imagens FLUX.1 Schnell). Por isso o catálogo
+  inicial é Cloudflare (gratuito) + OpenRouter (uma chave, muitos modelos,
+  pagos). Peças: `ai-catalog.ts` (módulo PURO com o catálogo, badges por
+  capacidade, filtro de gratuitos, ordem de preferência e a regra de quando
+  vale trocar de provedor), credenciais em `userData/ai-catalog.json` (0600,
+  a interface só recebe máscara), cadeia de fallback na geração de imagem com
+  descanso de 30 min para quem estourou o limite, aviso no chat na troca e o
+  indicador "quem está atendendo agora" abaixo do campo de texto. Decisões do
+  fill: badge é "Gratuito" (não "experimental") com o aviso curto "IAs
+  gratuitas podem ter resultados insatisfatórios"; a troca é automática, mas
+  sempre avisada. `npm run test:ai-catalog` cobre preferência pelo gratuito,
+  descanso por limite, filtro respeitado e failover só no erro que adianta
+  (429/5xx sim; chave inválida e prompt recusado não). QA visual: `?catalogo`.
+  A ressalva registrada para o papel de CHAT (ainda não implementado): o
+  agente executa comandos e segue instruções longas, e modelo gratuito pequeno
+  tende a falhar de formas novas — o Codex aceita `model_providers`
+  customizados, então é viável, mas merece rótulo honesto.
 - 0.14.7: whoosh -60% e o render que começava sozinho. (1) O SFX de entrada
   das animações chamava mais atenção que a animação: virou a constante
   `WHOOSH_VOLUME` (0,036, era 0,09 e 0,1 em alguns pontos) usada por TODOS os

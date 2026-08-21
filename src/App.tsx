@@ -44,6 +44,7 @@ import chatgptMark from './brand/ai/chatgpt-mark.svg';
 import claudeMark from './brand/ai/claude-mark.svg';
 import geminiMark from './brand/ai/gemini-mark.svg';
 import type {
+  ActiveModelState,
   AiProvider,
   AiRolesState,
   AppUpdateState,
@@ -57,6 +58,7 @@ import type {
   MemberAuthState,
   OverlayClip,
   Phase2RenderState,
+  CatalogState,
   ProjectSummary,
   RuntimePackState,
   ProjectWorkspace,
@@ -67,6 +69,7 @@ import type {
   TimelineModel,
   WhisperModelState,
 } from './shared';
+import { AI_CATALOG } from './ai-catalog';
 import {
   VIDEO_TRACK_ID,
   VOICE_TRACK_ID,
@@ -2002,6 +2005,11 @@ export function App() {
   const [claudeAccount, setClaudeAccount] = useState<ClaudeAccountState>({ status: 'signed-out', email: null });
   const [claudeLoaded, setClaudeLoaded] = useState(false);
   const [geminiAccount, setGeminiAccount] = useState<GeminiAccountState>({ status: 'signed-out', maskedKey: null });
+  const [aiCatalog, setAiCatalog] = useState<CatalogState>({ connections: [], freeOnly: false });
+  const [catalogDraft, setCatalogDraft] = useState<Record<string, Record<string, string>>>({});
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  // Quem está atendendo agora: mostrado abaixo do campo de texto do chat.
+  const [activeModel, setActiveModel] = useState<ActiveModelState>(null);
   const [geminiLoaded, setGeminiLoaded] = useState(false);
   const [aiRoles, setAiRoles] = useState<AiRolesState>({ chat: 'chatgpt', image: null, chatPinned: false, imagePinned: false });
   const [imageGen, setImageGen] = useState<ImageGenState>({ status: 'idle' });
@@ -2780,6 +2788,9 @@ export function App() {
     const unsubscribeMember = window.edvidDesktop.onMemberAuthState(setMemberAuth);
     const unsubscribeClaude = window.edvidDesktop.onClaudeAccount(setClaudeAccount);
     const unsubscribeGemini = window.edvidDesktop.onGeminiAccount(setGeminiAccount);
+    const unsubscribeCatalog = window.edvidDesktop.onAiCatalog(setAiCatalog);
+    const unsubscribeActiveModel = window.edvidDesktop.onActiveModel(setActiveModel);
+    void window.edvidDesktop.getAiCatalog().then(setAiCatalog).catch(() => {});
     const unsubscribeRoles = window.edvidDesktop.onAiRoles(setAiRoles);
     const unsubscribeImageGen = window.edvidDesktop.onImageGenState(handleImageGenState);
     void window.edvidDesktop.getMemberAuth().then(setMemberAuth);
@@ -2829,6 +2840,8 @@ export function App() {
       unsubscribePack();
       unsubscribeClaude();
       unsubscribeGemini();
+      unsubscribeCatalog();
+      unsubscribeActiveModel();
       unsubscribeRoles();
       unsubscribeImageGen();
     };
@@ -3344,6 +3357,16 @@ export function App() {
                   </select>
                 </label>
               </div>
+              {/* Qual IA está atendendo AGORA. Com a cadeia do catálogo o
+                  provedor troca sozinho no meio do trabalho; sem isto o aluno
+                  não teria como saber quem respondeu. */}
+              {activeModel && (
+                <p className="active-model" title={`${activeModel.providerName} · ${activeModel.modelLabel}`}>
+                  <span className="active-model-dot" aria-hidden="true" />
+                  {activeModel.role === 'image' ? 'Imagem' : 'Chat'} · {activeModel.providerName} · {activeModel.modelLabel}
+                  {activeModel.free && <span className="badge free">Gratuito</span>}
+                </p>
+              )}
             </form>
           </section>
 
@@ -3576,6 +3599,98 @@ export function App() {
                   {keyEntry === 'gemini' && keyEntryRow}
                   {(keyEntryError || claudeAccount.error) && <p className="settings-note error">{keyEntryError ?? claudeAccount.error}</p>}
                   <p className="settings-note">Assinatura: ChatGPT e Claude entram pelo navegador com a conta que você já paga; imagens do ChatGPT saem da cota do plano. Chave de API: cobrada por uso na plataforma de cada um (imagens do ChatGPT por chave são pagas por imagem); a do Gemini sai grátis no Google AI Studio com limite diário. O Claude não gera imagens.</p>
+                </div>
+                {/* CATÁLOGO DE IAs: o aluno conecta a própria chave e o Edvid
+                    escolhe sozinho quem atende, trocando quando um bate no
+                    limite. É por aqui que entram as opções de camada gratuita. */}
+                <div className="settings-block">
+                  <h3>Catálogo de IAs</h3>
+                  <label className="catalog-toggle">
+                    <input
+                      type="checkbox"
+                      checked={aiCatalog.freeOnly}
+                      onChange={(event) => void window.edvidDesktop
+                        .setCatalogFreeOnly(event.target.checked)
+                        .then(setAiCatalog)
+                        .catch((error) => setCatalogError(errorMessage(error)))}
+                    />
+                    <span>Usar apenas modelos gratuitos</span>
+                  </label>
+                  {AI_CATALOG.map((entry) => {
+                    const connection = aiCatalog.connections.find((item) => item.id === entry.id);
+                    const draft = catalogDraft[entry.id] ?? {};
+                    const hasFree = entry.models.some((model) => model.free);
+                    return (
+                      <div className="catalog-item" key={entry.id}>
+                        <div className="catalog-head">
+                          <div>
+                            <strong>{entry.name}</strong>
+                            <div className="badges">
+                              {entry.capabilities.map((capability) => (
+                                <span className="badge" key={capability}>{capability}</span>
+                              ))}
+                              {hasFree && <span className="badge free">Gratuito</span>}
+                            </div>
+                          </div>
+                          {connection?.connected
+                            ? (
+                              <button
+                                type="button"
+                                className="account-action"
+                                onClick={() => void window.edvidDesktop
+                                  .disconnectCatalogProvider(entry.id)
+                                  .then(setAiCatalog)
+                                  .catch((error) => setCatalogError(errorMessage(error)))}
+                              >
+                                Remover
+                              </button>
+                            )
+                            : <a className="account-action" href={entry.keyUrl} target="_blank" rel="noreferrer">Criar chave</a>}
+                        </div>
+                        {entry.note && <small className="settings-note">{entry.note}</small>}
+                        {connection?.connected
+                          ? (
+                            <small className="settings-note">
+                              Conectado · chave {connection.maskedKey}
+                              {Object.entries(connection.fields).map(([key, value]) => ` · ${key}: ${value}`)}
+                            </small>
+                          )
+                          : (
+                            <div className="catalog-fields">
+                              {entry.credentials.map((field) => (
+                                <input
+                                  key={field.key}
+                                  type={field.secret ? 'password' : 'text'}
+                                  placeholder={field.placeholder ?? field.label}
+                                  value={draft[field.key] ?? ''}
+                                  onChange={(event) => setCatalogDraft((current) => ({
+                                    ...current,
+                                    [entry.id]: { ...current[entry.id], [field.key]: event.target.value },
+                                  }))}
+                                />
+                              ))}
+                              <button
+                                type="button"
+                                className="account-action"
+                                disabled={!entry.credentials.every((field) => (draft[field.key] ?? '').trim())}
+                                onClick={() => void window.edvidDesktop
+                                  .connectCatalogProvider(entry.id, draft)
+                                  .then((state) => {
+                                    setAiCatalog(state);
+                                    setCatalogDraft((current) => ({ ...current, [entry.id]: {} }));
+                                    setCatalogError(null);
+                                  })
+                                  .catch((error) => setCatalogError(errorMessage(error)))}
+                              >
+                                Conectar
+                              </button>
+                            </div>
+                          )}
+                      </div>
+                    );
+                  })}
+                  {catalogError && <p className="settings-note error">{catalogError}</p>}
+                  <p className="settings-note">IAs gratuitas podem ter resultados insatisfatórios.</p>
                 </div>
                 <div className="settings-block">
                   <h3>MCPs</h3>

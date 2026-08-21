@@ -567,3 +567,62 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .role-select select:focus { border-color: rgba(255,119,19,.45); color: var(--text); }
 .role-select option { color: #1c222b; }
 .style-thumb { display: block; width: 100%; height: auto; border-radius: 8px; background: #0c1015; user-select: none; }
+
+/* --- Catálogo de IAs (Configurações → Conexões) --------------------------- */
+/* Badge diz o que a IA faz (texto, imagem, vídeo…) e se tem camada gratuita.
+   O aluno escolhe pelo badge antes de ler qualquer texto. */
+.badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.badge {
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: var(--text-dim);
+  text-transform: capitalize;
+}
+.badge.free {
+  color: #4fd08b;
+  border-color: rgba(79, 208, 139, 0.45);
+  background: rgba(79, 208, 139, 0.12);
+  text-transform: none;
+}
+.catalog-toggle { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-size: 13px; }
+.catalog-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.catalog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.catalog-head strong { display: block; }
+.catalog-fields { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.catalog-fields input {
+  flex: 1 1 160px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+  color: var(--text);
+}
+.settings-note.error { color: #ff8a7a; }
+
+/* Quem está atendendo agora, logo abaixo do campo de texto do chat. */
+.active-model {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.active-model-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4fd08b;
+  flex: none;
+}
+/* Nota e estado de conexão em linhas próprias: grudados viravam um bloco só. */
+.catalog-item .settings-note { display: block; margin: 8px 0 0; }

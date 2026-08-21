@@ -24,6 +24,7 @@ import { ClaudeAgent } from './claude-agent';
 import { CodexAppServer } from './codex-app-server';
 import { GeminiAgent } from './gemini-agent';
 import { JCUT_LEAD_SECONDS, extractionArgs, mixArgs, muxArgs, planJcut } from './jcut';
+import { AI_CATALOG, catalogEntry, routeCandidates, shouldFailover } from './ai-catalog';
 import { mediaKind, mediaMimeType, mediaTier, pickPreviewMedia, resolveByteRange } from './media-selection';
 import { resolveRuntime, runtimePackKey, type RuntimeResolution } from './runtime';
 import type {
@@ -34,6 +35,9 @@ import type {
   CodexApprovalDecision,
   CodexEvent,
   CodexSendMessageInput,
+  ActiveModelState,
+  CatalogConnection,
+  CatalogState,
   GeminiAccountState,
   ImageGenState,
   JcutApplyResult,
@@ -2642,6 +2646,180 @@ async function syncJcutForProject(projectDirectory: string): Promise<JcutSyncRes
   return { changed: result.applied };
 }
 
+// --- Catalogo de IAs conectadas ---------------------------------------------
+// As credenciais ficam em userData/ai-catalog.json (0600), no mesmo padrao das
+// outras contas. O arquivo guarda a chave; a interface so recebe a mascara.
+
+type StoredCatalogEntry = { fields: Record<string, string>; cooldownUntil?: number | null };
+type StoredCatalog = { freeOnly?: boolean; providers?: Record<string, StoredCatalogEntry> };
+
+function catalogFile(): string {
+  return path.join(app.getPath('userData'), 'ai-catalog.json');
+}
+
+async function readStoredCatalog(): Promise<StoredCatalog> {
+  try {
+    return JSON.parse(await readFile(catalogFile(), 'utf8')) as StoredCatalog;
+  } catch {
+    return {};
+  }
+}
+
+async function writeStoredCatalog(stored: StoredCatalog): Promise<void> {
+  await writeFile(catalogFile(), `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
+}
+
+function maskKey(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.length <= 4 ? '••••' : `••••${trimmed.slice(-4)}`;
+}
+
+function catalogStateFrom(stored: StoredCatalog): CatalogState {
+  const providers = stored.providers ?? {};
+  const connections: CatalogConnection[] = AI_CATALOG.map((entry) => {
+    const saved = providers[entry.id];
+    const fields: Record<string, string> = {};
+    let maskedKey: string | null = null;
+    for (const field of entry.credentials) {
+      const value = asText(saved?.fields?.[field.key]);
+      if (!value) continue;
+      if (field.secret) maskedKey = maskKey(value);
+      else fields[field.key] = value;
+    }
+    return {
+      id: entry.id,
+      connected: Boolean(saved && entry.credentials.every((f) => asText(saved.fields?.[f.key]))),
+      maskedKey,
+      fields,
+      cooldownUntil: saved?.cooldownUntil ?? null,
+    };
+  });
+  return { connections, freeOnly: stored.freeOnly ?? false };
+}
+
+function broadcastCatalog(state: CatalogState): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('ai-catalog:state', state);
+  }
+}
+
+function broadcastActiveModel(state: ActiveModelState): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('ai-catalog:active-model', state);
+  }
+}
+
+// Provedor bateu no limite: descansa 30 min. E o que faz o Edvid seguir para o
+// proximo em vez de encerrar a geracao.
+const CATALOG_COOLDOWN_MS = 30 * 60_000;
+
+async function markCatalogCooldown(providerId: string): Promise<void> {
+  const stored = await readStoredCatalog();
+  const providers = stored.providers ?? {};
+  const saved = providers[providerId];
+  if (!saved) return;
+  providers[providerId] = { ...saved, cooldownUntil: Date.now() + CATALOG_COOLDOWN_MS };
+  await writeStoredCatalog({ ...stored, providers });
+  broadcastCatalog(catalogStateFrom({ ...stored, providers }));
+}
+
+// Uma imagem, num provedor do catalogo. Cada formato tem seu jeito de pedir e
+// de devolver os bytes; o resto do aplicativo so ve Buffer ou erro.
+async function generateCatalogImage(
+  choice: { providerId: string; modelId: string },
+  credentials: Record<string, string>,
+  prompt: string,
+): Promise<Buffer> {
+  if (choice.providerId === 'cloudflare') {
+    const accountId = asText(credentials.accountId);
+    const response = await net.fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/${choice.modelId}`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${credentials.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, steps: 4 }),
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as
+      | { result?: { image?: string }; errors?: { message?: string }[] }
+      | null;
+    if (!response.ok || !payload?.result?.image) {
+      const detail = payload?.errors?.[0]?.message ?? `HTTP ${response.status}`;
+      throw new OpenRouterLikeError(detail, response.status);
+    }
+    return Buffer.from(payload.result.image, 'base64');
+  }
+
+  if (choice.providerId === 'openrouter') {
+    const response = await net.fetch('https://openrouter.ai/api/v1/images', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${credentials.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: choice.modelId, prompt }),
+    });
+    const payload = (await response.json().catch(() => null)) as
+      | { data?: { b64_json?: string }[]; error?: { message?: string } }
+      | null;
+    const base64 = payload?.data?.[0]?.b64_json;
+    if (!response.ok || !base64) {
+      const detail = payload?.error?.message ?? `HTTP ${response.status}`;
+      throw new OpenRouterLikeError(detail, response.status);
+    }
+    return Buffer.from(base64, 'base64');
+  }
+
+  throw new OpenRouterLikeError(`Provedor ${choice.providerId} não sabe gerar imagem.`, null);
+}
+
+class OpenRouterLikeError extends Error {
+  constructor(message: string, readonly status: number | null) {
+    super(message);
+  }
+}
+
+// Gera passando pela CADEIA do catalogo: o primeiro que responder entrega. Quem
+// bater no limite entra em descanso e a vez passa adiante, com aviso no chat.
+async function generateImageFromCatalog(prompt: string): Promise<Buffer | null> {
+  const stored = await readStoredCatalog();
+  const state = catalogStateFrom(stored);
+  const connected = state.connections
+    .filter((connection) => connection.connected)
+    .map((connection) => ({ id: connection.id, cooldownUntil: connection.cooldownUntil }));
+  if (connected.length === 0) return null;
+  const candidates = routeCandidates({
+    capability: 'imagem',
+    connected,
+    freeOnly: state.freeOnly,
+    now: Date.now(),
+  });
+  let lastError: Error | null = null;
+  for (const [index, choice] of candidates.entries()) {
+    const credentials = stored.providers?.[choice.providerId]?.fields ?? {};
+    broadcastActiveModel({
+      role: 'image',
+      providerId: choice.providerId,
+      providerName: choice.providerName,
+      modelLabel: choice.modelLabel,
+      free: choice.free,
+    });
+    try {
+      return await generateCatalogImage(choice, credentials, prompt);
+    } catch (error) {
+      const status = error instanceof OpenRouterLikeError ? error.status : null;
+      const message = error instanceof Error ? error.message : String(error);
+      lastError = error instanceof Error ? error : new Error(message);
+      if (!shouldFailover(status, message) || index === candidates.length - 1) break;
+      await markCatalogCooldown(choice.providerId);
+      const next = candidates[index + 1];
+      broadcastCodexEvent({
+        type: 'error',
+        message: `${choice.providerName} atingiu o limite. Continuando com ${next.providerName}.`,
+      });
+    }
+  }
+  if (lastError) throw lastError;
+  return null;
+}
+
 // Procura um arquivo pelo NOME dentro do projeto (profundidade curta): rede de
 // seguranca para quando a IA salva a imagem fora da pasta combinada.
 async function findFileInProject(
@@ -2786,10 +2964,17 @@ function fulfillImageRequests(projectDirectory: string): Promise<ImageGenState> 
     }
 
     const provider = aiRoles.image;
-    if (!provider) {
+    // O catalogo tem prioridade sobre as contas fixas: e onde estao as opcoes
+    // de camada gratuita, e a cadeia dele ja troca de provedor sozinha.
+    const catalogState = catalogStateFrom(await readStoredCatalog());
+    const catalogHasImage = catalogState.connections.some(
+      (connection) => connection.connected
+        && (catalogEntry(connection.id)?.capabilities.includes('imagem') ?? false),
+    );
+    if (!provider && !catalogHasImage) {
       broadcastCodexEvent({
         type: 'error',
-        message: `A edição pediu ${pending.length === 1 ? 'uma imagem' : `${pending.length} imagens`}, mas nenhuma IA de imagem está conectada. Conecte o ChatGPT (assinatura) ou uma chave do Gemini em Configurações → Conexões.`,
+        message: `A edição pediu ${pending.length === 1 ? 'uma imagem' : `${pending.length} imagens`}, mas nenhuma IA de imagem está conectada. Conecte uma IA em Configurações → Conexões (há opções com camada gratuita).`,
       });
       return { status: 'error', error: 'Nenhuma IA de imagem conectada.' };
     }
@@ -2800,7 +2985,11 @@ function fulfillImageRequests(projectDirectory: string): Promise<ImageGenState> 
     for (const request of pending) {
       const target = path.join(imagesDirectory, request.arquivo);
       try {
-        if (provider === 'gemini') {
+        const fromCatalog = catalogHasImage ? await generateImageFromCatalog(request.prompt) : null;
+        if (fromCatalog) {
+          await mkdir(imagesDirectory, { recursive: true });
+          await writeFile(target, fromCatalog);
+        } else if (provider === 'gemini') {
           const image = await (await geminiAgentReady()).generateImage(request.prompt, request.proporcao);
           await mkdir(imagesDirectory, { recursive: true });
           await writeFile(target, image);
@@ -3268,6 +3457,49 @@ function registerIpcHandlers(): void {
     getGeminiAgent().connectApiKey(asText(input.apiKey)));
 
   ipcMain.handle('gemini:disconnect', () => getGeminiAgent().disconnect());
+
+  ipcMain.handle('ai-catalog:read', async () => catalogStateFrom(await readStoredCatalog()));
+
+  ipcMain.handle(
+    'ai-catalog:connect',
+    async (_event, input: { id?: string; fields?: Record<string, string> }) => {
+      const entry = catalogEntry(asText(input.id));
+      if (!entry) throw new Error('Provedor desconhecido.');
+      const fields: Record<string, string> = {};
+      for (const field of entry.credentials) {
+        const value = asText(input.fields?.[field.key]);
+        if (!value) throw new Error(`Preencha ${field.label}.`);
+        fields[field.key] = value;
+      }
+      const stored = await readStoredCatalog();
+      const providers = { ...(stored.providers ?? {}), [entry.id]: { fields, cooldownUntil: null } };
+      const next = { ...stored, providers };
+      await writeStoredCatalog(next);
+      const state = catalogStateFrom(next);
+      broadcastCatalog(state);
+      return state;
+    },
+  );
+
+  ipcMain.handle('ai-catalog:disconnect', async (_event, input: { id?: string }) => {
+    const stored = await readStoredCatalog();
+    const providers = { ...(stored.providers ?? {}) };
+    delete providers[asText(input.id)];
+    const next = { ...stored, providers };
+    await writeStoredCatalog(next);
+    const state = catalogStateFrom(next);
+    broadcastCatalog(state);
+    return state;
+  });
+
+  ipcMain.handle('ai-catalog:free-only', async (_event, input: { freeOnly?: boolean }) => {
+    const stored = await readStoredCatalog();
+    const next = { ...stored, freeOnly: Boolean(input.freeOnly) };
+    await writeStoredCatalog(next);
+    const state = catalogStateFrom(next);
+    broadcastCatalog(state);
+    return state;
+  });
 
   ipcMain.handle('runtime-pack:ensure', () => ensureRuntimePack());
 }
