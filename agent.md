@@ -1213,6 +1213,35 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.18.1: pasta do projeto arrumada e o bug do disco externo.
+  (1) ABRIR PROJETO EM DISCO EXTERNO MORRIA com "moov atom not found" em
+  `._IMG_6342.MOV`. A mesma pasta copiada para o disco interno abria sem
+  reclamar — e essa diferença É a pista: o macOS grava um arquivo-par `._nome`
+  para cada arquivo em volume que não seja APFS/HFS+ (pendrive, HD em exFAT,
+  rede). Ele tem a extensão do original e zero vídeo dentro. O Edvid o
+  escolhia como mídia do preview e o ffprobe morria nele. Dois cintos:
+  `isMediaFileName` descarta qualquer arquivo oculto na varredura, e
+  `inspectProjectMedia` passa para o próximo candidato quando um não abre —
+  UM arquivo ilegível nunca mais impede um projeto de abrir.
+  (2) UMA PASTA SÓ. O projeto espalhava `edit/`, `edicao/` e
+  `transcricao_raw/` na raiz. Agora tudo vive em `edit/` e a raiz tem só o que
+  é do aluno: o material original e `<projeto>_final.mp4`, publicado pelo app
+  a cada render. Projetos antigos são migrados na abertura (mover, nunca
+  apagar; conflito de nome deixa o arquivo antigo onde está). O carimbo do
+  render é reapontado junto — sem isso o app não acharia o resultado e
+  dispararia um render sozinho na primeira abertura, defeito que já custou uma
+  correção antes.
+  (3) VERSÕES PODADAS: fica o render atual e três anteriores. Medido no
+  projeto real do aluno: 26 arquivos, 851 MB → 4 arquivos, 383 MB. A
+  numeração passou a vir do MAIOR número existente, não da contagem de
+  arquivos: com os antigos apagados, contar reescreveria uma versão que o
+  carimbo aponta. Isto REVOGA a regra antiga "não apagar artefatos antigos
+  automaticamente" para os renders da Fase 2 — o aluno pediu explicitamente.
+  MÉTODO: o código que move e apaga arquivo do aluno saiu para
+  `src/project-files.ts`, sem Electron, justamente para poder rodar contra uma
+  cópia do projeto real antes de chegar perto da pasta dele. Foi assim que
+  apareceu o defeito de `rm` sem `recursive` não remover diretório — o teste
+  pegou, não o usuário.
 - 0.18.0: quatro ajustes finos pedidos com o vídeo na mão.
   (1) TELA DIVIDIDA: a divisa era `height/2` e no render real a arte comia
   metade do apresentador. O aluno marcou no próprio quadro onde ela deveria
@@ -1910,6 +1939,8 @@ npm run test:media
 npm run test:split-layout
 npm run test:chat-language
 npm run test:member-auth
+npm run test:project-layout
+npm run test:project-files
 git diff --check
 ```
 
@@ -1949,7 +1980,10 @@ plutil -extract CFBundleShortVersionString raw out/Edvid-darwin-arm64/Edvid.app/
 - Validar assinatura e versão do artefato.
 - Os commits recentes foram enviados diretamente para `main`; manter esse fluxo
   enquanto o usuário não pedir branches ou pull requests.
-- Não apagar artefatos antigos automaticamente.
+- Não apagar artefatos antigos automaticamente. ÚNICA exceção, pedida pelo
+  aluno na 0.18.1: os renders da Fase 2 em `edit/fase_2/`, onde ficam o atual
+  e três anteriores. Material de origem e qualquer outro arquivo continuam
+  intocáveis.
 - Não registrar nem imprimir segredos.
 - Não mostrar caminhos locais no chat do produto.
 - Não colocar aprovações técnicas dentro da conversa.

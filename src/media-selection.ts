@@ -5,9 +5,25 @@ import type { ProjectMedia } from './shared';
 // mais recente, porque cada passagem (correcao, Fase 2) substitui a anterior.
 // Nome de arquivo so serve para separar rascunho de resultado.
 
-// Pastas onde o agente grava o resultado da edicao. Fora delas esta o
-// material de origem, que nunca deve virar preview automaticamente.
+// Pasta onde a edicao inteira mora. "edicao" continua na lista porque
+// projetos criados antes da unificacao tem os renders la.
 export const editDirectories = new Set(['edit', 'edicao', 'edição']);
+
+// Arquivo que pode ser midia do projeto.
+//
+// O macOS grava um par "._nome" para cada arquivo em volume que nao seja APFS
+// ou HFS+ (pendrive, HD externo em exFAT, rede). Esse par tem a extensao do
+// original e ZERO video dentro: o ffprobe abre e responde "moov atom not
+// found", e era isso que derrubava a abertura de projeto em disco externo —
+// a mesma pasta copiada para o disco interno abria sem reclamar, porque la
+// esses arquivos nao existem. Vale para .DS_Store e qualquer oculto.
+export function isMediaFileName(name: string): boolean {
+  return !name.startsWith('.');
+}
+
+// Nome de resultado: "final_x", "render 2" ou o video final do projeto, que
+// leva o nome dele e termina em _final.
+const finalName = /^(final|resultado|render)|[_-]final$/u;
 
 export const intermediatePattern =
   /(^|[_-])(tmp|temp|proxy|sample|raw|bruto|parte|part|chunk|segmento|teste)([_-]|$)|sem[_-]?estilo/u;
@@ -34,7 +50,9 @@ export function mediaTier(relativePath: string): number {
   if (directories.includes('assets')) return 0;
   if (!directories.some((directory) => editDirectories.has(directory))) {
     // Fora da pasta de edicao so um nome explicito de saida conta como render.
-    return /^(final|resultado|render)/u.test(base) ? 2 : 1;
+    // O video final do projeto vive na raiz como "<projeto>_final.mp4", entao
+    // o sufixo conta tanto quanto o prefixo.
+    return finalName.test(base) ? 2 : 1;
   }
   return intermediatePattern.test(base) ? 2 : 3;
 }
@@ -43,7 +61,7 @@ export function mediaKind(relativePath: string, tier: number): ProjectMedia['kin
   const normalized = normalize(relativePath);
   const base = basenameOf(normalized);
   if (tier <= 1) return 'source';
-  if (/^(final|resultado|render)/u.test(base) || /(^|\/)fase[_-]?2(\/|$)/u.test(normalized)) {
+  if (finalName.test(base) || /(^|\/)fase[_-]?2(\/|$)/u.test(normalized)) {
     return 'final';
   }
   return 'clean-cut';

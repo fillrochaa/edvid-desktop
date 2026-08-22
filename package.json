@@ -1,7 +1,7 @@
 {
   "name": "@edvid/desktop",
   "productName": "Edvid",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "description": "Aplicativo desktop do editor de video por conversa Edvid",
   "main": ".vite/build/main.js",
   "private": true,
@@ -29,6 +29,8 @@
     "test:split-layout": "node scripts/test-split-layout.mjs",
     "test:chat-language": "node scripts/test-chat-language.mjs",
     "test:member-auth": "node scripts/test-member-auth.mjs",
+    "test:project-layout": "node scripts/test-project-layout.mjs",
+    "test:project-files": "node scripts/test-project-files.mjs",
     "stage:python-whisperx": "node scripts/stage-python-whisperx.mjs",
     "prepare:forge-makers": "node scripts/prepare-forge-makers.mjs",
     "typecheck": "tsc --noEmit",

@@ -46,7 +46,16 @@ import {
   transientStatus,
   type MemberEntitlement,
 } from './member-auth-policy';
-import { mediaKind, mediaMimeType, mediaTier, pickPreviewMedia, resolveByteRange } from './media-selection';
+import { EDIT_DIR, RENDER_DIR, nextRenderVersion } from './project-layout';
+import { consolidateProjectFolder, publishFinalVideo, pruneRenders } from './project-files';
+import {
+  comparePreviewCandidates,
+  isMediaFileName,
+  mediaKind,
+  mediaMimeType,
+  mediaTier,
+  resolveByteRange,
+} from './media-selection';
 import { resolveRuntime, runtimePackKey, type RuntimeResolution } from './runtime';
 import type {
   AiProvider,
@@ -331,7 +340,11 @@ async function collectMedia(
         }
         return;
       }
-      if (!entry.isFile() || !videoExtensions.has(path.extname(entry.name).toLowerCase())) {
+      if (
+        !entry.isFile()
+        || !isMediaFileName(entry.name)
+        || !videoExtensions.has(path.extname(entry.name).toLowerCase())
+      ) {
         return;
       }
       const fileStat = await stat(absolutePath);
@@ -598,13 +611,33 @@ async function requireRuntimePack(): Promise<void> {
 async function inspectProjectMedia(directory: string): Promise<InspectedProjectMedia | null> {
   const candidates: MediaCandidate[] = [];
   await collectMedia(directory, directory, 0, candidates);
-  const candidate = pickPreviewMedia(candidates);
-  if (!candidate) return null;
+  if (!candidates.length) return null;
 
   await requireRuntimePack().catch(() => {});
   const ffprobe = resolveRuntime('ffprobe', appRuntimeContext());
   if (!ffprobe.command) return null;
-  const probe = await inspectVideo(ffprobe.command, ffprobe.argsPrefix, candidate.absolutePath);
+
+  // Em ordem de preferencia, ate um abrir. UM arquivo ilegivel nao pode
+  // impedir o projeto de abrir: era o que acontecia em disco externo, onde o
+  // vizinho "._nome" do macOS ganhava a escolha e o ffprobe morria nele.
+  // O limite existe para uma pasta cheia de arquivo quebrado nao virar
+  // dezenas de chamadas ao ffprobe na abertura.
+  const ordered = [...candidates].sort(comparePreviewCandidates).slice(0, 6);
+  let candidate: MediaCandidate | null = null;
+  let probe: FfprobeOutput | null = null;
+  for (const item of ordered) {
+    try {
+      const attempt = await inspectVideo(ffprobe.command, ffprobe.argsPrefix, item.absolutePath);
+      if (attempt.streams?.[0]?.width && attempt.streams[0].height) {
+        candidate = item;
+        probe = attempt;
+        break;
+      }
+    } catch {
+      // Arquivo corrompido, truncado ou sem video: passa para o proximo.
+    }
+  }
+  if (!candidate || !probe) return null;
   const stream = probe.streams?.[0];
   if (!stream?.width || !stream.height) return null;
   const rotation = Math.abs(
@@ -1124,6 +1157,9 @@ async function openProject(directory: string, remember = true, name?: string): P
         lastOpenedAt: new Date().toISOString(),
       };
   selectedProjectDirectories.add(resolvedDirectory);
+  await consolidateProject(resolvedDirectory).catch((error: unknown) => {
+    console.warn('Nao foi possivel unificar a pasta do projeto:', error);
+  });
   const inspectedMedia = await inspectProjectMedia(resolvedDirectory);
   const [loaded, style, overlays] = await Promise.all([
     loadProjectTimeline(resolvedDirectory, inspectedMedia),
@@ -2173,29 +2209,26 @@ function renderPhase2(projectDirectory: string): Promise<Phase2RenderState> {
       });
     });
 
-    // Versao nova a cada render: artefatos anteriores nunca sao apagados e o
-    // preview escolhe o mais recente sozinho.
-    const targetDirectory = path.join(projectDirectory, 'edicao', 'fase_2');
+    // Versao nova a cada render, dentro da UNICA pasta de trabalho. O preview
+    // escolhe a mais recente sozinho; as antigas alem do limite saem depois.
+    const targetDirectory = path.join(projectDirectory, EDIT_DIR, RENDER_DIR);
     await mkdir(targetDirectory, { recursive: true });
-    let version = 1;
-    for (;;) {
-      try {
-        await stat(path.join(targetDirectory, `fase_2_v${version}.mp4`));
-        version += 1;
-      } catch {
-        break;
-      }
-    }
-    const finalName = `fase_2_v${version}.mp4`;
-    await rename(temporaryOutput, path.join(targetDirectory, finalName));
+    const existing = await readdir(targetDirectory).catch(() => [] as string[]);
+    const finalName = `fase_2_v${nextRenderVersion(existing)}.mp4`;
+    const rendered = path.join(targetDirectory, finalName);
+    await rename(temporaryOutput, rendered);
     await writeFile(
       stampFile,
       `${JSON.stringify(
-        { fingerprint, output: path.join('edicao', 'fase_2', finalName) },
+        { fingerprint, output: path.join(EDIT_DIR, RENDER_DIR, finalName) },
         null,
         2,
       )}\n`,
     );
+    // O resultado que o aluno procura fica FORA da pasta de trabalho, com o
+    // nome do projeto: e o arquivo que ele leva para o Instagram.
+    await publishFinalVideo(projectDirectory, rendered);
+    await pruneRenders(targetDirectory, finalName);
     return { status: 'ready', output: finalName };
   })()
     .catch((error): Phase2RenderState => ({
@@ -2209,6 +2242,14 @@ function renderPhase2(projectDirectory: string): Promise<Phase2RenderState> {
     });
   phase2Job = { directory: projectDirectory, promise };
   return promise;
+}
+
+// Uma pasta so, e sem versao velha ocupando disco. Roda a cada abertura: e
+// idempotente e conserta tambem os projetos criados antes desta versao. Nunca
+// durante um render — mover e apagar arquivo debaixo dele nao termina bem.
+async function consolidateProject(projectDirectory: string): Promise<void> {
+  if (phase2Job?.directory === projectDirectory) return;
+  await consolidateProjectFolder(projectDirectory);
 }
 
 // O WhisperX pode estar "instalado" e mesmo assim nao abrir nesta maquina
