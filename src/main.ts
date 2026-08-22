@@ -43,6 +43,7 @@ import {
   LANGUAGE_FALLBACK,
   PT_BR_TURN_REMINDER,
   rewritePrompt,
+  providerErrorMessage,
   sanitizeAssistantText,
 } from './chat-language';
 import {
@@ -3851,7 +3852,10 @@ async function fulfillMusicRequests(projectDirectory: string): Promise<{ done: n
       done += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      broadcastCodexEvent({ type: 'error', message: `Não consegui gerar a trilha: ${message}.` });
+      broadcastCodexEvent({
+        type: 'error',
+        message: `Não consegui gerar a trilha. ${providerErrorMessage(message, 'a IA de música')}`,
+      });
       return { done, error: message };
     }
   }
@@ -4059,9 +4063,13 @@ function fulfillImageRequests(projectDirectory: string): Promise<ImageGenState> 
     }
 
     if (failures.length) {
+      // O erro cru do provedor (inglês, com URL de documentação) chegava
+      // inteiro ao chat. Aqui ele vira português e, quando dá, vira instrução.
+      const [arquivo, ...resto] = failures[0].split(':');
+      const nome = provider === 'gemini' ? 'Gemini' : provider === 'chatgpt' ? 'ChatGPT' : 'a IA de imagem';
       broadcastCodexEvent({
         type: 'error',
-        message: `Não consegui gerar ${failures.length === 1 ? 'uma imagem' : `${failures.length} imagens`}: ${failures[0]}`,
+        message: `${failures.length === 1 ? 'Não consegui gerar uma imagem' : `Não consegui gerar ${failures.length} imagens`}. ${providerErrorMessage(resto.join(':') || arquivo, nome)}`,
       });
       return { status: 'error', total: pending.length, done, error: failures[0] };
     }

@@ -1213,6 +1213,23 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.21.2: RESPOSTA MEDIDA — o Gemini NÃO tem cota gratuita de imagem por API.
+  A dúvida vinha de duas conversas (a documentação pública é contraditória e o
+  Google parou de publicar a tabela da camada gratuita). Com a chave do aluno
+  numa conta real, o Google respondeu: "You exceeded your current quota,
+  please check your plan and billing details". Registrado na nota do catálogo
+  para não voltar a virar suposição. Para imagem grátis o caminho no Edvid é a
+  Cloudflare Workers AI; o ChatGPT por assinatura gera pela cota do plano.
+  E o print expôs um defeito meu: esse erro chegou ao chat CRU — inglês,
+  jargão de faturamento e duas URLs de documentação, dentro de uma bolha do
+  Edvid, violando as duas regras da conversa. Os erros de provedor (imagem e
+  trilha) passam agora por `providerErrorMessage`: viram português e, quando
+  dá, viram instrução com uma saída que EXISTE no aplicativo. O teste usa o
+  texto real recebido pelo aluno.
+  SOBRE LOGIN DO GOOGLE: não há caminho legítimo. A cota alta do Labs Flow e
+  do app Gemini é de produto web, sem API pública; usá-la programaticamente
+  significaria dirigir a sessão do navegador do aluno ou endpoint não
+  oficial — contra os termos e quebrável a qualquer momento.
 - 0.21.1: a chave do Gemini era testada CONTRA O OPENROUTER. O botão Testar
   tinha caso para Cloudflare, Treblo e Ollama, e tudo o mais caía num fallback
   apontando para `openrouter.ai/api/v1/key` — a chave boa do Google ia para o

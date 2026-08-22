@@ -170,3 +170,39 @@ export function sanitizeAssistantText(input: string): SanitizedMessage {
   const text = stripTechnical(input);
   return { text, english: looksEnglish(text) };
 }
+
+// --- ERRO DE PROVEDOR VIRANDO PORTUGUES ------------------------------------
+// O erro cru do provedor chegava ao chat como veio: em ingles, com URL de
+// documentacao e jargao. Caso real, palavra por palavra, dentro de uma bolha
+// do Edvid: "You exceeded your current quota, please check your plan and
+// billing details. For more information on this error, head to:
+// https://ai.google.dev/gemini-api/docs/rate-limits". Isso quebra as duas
+// regras da conversa (portugues e nada de termo tecnico) e, pior, nao diz ao
+// aluno o que FAZER.
+
+const QUOTA = /exceeded your current quota|quota exceeded|insufficient_quota|billing|resource[_ ]exhausted|credit/iu;
+const RATE = /rate limit|too many requests|429/iu;
+const KEY = /api key not valid|invalid api key|incorrect api key|unauthorized|authentication_error|permission denied/iu;
+const OFFLINE = /sem conexão|network|fetch failed|enotfound|econnrefused|timeout/iu;
+
+// `alternativa` e a saida que o aluno TEM no Edvid agora, nao um conselho
+// generico: sem isso a mensagem so informa que deu errado.
+export function providerErrorMessage(raw: string, provider: string): string {
+  const text = String(raw ?? '').trim();
+  const quem = provider || 'a IA';
+  if (QUOTA.test(text)) {
+    return `A cota de imagens do ${quem} acabou — essa chave não tem geração de imagem gratuita. Conecte a Cloudflare Workers AI, que tem camada gratuita diária, ou use o ChatGPT por assinatura, que gera pela cota do plano.`;
+  }
+  if (RATE.test(text)) {
+    return `O ${quem} pediu para esperar: muitos pedidos em pouco tempo. Tente de novo em alguns minutos.`;
+  }
+  if (KEY.test(text)) {
+    return `O ${quem} recusou a chave. Confira a chave nas configurações do Edvid.`;
+  }
+  if (OFFLINE.test(text)) {
+    return `Não consegui falar com o ${quem}. Verifique a internet e tente de novo.`;
+  }
+  // Desconhecido: limpa o que der e entrega o resto, sem URL nem crase.
+  const limpo = stripTechnical(text).replace(/https?:\/\/\S+/gu, '').replace(/\s{2,}/gu, ' ').trim();
+  return limpo || `O ${quem} recusou o pedido.`;
+}

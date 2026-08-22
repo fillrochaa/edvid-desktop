@@ -96,7 +96,7 @@ export const AI_CATALOG: AiCatalogEntry[] = [
     keyUrl: 'https://aistudio.google.com/apikey',
     credentials: [{ key: 'apiKey', label: 'Chave de API', secret: true }],
     models: [],
-    note: 'Chave criada no Google AI Studio, com limite diário na camada gratuita.',
+    note: 'Chave do Google AI Studio. MEDIDO em conta real: a chave NÃO gera imagem na camada gratuita — o Google responde que a cota acabou. Serve para texto; para imagem grátis, use a Cloudflare.',
   },
   {
     id: 'cloudflare',

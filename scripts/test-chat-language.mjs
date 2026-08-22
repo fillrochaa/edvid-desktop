@@ -26,6 +26,7 @@ try {
     PT_BR_TURN_REMINDER,
     looksEnglish,
     rewritePrompt,
+    providerErrorMessage,
     sanitizeAssistantText,
     stripTechnical,
   } = await import(pathToFileURL(path.join(outDir, 'chat-language.js')).href);
@@ -127,7 +128,27 @@ try {
   assert.ok(/confir|confer/iu.test(LANGUAGE_FALLBACK), 'precisa mandar o aluno conferir o resultado');
   assert.ok(/portugu[eê]s/iu.test(LANGUAGE_FALLBACK), 'precisa explicar o que houve');
 
-  console.log('test:chat-language ok — inglês detectado, termo técnico fora e português intacto.');
+  // --- 6. Erro do provedor vira português com saída -------------------------
+  // O texto abaixo é o que o aluno recebeu de verdade, dentro de uma bolha do
+  // Edvid: inglês, jargão de faturamento e duas URLs de documentação.
+  const cotaReal = 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit.';
+  const cota = providerErrorMessage(cotaReal, 'Gemini');
+  assert.ok(!/https?:\/\//u.test(cota), `URL no chat: ${cota}`);
+  assert.equal(looksEnglish(cota), false, `resposta em inglês: ${cota}`);
+  assert.ok(/cota/iu.test(cota) && /Gemini/u.test(cota));
+  // O que separa "avisar" de "ajudar": a mensagem tem de dizer o que fazer, e
+  // só vale citar saída que EXISTE no Edvid hoje.
+  assert.ok(/Cloudflare/u.test(cota) && /ChatGPT/u.test(cota), `sem saída prática: ${cota}`);
+
+  assert.ok(/esperar|minutos/iu.test(providerErrorMessage('Rate limit exceeded, try again', 'Gemini')));
+  assert.ok(/chave/iu.test(providerErrorMessage('API key not valid. Please pass a valid API key.', 'Gemini')));
+  assert.ok(/internet/iu.test(providerErrorMessage('fetch failed', 'Treblo')));
+  // Erro desconhecido não vira mensagem vazia nem despeja URL.
+  const estranho = providerErrorMessage('Something odd happened, see https://x.dev/y', 'Treblo');
+  assert.ok(estranho.length > 0 && !/https?:\/\//u.test(estranho));
+  assert.ok(providerErrorMessage('', 'Gemini').length > 0);
+
+  console.log('test:chat-language ok — inglês fora, termo técnico fora e erro de provedor com saída em português.');
 } finally {
   rmSync(outDir, { recursive: true, force: true });
 }
