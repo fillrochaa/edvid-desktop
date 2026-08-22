@@ -1213,6 +1213,38 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.19.1: corte apertado de verdade e take refeito fora. O corte pelo app
+  ficou rápido, mas o aluno viu "muitos silêncios e repetições que deveriam
+  ter ficado de fora" e "muitos frames em silêncio no fim e no começo". Medido
+  no vídeo real dele (175s de câmera, piso de ruído em −65 dB, 103,5s de fala
+  de verdade acima de −45 dB):
+  (1) BORDAS. O `keep` de 0,12s era LITERALMENTE o silêncio das pontas — ele
+  aparecia como 0,12 em quase todo bloco na medição. Eram 4,47s de ar morto em
+  19 blocos. Com 0,04s são 1,04s, e o pior bloco caiu de 0,80s para 0,30s.
+  Zero não serve: corta o ataque da consoante.
+  (2) PAUSAS. `min-pause` de 0,45s deixava 111,0s de um arquivo com 103,5s de
+  fala. Varredura contra esse alvo: 0,35 → 106,8s; 0,30 → 104,7s; 0,25 →
+  104,3s; 0,20 → 102,3s, ou seja, abaixo da fala real — começa a comer
+  conteúdo. Ficou em 0,30. O limiar de ruído continua em −32 dB (a mesma
+  varredura mostrou −28 já cortando fala).
+  (3) TAKES REFEITOS. Ele erra, para e recomeça a frase; o silêncio separava
+  as duas tentativas e AS DUAS ficavam no vídeo. Duas regras determinísticas,
+  em `clean_cut.py`: prefixo comum de ≥3 palavras cobrindo ≥70% do bloco
+  anterior (frase interrompida), e gaguejo — o bloco repete a própria abertura
+  e o seguinte começa com ela. Nos dezessete blocos do vídeo real: pegou os
+  três takes abandonados e não disparou em nenhum dos catorze bons.
+  DETALHE QUE CUSTOU UMA RODADA: a detecção tem de ser por FRASE, não por
+  bloco de silêncio. Um take abandonado vira três ou quatro blocos curtos, e
+  comparando bloco a bloco sobrava justamente o fragmento solto ("Por fim,",
+  "design dos iPhones"). Comparando as frases da transcrição e descartando os
+  blocos que caem dentro delas, sai limpo.
+  E um erro meu de digitação que o teste não pegaria: `read_words` normaliza a
+  chave para `text`, e eu lia `word` — o texto vinha vazio e a regra nunca
+  disparava. Só apareceu porque rodei contra o arquivo do aluno.
+  RESULTADO no vídeo dele: 19 blocos e 111,0s viraram 14 blocos e 94,5s; ar
+  morto nas bordas caiu 77%; silêncio dentro do corte, de 10% para 6%. Os
+  trechos descartados ficam registrados em `retakes_ranges` no EDL — descartar
+  fala é decisão editorial e tem de poder ser revista.
 - 0.19.0: O CORTE LIMPO PASSOU A SER DO APLICATIVO, e não mais um pedido ao
   agente. O aluno clicou em "Iniciar corte limpo" e recebeu um tutorial de
   como editar vídeo na mão. Duas causas, e a primeira era minha:

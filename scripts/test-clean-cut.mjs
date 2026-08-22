@@ -23,6 +23,33 @@ const packPython = path.join(
 );
 const python = process.env.EDVID_TEST_PYTHON ?? (existsSync(packPython) ? packPython : 'python3');
 
+// Os padrões do helper, lidos do próprio arquivo: se alguém afrouxar de novo,
+// o teste reprova.
+function padroes() {
+  const script = path.join(work, 'padroes.py');
+  writeFileSync(script, [
+    'import json, sys',
+    `sys.path.insert(0, ${JSON.stringify(helpers)})`,
+    'from clean_cut import DEFAULT_MIN_PAUSE, DEFAULT_KEEP',
+    'print(json.dumps({"minPause": DEFAULT_MIN_PAUSE, "keep": DEFAULT_KEEP}))',
+  ].join('\n'));
+  return JSON.parse(execFileSync(python, [script], { encoding: 'utf8' }));
+}
+
+// A regra de "frase recomeçada", com o texto cru das duas frases.
+function retake(anterior, seguinte) {
+  const script = path.join(work, 'retake.py');
+  writeFileSync(script, [
+    'import json, sys',
+    `sys.path.insert(0, ${JSON.stringify(helpers)})`,
+    'from clean_cut import is_retake, normalized_words',
+    `a = normalized_words(json.loads(${JSON.stringify(JSON.stringify(anterior))}))`,
+    `b = normalized_words(json.loads(${JSON.stringify(JSON.stringify(seguinte))}))`,
+    'print(json.dumps(is_retake(a, b)))',
+  ].join('\n'));
+  return JSON.parse(execFileSync(python, [script], { encoding: 'utf8' }));
+}
+
 // Roda as funções puras do helper com silêncios e palavras fabricados: sem
 // FFmpeg, sem modelo, em milissegundos.
 function blocos({ words, silences, duration, minPause = 0.45, keep = 0.12, viaWords = false }) {
@@ -101,7 +128,54 @@ try {
   });
   assert.equal(fallback.length, 2, 'plano B separa pelo intervalo entre palavras');
 
-  console.log('test:clean-cut ok — silêncio manda sobre o alinhamento, respiração preservada, ruído sem fala descartado.');
+  // --- Bordas apertadas -----------------------------------------------------
+  // O aluno viu o corte com "muitos frames em silêncio no fim e no começo".
+  // Medido no vídeo real dele: a respiração de 0,12s aparecia literalmente em
+  // quase todo bloco, somando 4,47s de ar morto em 19 blocos. Com 0,04s são
+  // 1,04s, e o pior bloco caiu de 0,80s para 0,30s. Zero não serve: corta o
+  // ataque da consoante.
+  const { minPause: pausaPadrao, keep: keepPadrao } = padroes();
+  assert.ok(keepPadrao > 0 && keepPadrao <= 0.05, `respiração frouxa demais: ${keepPadrao}`);
+  assert.ok(pausaPadrao <= 0.32, `pausa mínima frouxa demais: ${pausaPadrao}`);
+  // E apertar não pode virar comer fala: abaixo disso o corte ficou ofegante
+  // no teste real (102,3s mantidos contra 103,5s de fala medida).
+  assert.ok(pausaPadrao >= 0.25, `pausa mínima curta demais: ${pausaPadrao}`);
+
+  // --- Tentativas abandonadas (o aluno recomeça a frase) --------------------
+  // As três frases abaixo são as do vídeo real dele, palavra por palavra. As
+  // outras são frases legítimas do MESMO vídeo, para a regra não sair
+  // apagando conteúdo bom.
+  const refeito = (a, b) => retake(a, b);
+  assert.ok(
+    refeito('Por fim, uma das maiores novidades que a Apple vai lançar agora em...',
+      'Por fim, uma das maiores novidades que a Apple vai lançar agora no começo de setembro é o iPhone dobrável.'),
+    'frase interrompida e recomeçada precisa ser reconhecida',
+  );
+  assert.ok(
+    refeito('Mas me diz aí, você vai comprar um...', 'Mas me diz aí, você vai comprar um iPhone novo?'),
+    'take abandonado que é prefixo exato do seguinte',
+  );
+  assert.ok(
+    refeito('O design dos novos iPhones, o design dos iPhones 18, o design dos iPhones',
+      'O design dos iPhones 18 Pro e Pro Max vão ser praticamente os mesmos.'),
+    'gaguejo que repete a própria abertura',
+  );
+  // Nenhum falso positivo nas frases boas do mesmo vídeo.
+  const legitimas = [
+    ['Falta menos de 20 dias para os lançamentos dos novos iPhones.', 'O design dos iPhones 18 Pro e Pro Max vão ser praticamente os mesmos.'],
+    ['E esses componentes são essenciais para qualquer smartphone.', 'Por conta disso, a gente pode esperar um aumento de pelo menos 100 dólares.'],
+    ['E a grande novidade nas câmeras é a abertura do diafragma variável.', 'Se for verdade mesmo e a abertura do diafragma nas lentes for grande.'],
+    // Mesma abertura curta, assuntos diferentes: NÃO é retake.
+    ['E aí o preço sobe muito por causa do dólar.', 'E aí a gente vê o resultado disso na loja.'],
+    ['Agora a notícia não tão boa.', 'Agora vamos falar de câmera.'],
+  ];
+  for (const [a, b] of legitimas) {
+    assert.equal(refeito(a, b), false, `apagaria conteúdo bom: "${a}"`);
+  }
+  // Frase vazia não derruba a regra.
+  assert.equal(refeito('', 'qualquer coisa'), false);
+
+  console.log('test:clean-cut ok — silêncio manda, bordas apertadas e take refeito descartado sem levar frase boa junto.');
 } finally {
   rmSync(work, { recursive: true, force: true });
 }

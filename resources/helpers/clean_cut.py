@@ -43,16 +43,27 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _transcript import read_words  # noqa: E402
+from _transcript import read_segments, read_words  # noqa: E402
 
 # Pausa mínima para virar corte. Abaixo disso é ritmo de fala, não pausa.
-DEFAULT_MIN_PAUSE = 0.45
-# Respiração preservada em cada borda do bloco: cortar rente à palavra deixa a
-# fala ofegante e come consoantes finais.
-DEFAULT_KEEP = 0.12
+#
+# Era 0,45s e deixava pausa demais. Medido no vídeo real do aluno (175s de
+# fala de câmera): com 0,45 sobravam 111,0s, sendo que o arquivo tem 103,5s de
+# fala de verdade; com 0,30 sobram 104,7s. Abaixo de 0,25 o corte começa a
+# comer fala (102,3s < 103,5s) e a edição fica ofegante.
+DEFAULT_MIN_PAUSE = 0.30
+# Respiração preservada em cada borda do bloco.
+#
+# Este número é literalmente o silêncio que sobra no começo e no fim de CADA
+# bloco — foi o que o aluno viu ("muitos frames em silêncio no fim e no
+# começo"). Com 0,12 eram 4,47s de ar morto nas bordas de 19 blocos; com 0,04
+# são 1,30s, e o pior bloco caiu de 0,80s para 0,30s. Zero corta o ataque da
+# consoante, então não vai a zero.
+DEFAULT_KEEP = 0.04
 # Limiar de silêncio do silencedetect. -32 dB tolera ar-condicionado e ruído de
 # sala sem considerar fala baixa como silêncio.
 DEFAULT_NOISE_DB = -32.0
@@ -99,14 +110,104 @@ def detect_silences(media: Path, noise_db: float, min_pause: float) -> list[tupl
     return silences
 
 
+def words_in(words: list[dict], start: float, end: float) -> list[dict]:
+    """As palavras cujo miolo cai dentro deste trecho."""
+    return [
+        word for word in words
+        if start <= (word["start"] + word["end"]) / 2 <= end
+    ]
+
+
 def words_between(words: list[dict], start: float, end: float) -> int:
     """Quantas palavras têm o miolo dentro deste trecho."""
+    return len(words_in(words, start, end))
+
+
+# --- TAKES REFEITOS --------------------------------------------------------
+# O aluno erra, para e recomeça a frase. O silêncio separa as duas tentativas
+# em blocos vizinhos, e as DUAS sobreviviam ao corte limpo — o vídeo saía com
+# a pessoa dizendo a mesma coisa duas vezes. Foi o que ele relatou vendo o
+# resultado ("muitas repetições que deveriam ter ficado de fora").
+#
+# Medido no vídeo real dele, três casos em dezessete blocos:
+#   "Por fim, uma das maiores novidades que a Apple vai lançar agora em..."
+#   "Por fim, uma das maiores novidades que a Apple vai lançar agora no começo…"
+#   "Mas me diz aí, você vai comprar um..."   /  "…um iPhone novo?"
+#   "O design dos novos iPhones, o design dos iPhones 18, o design dos iPhones"
+# As duas regras abaixo pegam os três e não disparam em nenhum dos catorze
+# blocos legítimos.
+
+# Prefixo comum mínimo para dois blocos serem a MESMA frase recomeçada.
+RETAKE_MIN_PREFIX = 3
+# Quanto do bloco anterior precisa ser esse prefixo. Alto de propósito: dois
+# blocos que só começam igual ("E aí…") não são retake.
+RETAKE_PREFIX_RATIO = 0.70
+
+
+def normalized_words(text: str) -> list[str]:
+    """Palavras em minúscula, sem acento e sem pontuação."""
+    lowered = unicodedata.normalize("NFD", text.lower())
+    stripped = "".join(c for c in lowered if unicodedata.category(c) != "Mn")
+    return re.findall(r"[a-z0-9]+", stripped)
+
+
+def common_prefix(first: list[str], second: list[str]) -> int:
     total = 0
-    for word in words:
-        middle = (word["start"] + word["end"]) / 2
-        if start <= middle <= end:
-            total += 1
+    while total < len(first) and total < len(second) and first[total] == second[total]:
+        total += 1
     return total
+
+
+def is_retake(previous: list[str], following: list[str]) -> bool:
+    """`previous` é uma tentativa abandonada de dizer o que vem em `following`?"""
+    if not previous or not following:
+        return False
+    # 1. Tentativa interrompida: quase tudo o que ele disse é o começo da
+    #    próxima frase ("…vai lançar agora em…" / "…vai lançar agora no começo").
+    prefix = common_prefix(previous, following)
+    if prefix >= RETAKE_MIN_PREFIX and prefix / len(previous) >= RETAKE_PREFIX_RATIO:
+        return True
+    # 2. Gaguejo: ele repete a própria abertura dentro do bloco E o bloco
+    #    seguinte começa com ela ("o design dos… o design dos… o design dos").
+    opening = previous[:RETAKE_MIN_PREFIX]
+    if len(previous) >= RETAKE_MIN_PREFIX * 2 and following[:RETAKE_MIN_PREFIX] == opening:
+        repeats = sum(
+            1 for i in range(1, len(previous) - RETAKE_MIN_PREFIX + 1)
+            if previous[i:i + RETAKE_MIN_PREFIX] == opening
+        )
+        if repeats >= 1:
+            return True
+    return False
+
+
+def retake_ranges(segments: list[dict]) -> list[tuple[float, float]]:
+    """Os trechos de tempo em que ele começou a frase e recomeçou.
+
+    A comparação é entre FRASES, não entre blocos de silêncio: um take
+    abandonado costuma virar três ou quatro blocos curtos ("o design dos
+    iPhones 18," / "design dos iPhones"), e comparando bloco com bloco a
+    tentativa passava pela metade — sobrava justamente o pedaço solto que o
+    aluno vê no vídeo.
+    """
+    said = [normalized_words(segment["text"]) for segment in segments]
+    ranges: list[tuple[float, float]] = []
+    for index in range(len(segments) - 1):
+        # Compara com a próxima frase que ainda não foi descartada: numa
+        # sequência de três tentativas, todas menos a última saem.
+        following = index + 1
+        while following < len(segments) and (segments[following]["start"], segments[following]["end"]) in ranges:
+            following += 1
+        if following >= len(segments):
+            continue
+        if is_retake(said[index], said[following]):
+            ranges.append((segments[index]["start"], segments[index]["end"]))
+    return ranges
+
+
+def inside_retake(start: float, end: float, ranges: list[tuple[float, float]]) -> bool:
+    """O bloco caiu dentro de uma tentativa abandonada?"""
+    middle = (start + end) / 2
+    return any(a <= middle <= b for a, b in ranges)
 
 
 def blocks_from_silences(
@@ -133,11 +234,16 @@ def blocks_from_silences(
 
     out: list[dict] = []
     for start, end in spans:
-        spoken = words_between(words, start, end)
+        spoken = words_in(words, start, end)
         # Sem palavra nenhuma o bloco é ruído (batida, respiração solta).
-        if words and spoken == 0:
+        if words and not spoken:
             continue
-        out.append({"start": round(start, 3), "end": round(end, 3), "words": spoken})
+        out.append({
+            "start": round(start, 3),
+            "end": round(end, 3),
+            "words": len(spoken),
+            "said": normalized_words(" ".join(str(w.get("text", "")) for w in spoken)),
+        })
     return out
 
 
@@ -172,7 +278,13 @@ def blocks_from_words(
         start = max(previous_end, group["start"] - keep)
         end = min(group["end"] + keep, next_start - keep / 2 if index + 1 < len(groups) else (duration or group["end"] + keep))
         if end - start >= MIN_BLOCK:
-            out.append({"start": round(start, 3), "end": round(end, 3), "words": group["words"]})
+            spoken = words_in(words, start, end)
+            out.append({
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "words": group["words"],
+                "said": normalized_words(" ".join(str(w.get("text", "")) for w in spoken)),
+            })
     return out
 
 
@@ -202,6 +314,8 @@ def main() -> int:
     parser.add_argument("--min-pause", type=float, default=DEFAULT_MIN_PAUSE)
     parser.add_argument("--keep", type=float, default=DEFAULT_KEEP)
     parser.add_argument("--noise-db", type=float, default=DEFAULT_NOISE_DB)
+    parser.add_argument("--keep-retakes", action="store_true",
+                        help="nao descarta as tentativas abandonadas de uma frase")
     args = parser.parse_args()
 
     if len(args.transcript) != len(args.audio):
@@ -215,6 +329,8 @@ def main() -> int:
     original_total = 0.0
     kept_total = 0.0
     beat = 0
+    retakes = 0
+    retake_spans: list[dict] = []
 
     for transcript_path, media_path, source_id in zip(args.transcript, args.audio, sources):
         words = read_words(transcript_path)
@@ -231,6 +347,17 @@ def main() -> int:
         )
         if not silences:
             print(f"AVISO: sem análise de áudio em {media_path.name}; cortes derivados só da transcrição.", file=sys.stderr)
+        if not args.keep_retakes:
+            discard = retake_ranges(read_segments(transcript_path))
+            # Guardado no EDL: descartar fala e decisao editorial, e decisao
+            # editorial tem de poder ser revista sem refazer a transcricao.
+            retake_spans += [
+                {"source": source_id, "start": round(a, 3), "end": round(b, 3)}
+                for a, b in discard
+            ]
+            before = len(blocks)
+            blocks = [b for b in blocks if not inside_retake(b["start"], b["end"], discard)]
+            retakes += before - len(blocks)
         source_map[source_id] = str(media_path.name if media_path.parent == Path(".") else media_path)
         for block in blocks:
             beat += 1
@@ -251,6 +378,8 @@ def main() -> int:
         "sources": source_map,
         "ranges": ranges,
         "total_duration_s": round(kept_total, 3),
+        "retakes_removed": retakes,
+        "retakes_ranges": retake_spans,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n")
@@ -260,6 +389,7 @@ def main() -> int:
     print(
         f"{len(ranges)} blocos mantidos | original {original_total:.2f}s "
         f"| final {kept_total:.2f}s | removido {removed:.2f}s ({percent:.0f}%)"
+        + (f" | {retakes} repeticoes descartadas" if retakes else "")
     )
     return 0
 

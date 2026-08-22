@@ -130,6 +130,17 @@ try {
   assert.ok(/\bcorte\b/iu.test(resumo) && /\baprove\b/iu.test(resumo), 'o resumo abre o gate de aprovação');
   // Nada de nome de arquivo nem termo técnico na conversa.
   assert.ok(!/\.mp4|ffmpeg|whisperx|edl/iu.test(resumo), `termo técnico no resumo: ${resumo}`);
+  // Frase recomeçada que saiu precisa ser DITA ao aluno: é conteúdo falado
+  // indo embora, e ele tem de poder discordar do que o Edvid decidiu.
+  const comRetakes = cleanCutSummary({ ranges: [{ source: 'a', beat: '', start: 0, end: 5 }], total_duration_s: 94, sources: {}, version: 1, retakes_removed: 5 }, 175);
+  assert.ok(/recomeç/iu.test(comRetakes), `não avisou das repetições: ${comRetakes}`);
+  assert.ok(comRetakes.includes('5 trechos'));
+  assert.ok(/uma frase que você recomeçou/u.test(
+    cleanCutSummary({ ranges: [{ source: 'a', beat: '', start: 0, end: 5 }], total_duration_s: 94, sources: {}, version: 1, retakes_removed: 1 }, 175),
+  ), 'uma só não pode sair como "1 trechos"');
+  // Sem repetição nenhuma, nada é dito a respeito.
+  assert.ok(!/recomeç/iu.test(resumo), 'não inventa aviso quando não removeu repetição');
+
   // Um bloco só não pode sair como "1 blocos".
   assert.ok(cleanCutSummary({ ranges: [{ source: 'a', beat: '', start: 0, end: 5 }], total_duration_s: 5, sources: {}, version: 1 }, 10).includes('1 bloco de fala'));
 

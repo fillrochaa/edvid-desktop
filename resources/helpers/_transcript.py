@@ -48,3 +48,35 @@ def read_words(transcript_path: Path) -> list[dict]:
         out.append({"text": text, "start": start, "end": end})
     out.sort(key=lambda w: w["start"])
     return out
+
+
+def read_segments(transcript_path: Path) -> list[dict]:
+    """Frases da transcricao: [{start, end, text}].
+
+    O corte por silencio parte a fala em pedacos curtos, e um take abandonado
+    vira varios pedacos. Para reconhecer "ele recomecou a frase" e preciso
+    olhar a FRASE, que e o que o proprio transcritor ja agrupa. Sem segmentos
+    no arquivo, agrupa as palavras por intervalo longo.
+    """
+    data = json.loads(Path(transcript_path).read_text())
+    segments = data.get("segments")
+    out: list[dict] = []
+    if isinstance(segments, list):
+        for segment in segments:
+            start, end = segment.get("start"), segment.get("end")
+            text = (segment.get("text") or "").strip()
+            if start is None or end is None or not text:
+                continue
+            out.append({"start": float(start), "end": float(end), "text": text})
+    if out:
+        out.sort(key=lambda s: s["start"])
+        return out
+    # Sem segmentos: agrupa palavras separadas por mais de 0,6s.
+    words = read_words(transcript_path)
+    for word in words:
+        if out and word["start"] - out[-1]["end"] < 0.6:
+            out[-1]["end"] = word["end"]
+            out[-1]["text"] += f" {word['text']}"
+        else:
+            out.append({"start": word["start"], "end": word["end"], "text": word["text"]})
+    return out

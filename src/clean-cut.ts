@@ -23,6 +23,8 @@ export type CleanCutEdl = {
   sources: Record<string, string>;
   ranges: CleanCutRange[];
   total_duration_s: number;
+  // Tentativas abandonadas que o helper descartou (o aluno recomeçou a frase).
+  retakes_removed: number;
 };
 
 // Ordem das fontes: a MESMA da timeline, senao o corte sai numa ordem e o
@@ -55,6 +57,7 @@ export function parseEdl(raw: unknown): CleanCutEdl | null {
     ranges: parsed,
     total_duration_s: Number(document.total_duration_s)
       || parsed.reduce((total, range) => total + (range.end - range.start), 0),
+    retakes_removed: Number(document.retakes_removed) || 0,
   };
 }
 
@@ -146,9 +149,15 @@ export function cleanCutSummary(edl: CleanCutEdl, originalSeconds: number): stri
     return `${Math.floor(total / 60)}min ${String(total % 60).padStart(2, '0')}s`;
   };
   const blocks = edl.ranges.length;
+  const retakes = edl.retakes_removed;
   return [
     `Corte limpo pronto: ${blocks} ${blocks === 1 ? 'bloco' : 'blocos'} de fala.`,
     `Tirei ${clock(removed)} de pausa e silêncio (${percent}%), e o vídeo ficou com ${clock(kept)}.`,
+    // O aluno precisa saber que frase repetida saiu: é conteúdo falado indo
+    // embora, e ele tem de poder discordar.
+    retakes > 0
+      ? `Também tirei ${retakes === 1 ? 'uma frase que você recomeçou' : `${retakes} trechos de frases que você recomeçou`}.`
+      : '',
     'Assista no preview e aprove para escolher os estilos.',
-  ].join(' ');
+  ].filter(Boolean).join(' ');
 }
