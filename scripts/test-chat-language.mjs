@@ -103,6 +103,22 @@ try {
   // --- 5. Lembrete e pedido de reescrita -----------------------------------
   assert.ok(/portugu[eê]s/iu.test(PT_BR_TURN_REMINDER));
   assert.ok(PT_BR_TURN_REMINDER.length < 300, 'lembrete curto: modelo pequeno ignora paragrafo');
+  // O LEMBRETE NÃO PODE PARECER PROIBIÇÃO DE AGIR. A primeira versão dizia
+  // "nada de comando ou nome de ferramenta na resposta" e o modelo parou de
+  // usar ferramentas: 0 de 20 rodadas no provedor real, contra 6 sem lembrete
+  // nenhum. O aluno clicou em "Iniciar corte limpo" e recebeu um tutorial.
+  assert.ok(
+    /continue usando as ferramentas|use as ferramentas|executando normalmente/iu.test(PT_BR_TURN_REMINDER),
+    'o lembrete precisa AUTORIZAR a ação explicitamente',
+  );
+  assert.ok(
+    !/(nada de|não use|nao use|proibido)[^.\]]*\b(comando|ferramenta)/iu.test(PT_BR_TURN_REMINDER),
+    'proibir "comando"/"ferramenta" faz o modelo parar de trabalhar',
+  );
+  assert.ok(
+    /resposta|texto que o aluno/iu.test(PT_BR_TURN_REMINDER),
+    'a regra tem de deixar claro que vale para o texto, não para a ação',
+  );
   assert.ok(rewritePrompt(perguntaReal).includes(perguntaReal), 'a reescrita precisa levar o texto original');
   assert.ok(/mesma pergunta/iu.test(rewritePrompt('x')), 'pergunta precisa continuar pergunta');
   // O recurso nunca AFIRMA que a edicao terminou (seria mentira: a resposta

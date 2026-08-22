@@ -12,8 +12,17 @@
 // Grudado em CADA mensagem do aluno, e nao so nas instrucoes iniciais: um
 // modelo pequeno esquece o topo do contexto, mas nunca a ultima linha que
 // leu. Curto de proposito — lembrete, nao briefing.
+//
+// CUIDADO COM A REDACAO — ja quebrou o produto uma vez. A primeira versao
+// dizia "nada de comando ou nome de ferramenta na resposta"; o modelo leu
+// como PROIBICAO DE USAR FERRAMENTAS e parou de trabalhar: o aluno clicou em
+// "Iniciar corte limpo" e recebeu um tutorial de como editar video na mao.
+// Medido no provedor real, 20 rodadas por variante: com aquele texto o agente
+// agiu 0 vezes; sem ele, 6; com o texto abaixo, 7. A regra de lingua vale
+// para o TEXTO QUE O ALUNO LE, e a frase precisa deixar isso explicito e
+// autorizar a acao na mesma linha.
 export const PT_BR_TURN_REMINDER =
-  '\n\n[Responda em portugues do Brasil, como um editor de video falando com o aluno. Nada de ingles, caminho de arquivo, nome de campo, comando ou nome de ferramenta na resposta.]';
+  '\n\n[Ao ESCREVER a resposta, use portugues do Brasil e fale do efeito no video. Isto vale so para o texto que o aluno le — continue usando as ferramentas e executando normalmente.]';
 
 // Pedido de reescrita, usado quando a resposta veio em ingles mesmo assim.
 export function rewritePrompt(text: string): string {
