@@ -21,7 +21,7 @@ try {
     '--skipLibCheck', '--outDir', outDir,
   ], { stdio: 'inherit' });
 
-  const { AI_CATALOG, catalogEntry, routeCandidates, routeFor, shouldFailover } =
+  const { AI_CATALOG, catalogEntry, keyProbe, routeCandidates, routeFor, shouldFailover } =
     await import(pathToFileURL(path.join(outDir, 'ai-catalog.js')).href);
 
   const AGORA = 1_000_000;
@@ -84,7 +84,46 @@ try {
     'prompt recusado é o mesmo em qualquer provedor — trocar só queima cota');
   assert.equal(shouldFailover(401, 'invalid api key'), false, 'chave errada não melhora trocando');
 
-  console.log('test:ai-catalog ok — gratuito primeiro, limite cede a vez, filtro respeitado e failover só no que adianta.');
+  // --- Verificação de chave: cada provedor no SEU endereço ------------------
+  // O defeito real: o teste tinha caso para Cloudflare, Treblo e Ollama, e
+  // tudo o mais caía num fallback apontando para o openrouter.ai. A chave boa
+  // do Gemini era enviada para o OpenRouter, voltava 401 e o aluno lia
+  // "Chave recusada pelo provedor".
+  const gemini = keyProbe('gemini', { apiKey: 'abc' });
+  assert.ok(gemini.url.includes('generativelanguage.googleapis.com'), `Gemini no endereço errado: ${gemini.url}`);
+  assert.ok(!gemini.url.includes('openrouter'), 'NUNCA testar Gemini no OpenRouter');
+  // A chave do Gemini vai na URL, não em cabeçalho — e precisa ir escapada.
+  assert.ok(gemini.url.includes('key=abc'));
+  assert.deepEqual(gemini.headers, {});
+  // E o Google recusa com 400, não 401: medido no endpoint real.
+  assert.ok(gemini.refusedStatus.includes(400), '400 é como o Google diz "chave inválida"');
+
+  const chatgpt = keyProbe('chatgpt', { apiKey: 'sk-x' });
+  assert.ok(chatgpt.url.includes('api.openai.com'));
+  assert.equal(chatgpt.headers.Authorization, 'Bearer sk-x');
+  const claude = keyProbe('claude', { apiKey: 'sk-ant-x' });
+  assert.ok(claude.url.includes('api.anthropic.com'));
+  assert.equal(claude.headers['x-api-key'], 'sk-ant-x', 'a Anthropic não usa Bearer');
+  assert.ok(claude.headers['anthropic-version'], 'sem a versão a Anthropic recusa o pedido');
+  assert.ok(keyProbe('ollama', { apiKey: 'x' }).url.includes('ollama.com'));
+  assert.ok(keyProbe('openrouter', { apiKey: 'x' }).url.includes('openrouter.ai'));
+
+  // Cloudflare precisa do Account ID; sem ele não há endereço.
+  assert.ok(keyProbe('cloudflare', { apiKey: 'x', accountId: 'conta' }).url.includes('conta'));
+  assert.equal(keyProbe('cloudflare', { apiKey: 'x' }), null);
+  // Provedor sem verificação não pode virar teste contra o serviço errado.
+  assert.equal(keyProbe('inventado', { apiKey: 'x' }), null);
+  assert.equal(keyProbe('treblo', { apiKey: 'x' }), null, 'o Treblo tem verificação própria');
+
+  // Toda IA do catálogo que aceita chave precisa saber ser verificada — ou
+  // ter caso próprio. Sem isto, o próximo provedor repete o defeito.
+  for (const entry of AI_CATALOG) {
+    if (!entry.auth.includes('apikey')) continue;
+    const probe = keyProbe(entry.id, { apiKey: 'x', accountId: 'y' });
+    assert.ok(probe !== null || entry.id === 'treblo', `${entry.id} não sabe verificar a própria chave`);
+  }
+
+  console.log('test:ai-catalog ok — rota gratuita primeiro, failover só no que adianta e cada chave testada no seu provedor.');
 } finally {
   rmSync(outDir, { recursive: true, force: true });
 }

@@ -231,3 +231,70 @@ export function shouldFailover(status: number | null, message: string): boolean 
   if (status === 429 || (status !== null && status >= 500)) return true;
   return /limit|quota|exceeded|unavailable|sem conexão|timeout|esgotad/iu.test(message);
 }
+
+// --- VERIFICACAO DE CHAVE --------------------------------------------------
+// Cada provedor tem seu endereco e seu jeito de recusar. Isto vivia como um
+// if/else no main com um FALLBACK para o OpenRouter — e o fallback pegava
+// todo provedor sem caso proprio: a chave do Gemini era enviada para o
+// openrouter.ai, voltava 401 e o aluno lia "Chave recusada pelo provedor"
+// sobre uma chave perfeitamente boa. Aqui a tabela e explicita, e provedor
+// desconhecido nao vira teste contra o servico errado.
+export type KeyProbe = {
+  url: string;
+  headers: Record<string, string>;
+  // Status que significam "a chave nao presta". O Gemini responde 400 com
+  // "API key not valid" — 401 nao cobre (medido no endpoint real).
+  refusedStatus: number[];
+};
+
+export function keyProbe(
+  providerId: string,
+  credentials: Readonly<Record<string, string>>,
+): KeyProbe | null {
+  const apiKey = credentials.apiKey ?? '';
+  switch (providerId) {
+    case 'gemini':
+      return {
+        url: `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1&key=${encodeURIComponent(apiKey)}`,
+        headers: {},
+        refusedStatus: [400, 401, 403],
+      };
+    case 'chatgpt':
+      return {
+        url: 'https://api.openai.com/v1/models',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        refusedStatus: [401, 403],
+      };
+    case 'claude':
+      return {
+        url: 'https://api.anthropic.com/v1/models?limit=1',
+        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        refusedStatus: [401, 403],
+      };
+    case 'ollama':
+      return {
+        url: 'https://ollama.com/api/tags',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        refusedStatus: [401, 403],
+      };
+    case 'openrouter':
+      return {
+        url: 'https://openrouter.ai/api/v1/key',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        refusedStatus: [401, 403],
+      };
+    case 'cloudflare': {
+      const accountId = credentials.accountId ?? '';
+      if (!accountId) return null;
+      return {
+        url: `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/models/search?per_page=1`,
+        headers: { Authorization: `Bearer ${apiKey}` },
+        refusedStatus: [400, 401, 403],
+      };
+    }
+    default:
+      // Treblo tem verificacao propria (POST) e vive no main; qualquer outro
+      // provedor novo cai aqui e o teste diz isso, em vez de mentir.
+      return null;
+  }
+}

@@ -24,7 +24,13 @@ import { ClaudeAgent } from './claude-agent';
 import { CodexAppServer } from './codex-app-server';
 import { GeminiAgent } from './gemini-agent';
 import { JCUT_LEAD_SECONDS, cutMatchesEdl, extractionArgs, mixArgs, muxArgs, planJcut, tracksInSync } from './jcut';
-import { AI_CATALOG, catalogEntry, routeCandidates, shouldFailover } from './ai-catalog';
+import {
+  AI_CATALOG,
+  catalogEntry,
+  keyProbe,
+  routeCandidates,
+  shouldFailover,
+} from './ai-catalog';
 import {
   geminiAspect,
   imageUse,
@@ -4559,20 +4565,8 @@ function registerIpcHandlers(): void {
       const apiKey = asText(fields.apiKey);
       if (!apiKey) return { ok: false, detail: 'Informe a chave.' };
       try {
-        if (entry.id === 'cloudflare') {
-          const accountId = asText(fields.accountId);
-          if (!accountId) return { ok: false, detail: 'Informe o Account ID.' };
-          const response = await net.fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/models/search?per_page=1`,
-            { headers: { Authorization: `Bearer ${apiKey}` } },
-          );
-          if (response.ok) return { ok: true, detail: 'Chave e Account ID válidos.' };
-          return {
-            ok: false,
-            detail: response.status === 403 || response.status === 401
-              ? 'Chave ou Account ID recusados pela Cloudflare.'
-              : `A Cloudflare respondeu HTTP ${response.status}.`,
-          };
+        if (entry.id === 'cloudflare' && !asText(fields.accountId)) {
+          return { ok: false, detail: 'Informe o Account ID.' };
         }
         if (entry.id === 'treblo') {
           const response = await net.fetch('https://api.treblo.com/v1/generations/v3', {
@@ -4589,15 +4583,24 @@ function registerIpcHandlers(): void {
           }
           return { ok: true, detail: 'Chave válida.' };
         }
-        const url = entry.id === 'ollama'
-          ? 'https://ollama.com/api/tags'
-          : 'https://openrouter.ai/api/v1/key';
-        const response = await net.fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
-        if (response.ok) return { ok: true, detail: 'Chave válida.' };
-        return {
-          ok: false,
-          detail: response.status === 401 ? 'Chave recusada pelo provedor.' : `O provedor respondeu HTTP ${response.status}.`,
-        };
+        // Cada provedor tem seu endereco e seu status de recusa (o Gemini
+        // responde 400, nao 401). O fallback que existia aqui mandava toda
+        // chave sem caso proprio para o openrouter.ai, e a chave boa do
+        // Gemini voltava "recusada pelo provedor".
+        const probe = keyProbe(entry.id, Object.fromEntries(
+          Object.entries(fields).map(([key, value]) => [key, asText(value)]),
+        ));
+        if (!probe) {
+          return { ok: false, detail: `Ainda não sei verificar a chave do ${entry.name}. Salve e use — o erro aparece no primeiro uso.` };
+        }
+        const response = await net.fetch(probe.url, { headers: probe.headers });
+        if (response.ok) {
+          return { ok: true, detail: entry.id === 'cloudflare' ? 'Chave e Account ID válidos.' : 'Chave válida.' };
+        }
+        if (probe.refusedStatus.includes(response.status)) {
+          return { ok: false, detail: `Chave recusada pelo ${entry.name}.` };
+        }
+        return { ok: false, detail: `O ${entry.name} respondeu HTTP ${response.status}.` };
       } catch (error) {
         return { ok: false, detail: error instanceof Error ? error.message : 'Falha ao falar com o provedor.' };
       }

@@ -1213,6 +1213,19 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.21.1: a chave do Gemini era testada CONTRA O OPENROUTER. O botão Testar
+  tinha caso para Cloudflare, Treblo e Ollama, e tudo o mais caía num fallback
+  apontando para `openrouter.ai/api/v1/key` — a chave boa do Google ia para o
+  serviço errado, voltava 401 e o aluno lia "Chave recusada pelo provedor".
+  A tabela agora é explícita (`keyProbe` em ai-catalog.ts) e provedor sem caso
+  próprio devolve "ainda não sei verificar" em vez de testar no lugar errado.
+  Endpoints medidos com chave falsa: Gemini responde **400** com "API key not
+  valid" (401 não cobria), ChatGPT 401, Claude 401 e exige `x-api-key` +
+  `anthropic-version` (não Bearer), OpenRouter 401.
+  O teste do catálogo passa a exigir que TODA IA que aceita chave saiba ser
+  verificada — sem isso o próximo provedor repete o defeito.
+  NOTA: só o botão Testar estava errado. Salvar já roteava o Gemini para o
+  agente próprio (`connectGeminiApiKey`), então a conexão em si funcionava.
 - 0.21.0: headline escrita pelo aluno e trilha com clima do próprio vídeo.
   (1) CAMPO DE TEXTO DA HEADLINE na aba Estilos, escolha do aluno para não
   depender do agente. Ordem de preferência ao montar: o que ele escreveu, o
