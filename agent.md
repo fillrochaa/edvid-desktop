@@ -1213,6 +1213,25 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.20.1: três defeitos do primeiro render montado pelo app, todos meus.
+  (1) LEGENDA "muito pequena e muito embaixo". Eu escrevia a composição com o
+  tamanho do ARQUIVO, e o corte do aluno era 4K: a composição virou 2160x3840
+  e TODOS os padrões do template (fonte 61, margem 420, largura segura 720)
+  são calibrados para 1080x1920 — no dobro da resolução tudo aparece com
+  metade do tamanho e metade da distância da borda. Medir o arquivo parecia o
+  certo e era o defeito. A composição agora é FIXA em 1080x1920, que é o
+  formato de entrega; o vídeo entra escalado, e o render ficou 4x mais leve de
+  quebra. O fps também passou a ser arredondado (o arquivo dele dizia 29,978).
+  (2) HEADLINE não apareceu: sem texto escrito eu desligava o gancho, o que
+  evita o "HEADLINE LINHA 1" do template mas entrega vídeo sem headline. Agora
+  ela sai da PRIMEIRA FRASE FALADA, em duas linhas equilibradas — é o gancho
+  de verdade do vídeo, e o aluno ou o agente reescrevem depois.
+  (3) TRILHA não foi gerada: numa edição limpa o agente nem chega a ser
+  chamado, e era ele quem escrevia o pedido de música. Agora quem pede é o
+  app, na montagem, e a geração dispara logo depois.
+  LIÇÃO: ao tirar um passo do agente, herda-se TUDO o que aquele passo fazia de
+  passagem. A trilha não quebrou por um bug — quebrou porque estava pendurada
+  num turno que deixou de existir.
 - 0.20.0: a FASE 2 passou a ser montada pelo aplicativo, e o indicador de
   trabalho virou um só para tudo.
   (1) "Aplicar os estilos" era um pedido ao agente com a lista de escolhas. Ele

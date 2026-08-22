@@ -2515,6 +2515,31 @@ async function applyTimelineRanges(
   return promise;
 }
 
+// A headline a partir da PRIMEIRA FRASE do video.
+//
+// O texto do gancho e a unica parte criativa desta etapa, e deixa-lo com o
+// agente deu no que deu: ele escreveu "HEADLINE LINHA 1" (o exemplo do
+// template) e isso iria ao ar. A abertura falada e o gancho de verdade do
+// video — sai em duas linhas curtas, e o aluno ou o agente reescrevem depois.
+export function openingLine(
+  captions: ReadonlyArray<{ text: string; startMs: number }>,
+  limit = 52,
+): string[] {
+  const words: string[] = [];
+  let length = 0;
+  for (const caption of captions) {
+    const word = caption.text.trim().replace(/[.,;:!?]+$/u, '');
+    if (!word) continue;
+    if (length + word.length + 1 > limit) break;
+    words.push(word);
+    length += word.length + 1;
+  }
+  if (words.length < 3) return [];
+  // Duas linhas equilibradas: uma linha so estoura a largura segura.
+  const half = Math.ceil(words.length / 2);
+  return [words.slice(0, half).join(' '), words.slice(half).join(' ')].filter(Boolean);
+}
+
 // O edit-data.json a partir do formulario. Mapeamento direto: cada escolha do
 // aluno tem um campo oficial no template. A headline fica DESLIGADA quando ele
 // nao escreveu um texto — o agente deixava "HEADLINE LINHA 1" do exemplo e
@@ -2522,7 +2547,7 @@ async function applyTimelineRanges(
 async function writeEditData(
   publicDirectory: string,
   style: ProjectStyleState,
-  media: { width: number; height: number; fps: number; durationSec: number },
+  media: { width: number; height: number; fps: number; durationSec: number; opening: string[] },
 ): Promise<void> {
   const file = path.join(publicDirectory, 'edit-data.json');
   // Preserva o que o agente ja tiver posto de criativo (inserts, animacoes,
@@ -2555,11 +2580,11 @@ async function writeEditData(
     hook: {
       ...hookBefore,
       // Sem texto escrito nao ha headline: melhor sem do que com o exemplo.
-      enabled: style.headline !== 'none' && realLines.length > 0,
+      enabled: style.headline !== 'none' && (realLines.length > 0 || media.opening.length > 0),
       endSec: Number(hookBefore.endSec) || 4,
       style: style.headline === 'none' ? 'realce' : style.headline,
       accent: style.accent,
-      lines: realLines,
+      lines: realLines.length > 0 ? realLines : media.opening,
     },
     captions: {
       ...((previous.captions ?? {}) as Record<string, unknown>),
@@ -2620,16 +2645,24 @@ async function buildPhase2(
   const cut = path.join(publicDirectory, 'cut.mp4');
   if (path.resolve(approved) !== path.resolve(cut)) await copyFile(approved, cut);
 
-  // 2. As medidas vem do arquivo, nunca de chute.
+  // 2. Duracao e fps vem do arquivo. O TAMANHO, nao.
+  //
+  // A composicao e sempre 1080x1920, o formato de entrega do reel, e o video
+  // entra escalado. Medir o tamanho do arquivo parecia mais correto e nao e:
+  // o corte do aluno era 4K, a composicao virou 2160x3840 e TODOS os padroes
+  // do template (fonte 61, margem 420, largura segura 720) sao calibrados
+  // para 1080 — no dobro da resolucao a legenda saiu com metade do tamanho e
+  // metade da distancia da borda. Foi exatamente o que ele viu: "muito
+  // pequena e muito embaixo". De quebra, renderizar em 4K custa quatro vezes
+  // mais por nada.
   const probe = await inspectVideo(ffprobe.command, ffprobe.argsPrefix, cut);
   const stream = probe.streams?.[0];
-  const rotated = Math.abs(
-    Number(stream?.side_data_list?.find((item) => item.rotation !== undefined)?.rotation)
-    || Number(stream?.tags?.rotate) || 0,
-  ) % 180 === 90;
-  const width = (rotated ? stream?.height : stream?.width) ?? 1080;
-  const height = (rotated ? stream?.width : stream?.height) ?? 1920;
-  const fps = parseFrameRate(stream?.avg_frame_rate || stream?.r_frame_rate);
+  const width = 1080;
+  const height = 1920;
+  // fps redondo: o avg_frame_rate de um arquivo de camera vem 29,978 e um
+  // numero quebrado aqui desalinha os segmentos por frame.
+  const measured = parseFrameRate(stream?.avg_frame_rate || stream?.r_frame_rate);
+  const fps = [24, 25, 30, 50, 60].find((option) => Math.abs(option - measured) < 0.6) ?? Math.round(measured);
   const durationSec = Number(probe.format?.duration) || 0;
   if (durationSec <= 0) throw new Error('Não consegui medir a duração do corte aprovado.');
 
@@ -2679,8 +2712,27 @@ async function buildPhase2(
     5 * 60_000,
   ).catch(() => {});
 
-  // 6. As escolhas do formulario viram os campos oficiais do template.
-  await writeEditData(publicDirectory, style, { width, height, fps, durationSec });
+  // 6. Trilha: quem PEDE e o aplicativo. Deixar isso para o agente foi o que
+  //    fez a trilha nao existir quando a edicao era limpa — nesse caso o
+  //    agente nem chega a ser chamado.
+  if (style.elements.musicAI) {
+    const musicDirectory = path.join(editDirectory, 'musica');
+    await mkdir(musicDirectory, { recursive: true });
+    const requestFile = path.join(musicDirectory, 'pedidos.json');
+    const already = await statOf(path.join(musicDirectory, 'trilha.mp3'));
+    if (!already) {
+      await writeFile(requestFile, `${JSON.stringify([{
+        arquivo: 'trilha.mp3',
+        prompt: 'Instrumental background track for a short talking-head video about technology: modern, light, steady pulse, no vocals, unobtrusive under speech.',
+        duracao: Math.round(durationSec),
+      }], null, 2)}\n`);
+    }
+  }
+
+  // 7. As escolhas do formulario viram os campos oficiais do template.
+  await writeEditData(publicDirectory, style, {
+    width, height, fps, durationSec, opening: openingLine(captions),
+  });
 }
 
 // Duracao em segundos pelo ffprobe do pacote. Precisa do total original para

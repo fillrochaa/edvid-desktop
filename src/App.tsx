@@ -1983,6 +1983,7 @@ export function App() {
   const [checking, setChecking] = useState(true);
   const [sending, setSending] = useState(false);
   const [cleanCut, setCleanCut] = useState<CleanCutState>({ status: 'idle' });
+  const [musicBusy, setMusicBusy] = useState(false);
   const cleanCutRunning = cleanCut.status === 'transcrevendo'
     || cleanCut.status === 'analisando'
     || cleanCut.status === 'cortando';
@@ -2359,6 +2360,7 @@ export function App() {
       const total = imageGen.total ?? 0;
       return total > 1 ? `Gerando as imagens · ${imageGen.done ?? 0} de ${total}` : 'Gerando a imagem';
     }
+    if (musicBusy) return 'Compondo a trilha sonora';
     if (whisperModel.status === 'downloading') return 'Preparando a transcrição';
     if (runtimePack.status === 'downloading' || runtimePack.status === 'extracting') {
       return 'Preparando as ferramentas';
@@ -2366,7 +2368,7 @@ export function App() {
     if (activeTurn || sending) return 'Escrevendo';
     return null;
   }, [
-    activeTurn, approvingCut, cleanCut, imageGen, jcutBusy,
+    activeTurn, approvingCut, cleanCut, imageGen, jcutBusy, musicBusy,
     phase2Render, runtimePack.status, sending, whisperModel.status,
   ]);
 
@@ -2867,7 +2869,21 @@ export function App() {
     }
     localStorage.setItem(styleStorageKey(projectDirectory), JSON.stringify(style));
     setStyleApplied(true);
-    void window.edvidDesktop.renderPhase2(projectDirectory).catch(() => {});
+    // A trilha, quando escolhida, foi PEDIDA pelo app na montagem. Gerar aqui
+    // e o que faltava: numa edição limpa o agente nem é chamado, e antes era
+    // ele quem disparava isso.
+    if (style.elements.musicAI) {
+      setMusicBusy(true);
+      void window.edvidDesktop.fulfillMusicRequests(projectDirectory)
+        .catch(() => ({ done: 0 }))
+        .then(() => {
+          setMusicBusy(false);
+          return window.edvidDesktop.renderPhase2(projectDirectory);
+        })
+        .catch(() => {});
+    } else {
+      void window.edvidDesktop.renderPhase2(projectDirectory).catch(() => {});
+    }
     const enabled = Object.entries(style.elements).filter(([, value]) => value).map(([key]) => key).join(', ') || 'nenhum';
     const disabled = Object.entries(style.elements).filter(([, value]) => !value).map(([key]) => key).join(', ') || 'nenhum';
     const prompt = [
