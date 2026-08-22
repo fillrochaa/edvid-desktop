@@ -103,6 +103,11 @@ export type ProjectSource = {
 export type ProjectStyleState = {
   edit: 'limpa' | 'split' | 'split2';
   headline: 'outline' | 'card' | 'realce' | 'misto' | 'none';
+  // O TEXTO da headline, escrito pelo aluno. Era a única parte criativa desta
+  // etapa que dependia do agente — e ele entregou o exemplo do template
+  // ("HEADLINE LINHA 1") num vídeo real. Vazio = o Edvid usa a frase de
+  // abertura da fala.
+  headlineText: string;
   captions: 'karaoke' | 'stacked' | 'scatter' | 'simples' | 'serifada' | 'classica' | 'none';
   accent: string;
   elements: {

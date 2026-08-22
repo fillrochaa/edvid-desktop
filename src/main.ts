@@ -47,6 +47,7 @@ import {
   type MemberEntitlement,
 } from './member-auth-policy';
 import { EDIT_DIR, RENDER_DIR, nextRenderVersion } from './project-layout';
+import { SOUNDTRACK_VOLUME, musicBrief } from './music-brief';
 import {
   cleanCutArgs,
   cleanCutSummary,
@@ -1135,6 +1136,7 @@ async function inspectProjectStyle(directory: string): Promise<ProjectStyleState
       return {
         edit: style.edit as ProjectStyleState['edit'],
         headline: style.headline as ProjectStyleState['headline'],
+        headlineText: asText((style as { headlineText?: unknown }).headlineText),
         captions: style.captions as ProjectStyleState['captions'],
         accent: /^#[0-9a-f]{6}$/iu.test(style.accent ?? '') ? style.accent as string : '#ff5200',
         elements: {
@@ -2562,6 +2564,18 @@ async function writeEditData(
   const lines = Array.isArray(hookBefore.lines) ? (hookBefore.lines as string[]) : [];
   // "HEADLINE LINHA 1" e o texto de exemplo do template: nunca vai ao ar.
   const realLines = lines.filter((line) => line && !/HEADLINE LINHA/iu.test(line));
+  // O texto do aluno vira até duas linhas: quebra onde ele quebrou, ou no
+  // meio das palavras se ele escreveu tudo corrido.
+  const escrito = ((): string[] => {
+    const raw = style.headlineText.trim();
+    if (!raw) return [];
+    const lines = raw.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+    if (lines.length > 1) return lines.slice(0, 2);
+    const words = lines[0].split(/\s+/u);
+    if (words.length < 4) return [lines[0]];
+    const half = Math.ceil(words.length / 2);
+    return [words.slice(0, half).join(' '), words.slice(half).join(' ')];
+  })();
   const zoomCount = Math.max(3, Math.min(12, Math.round(media.durationSec / 12)));
   const document: Record<string, unknown> = {
     ...previous,
@@ -2580,11 +2594,14 @@ async function writeEditData(
     hook: {
       ...hookBefore,
       // Sem texto escrito nao ha headline: melhor sem do que com o exemplo.
-      enabled: style.headline !== 'none' && (realLines.length > 0 || media.opening.length > 0),
+      enabled: style.headline !== 'none'
+        && (escrito.length > 0 || realLines.length > 0 || media.opening.length > 0),
       endSec: Number(hookBefore.endSec) || 4,
       style: style.headline === 'none' ? 'realce' : style.headline,
       accent: style.accent,
-      lines: realLines.length > 0 ? realLines : media.opening,
+      // Ordem de preferência: o que o aluno escreveu, o que já estava no
+      // arquivo, a frase de abertura da fala. Nunca o exemplo do template.
+      lines: escrito.length > 0 ? escrito : (realLines.length > 0 ? realLines : media.opening),
     },
     captions: {
       ...((previous.captions ?? {}) as Record<string, unknown>),
@@ -2606,7 +2623,7 @@ async function writeEditData(
       // ausente mata o render com 404 (defeito ja visto).
       enabled: false,
       file: 'trilha.mp3',
-      volume: 0.0445,
+      volume: SOUNDTRACK_VOLUME,
     },
   };
   await writeFile(file, `${JSON.stringify(document, null, 2)}\n`);
@@ -2721,9 +2738,12 @@ async function buildPhase2(
     const requestFile = path.join(musicDirectory, 'pedidos.json');
     const already = await statOf(path.join(musicDirectory, 'trilha.mp3'));
     if (!already) {
+      // O clima sai da PROPRIA fala: assunto pelas palavras, energia pelo
+      // ritmo. Um pedido fixo servia para qualquer video e por isso nao
+      // servia para nenhum.
       await writeFile(requestFile, `${JSON.stringify([{
         arquivo: 'trilha.mp3',
-        prompt: 'Instrumental background track for a short talking-head video about technology: modern, light, steady pulse, no vocals, unobtrusive under speech.',
+        prompt: musicBrief(captions.map((caption) => caption.text).join(' '), durationSec),
         duracao: Math.round(durationSec),
       }], null, 2)}\n`);
     }
@@ -3694,8 +3714,7 @@ async function enableSoundtrack(publicDirectory: string, fileName: string): Prom
     document.soundtrack = {
       enabled: true,
       file: fileName,
-      // 0,0445 e a referencia do template: musica presente sem competir com a voz.
-      volume: Number.isFinite(volume) && volume > 0 ? volume : 0.0445,
+      volume: Number.isFinite(volume) && volume > 0 ? volume : SOUNDTRACK_VOLUME,
     };
     await writeFile(file, `${JSON.stringify(document, null, 2)}\n`);
   } catch {

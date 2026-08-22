@@ -140,6 +140,7 @@ type CaptionStyle =
 type StyleSetup = {
   edit: EditStyle;
   headline: HeadlineStyle;
+  headlineText: string;
   captions: CaptionStyle;
   accent: string;
   elements: {
@@ -193,6 +194,7 @@ const initialAccount: CodexAccountState = {
 const defaultStyleSetup: StyleSetup = {
   edit: 'limpa',
   headline: 'outline',
+  headlineText: '',
   captions: 'karaoke',
   accent: '#ff5200',
   elements: {
@@ -1829,6 +1831,21 @@ function StyleWorkspace({
               </ChoiceCard>
             ))}
           </div>
+          {/* O TEXTO da headline. Era a única parte criativa desta aba que
+              dependia do agente, e ele já mandou o texto de exemplo do
+              template para um vídeo real. Vazio, o Edvid usa a frase de
+              abertura da fala — nunca fica sem nada. */}
+          {style.headline !== 'none' && (
+            <label className="style-note">
+              <span>Texto da headline</span>
+              <textarea
+                rows={2}
+                value={style.headlineText}
+                onChange={(event) => onChange({ ...style, headlineText: event.target.value })}
+                placeholder="Deixe vazio para usar a primeira frase do vídeo"
+              />
+            </label>
+          )}
         </section>
 
         <section className="style-group">
@@ -2889,7 +2906,7 @@ export function App() {
     const prompt = [
       'Aplique estas escolhas de estilo na Fase 2 do projeto:',
       `- Tipo de edição: ${style.edit}`,
-      `- Headline: ${style.headline}`,
+      `- Headline: ${style.headline}${style.headlineText.trim() ? ` (texto já escrito pelo aluno — não mude)` : ''}`,
       `- Legendas: ${style.captions}`,
       `- Cor de destaque: ${style.accent}`,
       `- Elementos incluídos: ${enabled}`,
@@ -2899,7 +2916,7 @@ export function App() {
       ...(style.elements.musicAI
         ? [
             '',
-            'Trilha sonora: peça a música em edit/musica/pedidos.json com uma lista [{"arquivo": "trilha.mp3", "prompt": "descrição do clima em inglês", "duracao": <segundos do corte>}]. O Edvid gera fora do sandbox com a IA de música conectada e avisa quando terminar; nesse turno, copie o arquivo para edit/remotion/public/ e ligue soundtrack no edit-data.json com volume baixo (0.0445 é a referência). Não tente compor nem baixar música por conta própria.',
+            'Trilha sonora: o Edvid já pediu a música, já gerou e já ligou na edição. Não escreva pedidos.json, não copie arquivo e não mexa no campo soundtrack.',
           ]
         : []),
       // Tela dividida sem conteúdo definido fazia o agente improvisar (já

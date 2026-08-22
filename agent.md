@@ -1213,6 +1213,23 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.21.0: headline escrita pelo aluno e trilha com clima do próprio vídeo.
+  (1) CAMPO DE TEXTO DA HEADLINE na aba Estilos, escolha do aluno para não
+  depender do agente. Ordem de preferência ao montar: o que ele escreveu, o
+  que já estava no arquivo, a frase de abertura da fala. Nunca o exemplo do
+  template. Uma linha corrida é quebrada em duas equilibradas; se ele quebrar
+  à mão, respeita a quebra dele.
+  (2) TRILHA PERSONALIZADA. O pedido era uma frase fixa, que serve para
+  qualquer vídeo e por isso não serve para nenhum. Agora o clima sai da
+  transcrição: assunto por palavras-chave (tecnologia, negócios, ensino,
+  história pessoal), energia pelas palavras por minuto da fala e estrutura
+  pela duração. Determinístico — o mesmo vídeo gera sempre o mesmo pedido.
+  (3) VOLUME DA TRILHA +5 dB, de 0,0445 para 0,079.
+  CORREÇÃO DE PREMISSA registrada: a conversa supunha que 0,0445 era -15 dB e
+  o pedido foi "subir para -10". 0,0445 é -27 dB. Aplicado o DELTA pedido
+  (+5 dB → -22 dB); o -10 absoluto seria 0,316, sete vezes mais alto que antes
+  e disputando com a voz. O número em dB e a conta ficam no comentário de
+  `SOUNDTRACK_VOLUME` para a próxima conversa não repetir a suposição.
 - 0.20.1: três defeitos do primeiro render montado pelo app, todos meus.
   (1) LEGENDA "muito pequena e muito embaixo". Eu escrevia a composição com o
   tamanho do ARQUIVO, e o corte do aluno era 4K: a composição virou 2160x3840

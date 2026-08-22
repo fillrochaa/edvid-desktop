@@ -9,7 +9,7 @@
  *
  * The ONE editable file is CustomGraphics.tsx — bespoke motion graphics only.
  *
- * Audio: keep layers low (whoosh WHOOSH_VOLUME, pop ~0.12, music ~0.0445) and always run
+ * Audio: keep layers low (whoosh WHOOSH_VOLUME, pop ~0.12, music ~0.079) and always run
  * a final loudnorm pass on the render — voice + music + SFX summed will clip.
  */
 import {
