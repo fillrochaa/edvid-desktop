@@ -5,6 +5,7 @@ import type {
   AiRolesState,
   CatalogState,
   ClaudeAccountState,
+  CleanCutState,
   CodexEvent,
   EdvidDesktopApi,
   GeminiAccountState,
@@ -191,6 +192,12 @@ const runtimeVersions: Record<RuntimeName, string> = {
   whisperx: '3.8.6',
   'codex-app-server': '0.147.0',
 };
+
+const cleanCutListeners = new Set<(state: CleanCutState) => void>();
+
+function emitCleanCut(state: CleanCutState): void {
+  for (const listener of cleanCutListeners) listener(state);
+}
 
 function emit(event: CodexEvent): void {
   for (const listener of listeners) listener(event);
@@ -483,6 +490,33 @@ export function createQaBrowserApi(): EdvidDesktopApi {
     },
     memberLogout: async () => ({ status: 'signed-out' }),
     onMemberAuthState: () => () => {},
+    // O corte limpo do QA e instantaneo: a interface so precisa mostrar as
+    // etapas e a mensagem final com o gate de aprovacao.
+    runCleanCut: async () => {
+      const passos: CleanCutState[] = [
+        { status: 'transcrevendo', done: 0, total: 1, current: 'IMG_6342.MOV' },
+        { status: 'analisando' },
+        { status: 'cortando' },
+      ];
+      passos.forEach((estado, index) => {
+        window.setTimeout(() => emitCleanCut(estado), 300 + index * 900);
+      });
+      window.setTimeout(() => {
+        const pronto: CleanCutState = {
+          status: 'pronto',
+          summary: 'Corte limpo pronto: 12 blocos de fala. Tirei 0min 48s de pausa e silêncio (28%), e o vídeo ficou com 2min 07s. Assista no preview e aprove para escolher os estilos.',
+        };
+        // So o estado: quem escreve a mensagem no chat e a interface, a
+        // partir do resumo. Emitir tambem um assistant-final duplicaria.
+        emitCleanCut(pronto);
+      }, 3_000);
+      return { status: 'transcrevendo', done: 0, total: 1 };
+    },
+    onCleanCutState: (listener) => {
+      cleanCutListeners.add(listener);
+      return () => cleanCutListeners.delete(listener);
+    },
+
     sendCodexMessage: async ({ text }) => {
       turnNumber += 1;
       const threadId = 'qa-thread';

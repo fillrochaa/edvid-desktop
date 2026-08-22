@@ -10,6 +10,7 @@ import type {
   GeminiAccountState,
   ImageGenState,
   MemberAuthState,
+  CleanCutState,
   Phase2RenderState,
   RemotionRuntimeState,
   RuntimePackState,
@@ -123,6 +124,12 @@ const api: EdvidDesktopApi = {
     const handler = (_event: Electron.IpcRendererEvent, state: AppUpdateState) => listener(state);
     ipcRenderer.on('update:state', handler);
     return () => ipcRenderer.removeListener('update:state', handler);
+  },
+  runCleanCut: (directory) => ipcRenderer.invoke('cleancut:run', { directory }),
+  onCleanCutState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: CleanCutState) => listener(state);
+    ipcRenderer.on('cleancut:state', handler);
+    return () => ipcRenderer.removeListener('cleancut:state', handler);
   },
   renderPhase2: (directory) => ipcRenderer.invoke('phase2:render', { directory }),
   onPhase2RenderState: (listener) => {

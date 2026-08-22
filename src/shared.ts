@@ -202,6 +202,21 @@ export type Phase2RenderState = {
   error?: string;
 };
 
+// O corte limpo e feito pelo APLICATIVO, nao pelo agente: transcrever, medir
+// o silencio, cortar e concatenar sao sempre os mesmos comandos. O estado
+// abaixo e o que a interface mostra enquanto isso acontece.
+export type CleanCutState = {
+  status: 'idle' | 'transcrevendo' | 'analisando' | 'cortando' | 'pronto' | 'erro';
+  // Progresso por ARQUIVO na transcricao (o passo longo com varias fontes).
+  done?: number;
+  total?: number;
+  // Nome do arquivo em transcricao, para a interface dizer o que esta rodando.
+  current?: string;
+  // Frase pronta em portugues, com os numeros do corte.
+  summary?: string;
+  error?: string;
+};
+
 // Provedor de IA. Cada aluno conecta a propria conta (assinatura OU chave de
 // API); o Edvid guarda as credenciais de cada um e QUAL provedor cumpre cada
 // PAPEL: "chat" conduz a conversa; "image" gera as imagens pedidas pela
@@ -440,6 +455,8 @@ export type EdvidDesktopApi = {
   onMemberAuthState: (listener: (state: MemberAuthState) => void) => () => void;
   renderPhase2: (directory: string) => Promise<Phase2RenderState>;
   onPhase2RenderState: (listener: (state: Phase2RenderState) => void) => () => void;
+  runCleanCut: (directory: string) => Promise<CleanCutState>;
+  onCleanCutState: (listener: (state: CleanCutState) => void) => () => void;
   sendCodexMessage: (input: CodexSendMessageInput) => Promise<CodexSendMessageResult>;
   interruptCodexTurn: (threadId: string, turnId: string) => Promise<void>;
   respondToCodexApproval: (

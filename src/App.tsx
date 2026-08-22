@@ -48,7 +48,9 @@ import type {
   AiProvider,
   AiRolesState,
   AppUpdateState,
+  CatalogState,
   ClaudeAccountState,
+  CleanCutState,
   CodexAccountState,
   CodexApproval,
   CodexEvent,
@@ -58,12 +60,11 @@ import type {
   MemberAuthState,
   OverlayClip,
   Phase2RenderState,
-  CatalogState,
   ProjectSummary,
-  RuntimePackState,
   ProjectWorkspace,
   RemotionRuntimeState,
   RuntimeCheck,
+  RuntimePackState,
   SourceWaveform,
   TimelineClip,
   TimelineModel,
@@ -1981,6 +1982,10 @@ export function App() {
   const [composer, setComposer] = useState('');
   const [checking, setChecking] = useState(true);
   const [sending, setSending] = useState(false);
+  const [cleanCut, setCleanCut] = useState<CleanCutState>({ status: 'idle' });
+  const cleanCutRunning = cleanCut.status === 'transcrevendo'
+    || cleanCut.status === 'analisando'
+    || cleanCut.status === 'cortando';
   const [openingProject, setOpeningProject] = useState(false);
   const [activeTurn, setActiveTurn] = useState<{ threadId: string; turnId: string } | null>(null);
   const [railPinned, setRailPinned] = useState(() => localStorage.getItem('edvid:rail-pinned') === 'true');
@@ -2327,6 +2332,49 @@ export function App() {
       await window.edvidDesktop.saveTimelineModel(pending.directory, pending.model, pending.loadStamp);
     } catch (error) {
       setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: errorMessage(error) }]);
+    }
+  }
+
+  // O corte limpo NAO passa pelo chat: quem transcreve, mede o silencio e
+  // corta e o proprio Edvid. Antes isso era um pedido ao agente, e com IA
+  // gratuita ele respondia com um tutorial em vez de trabalhar.
+  async function startCleanCut() {
+    const directory = activeProjectDirectoryRef.current;
+    if (!directory || cleanCutRunning) return;
+    setFollowingOutput(true);
+    setMessages((current) => [...current, {
+      id: `user:${Date.now()}`,
+      role: 'user',
+      text: 'Iniciar o corte limpo',
+    }]);
+    setCleanCut({ status: 'transcrevendo' });
+    try {
+      await window.edvidDesktop.runCleanCut(directory);
+    } catch (error) {
+      setCleanCut({ status: 'erro', error: errorMessage(error) });
+    }
+  }
+
+  // O corte terminou: a mensagem entra no chat como se o Edvid tivesse falado
+  // (e o gate de aprovacao aparece por ela), e o workspace recarrega para a
+  // timeline e o preview mostrarem o corte novo.
+  function handleCleanCutState(state: CleanCutState) {
+    setCleanCut(state);
+    if (state.status === 'pronto') {
+      setMessages((current) => [...current, {
+        id: `assistant:corte-${Date.now()}`,
+        role: 'assistant',
+        text: state.summary ?? 'Corte limpo pronto. Assista no preview e aprove para escolher os estilos.',
+      }]);
+      void refreshWorkspace();
+      return;
+    }
+    if (state.status === 'erro') {
+      setMessages((current) => [...current, {
+        id: `error:corte-${Date.now()}`,
+        role: 'system',
+        text: state.error || 'Não consegui fazer o corte limpo.',
+      }]);
     }
   }
 
@@ -2958,6 +3006,7 @@ export function App() {
     const unsubscribeModel = window.edvidDesktop.onWhisperModelState(setWhisperModel);
     const unsubscribeRemotion = window.edvidDesktop.onRemotionRuntimeState(setRemotionRuntime);
     const unsubscribePhase2 = window.edvidDesktop.onPhase2RenderState(handlePhase2RenderState);
+    const unsubscribeCleanCut = window.edvidDesktop.onCleanCutState(handleCleanCutState);
     const unsubscribeUpdate = window.edvidDesktop.onAppUpdateState(setAppUpdate);
     const unsubscribeMember = window.edvidDesktop.onMemberAuthState(setMemberAuth);
     const unsubscribeClaude = window.edvidDesktop.onClaudeAccount(setClaudeAccount);
@@ -3009,6 +3058,7 @@ export function App() {
       unsubscribeModel();
       unsubscribeRemotion();
       unsubscribePhase2();
+      unsubscribeCleanCut();
       unsubscribeUpdate();
       unsubscribeMember();
       unsubscribePack();
@@ -3289,24 +3339,28 @@ export function App() {
                   <button type="button" className="btn primary" onClick={startCreateProject}>Novo projeto</button>
                 </div>
               )}
-              {workspace && !activeAiConnected && messages.length === 0 && (
-                <div className="auth-inline">
-                  <span className="chat-empty-icon"><Icon name="chat" /></span>
-                  <h2>Conecte uma IA</h2>
-                  <p>Entre com a conta que você já paga ou use uma chave — há opções com camada gratuita.</p>
-                  {account.error && <div className="inline-error">{account.error}</div>}
-                  <button type="button" className="btn primary" onClick={() => setSettingsOpen(true)}>Conectar IA</button>
-                </div>
-              )}
-              {workspace && activeAiConnected && messages.length === 0 && (
+              {/* O corte limpo é do aplicativo, não do chat: ele aparece
+                  mesmo sem nenhuma IA conectada. Só a conversa e os estilos
+                  precisam de IA — e o aviso disso vem junto, sem esconder o
+                  botão que o aluno veio usar. */}
+              {workspace && messages.length === 0 && (
                 <div className="chat-empty compact">
                   <span className="chat-empty-icon"><Icon name="sparkles" /></span>
                   <h2>O que vamos editar?</h2>
                   <p>O corte limpo vem primeiro. Depois da aprovação, os estilos aparecem visualmente na aba ao lado.</p>
                   <div className="prompt-examples">
-                    <button type="button" onClick={() => void dispatchMessage('Inicie a edição do vídeo e prepare o corte limpo.', 'Iniciar o corte limpo')} disabled={sending || whisperModel.status === 'downloading' || (runtimePack.status !== 'ready' && runtimePack.status !== 'unknown')}>Iniciar corte limpo</button>
-                    <button type="button" onClick={() => void dispatchMessage('Analise os vídeos e imagens da pasta assets.')} disabled={sending}>Analisar assets</button>
+                    <button type="button" onClick={() => void startCleanCut()} disabled={cleanCutRunning || whisperModel.status === 'downloading' || (runtimePack.status !== 'ready' && runtimePack.status !== 'unknown')}>{cleanCutRunning ? 'Cortando...' : 'Iniciar corte limpo'}</button>
+                    {activeAiConnected && (
+                      <button type="button" onClick={() => void dispatchMessage('Analise os vídeos e imagens da pasta assets.')} disabled={sending}>Analisar assets</button>
+                    )}
                   </div>
+                  {!activeAiConnected && (
+                    <div className="model-status">
+                      <span>Para conversar e aplicar estilos, conecte uma IA.</span>
+                      <button type="button" className="btn ghost small" onClick={() => setSettingsOpen(true)}>Conectar IA</button>
+                    </div>
+                  )}
+                  {account.error && <div className="inline-error">{account.error}</div>}
                   {whisperModel.status === 'downloading' && (
                     <div className="model-status">
                       <span className="model-status-orb" />
@@ -3352,6 +3406,19 @@ export function App() {
                   </article>
                 );
               })}
+              {/* O corte limpo é feito pelo Edvid, não pelo chat: o aluno
+                  precisa ver a etapa, porque a transcrição de um vídeo longo
+                  leva minutos e silêncio nessa hora parece travamento. */}
+              {cleanCutRunning && (
+                <div className="model-status">
+                  <span className="model-status-orb" />
+                  {cleanCut.status === 'transcrevendo'
+                    ? `Ouvindo o vídeo${cleanCut.total && cleanCut.total > 1 ? ` · ${(cleanCut.done ?? 0) + 1} de ${cleanCut.total}` : ''}`
+                    : cleanCut.status === 'analisando'
+                      ? 'Medindo as pausas'
+                      : 'Montando o corte'}
+                </div>
+              )}
               {/* Com um modelo do catálogo conduzindo, o texto do agente só
                   aparece depois de revisado (sem inglês cru na tela), então o
                   chat ficaria mudo durante o turno. Esta bolha é o sinal de

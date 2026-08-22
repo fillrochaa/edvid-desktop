@@ -1213,6 +1213,36 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.19.0: O CORTE LIMPO PASSOU A SER DO APLICATIVO, e não mais um pedido ao
+  agente. O aluno clicou em "Iniciar corte limpo" e recebeu um tutorial de
+  como editar vídeo na mão. Duas causas, e a primeira era minha:
+  (1) REGRESSÃO DA 0.18.0 (corrigida na 0.18.2): o lembrete de português que
+  eu colava em cada turno dizia "nada de comando ou nome de ferramenta na
+  resposta", e o modelo leu como proibição de AGIR. Replicando o pedido real
+  do turno que falhou — mesmas instruções, mesmas dez ferramentas, mesmo
+  streaming — 20 rodadas por variante: com aquele texto o agente agiu 0 vezes;
+  sem lembrete nenhum, 6; com a redação nova, 7. A regra de língua tem de
+  dizer que vale para o TEXTO e autorizar a ação na mesma linha; o teste
+  reprova qualquer redação que proíba "comando" ou "ferramenta".
+  (2) O MODELO É INSTÁVEL PARA AGIR. Mesmo consertado, 7 em 20. Testei três
+  textos de botão, do neutro ao imperativo: 7/20 nos três. Não é redação, é o
+  modelo. Antes de chegar aqui eu afirmei que o Ollama ignorava o papel
+  `developer` — uma sonda isolada apontou isso e a réplica completa mostrou
+  que não. Sonda pequena mente; réplica do pedido real, não.
+  A RESPOSTA: transcrever, medir silêncio, cortar e concatenar são sempre os
+  mesmos comandos — nada ali é criativo. Agora o botão chama
+  `runCleanCut` no main: WhisperX por fonte (na ordem natural, reaproveitando
+  transcrição mais nova que o vídeo), `clean_cut.py` para decidir os blocos
+  pelo silêncio real, e UMA passagem de FFmpeg com trim+concat por bloco
+  (vídeo e áudio juntos, reencodando — cópia de stream cortaria no keyframe,
+  no meio da palavra). O resumo em português abre o portão de aprovação. O
+  agente foi PROIBIDO de fazer corte limpo nas instruções e a transcrição
+  pronta fica em `edit/transcricao_raw/` para ele usar na Fase 2.
+  CONSEQUÊNCIA BOA: o corte limpo não precisa mais de IA nenhuma. O botão
+  deixou de exigir conta conectada; só conversa e estilos exigem.
+  Medido de ponta a ponta com os runtimes empacotados (test:clean-cut-live):
+  20s de fala → 4 blocos, 12,10s, 40% removido, áudio e vídeo no arquivo e
+  duração batendo com o EDL.
 - 0.18.1: pasta do projeto arrumada e o bug do disco externo.
   (1) ABRIR PROJETO EM DISCO EXTERNO MORRIA com "moov atom not found" em
   `._IMG_6342.MOV`. A mesma pasta copiada para o disco interno abria sem
@@ -1941,6 +1971,8 @@ npm run test:chat-language
 npm run test:member-auth
 npm run test:project-layout
 npm run test:project-files
+npm run test:clean-cut-pipeline
+EDVID_TEST_VIDEO=<um vídeo falado> npm run test:clean-cut-live
 git diff --check
 ```
 

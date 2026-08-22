@@ -47,6 +47,14 @@ import {
   type MemberEntitlement,
 } from './member-auth-policy';
 import { EDIT_DIR, RENDER_DIR, nextRenderVersion } from './project-layout';
+import {
+  cleanCutArgs,
+  cleanCutSummary,
+  ffmpegCutArgs,
+  orderSources,
+  parseEdl,
+  whisperxArgs,
+} from './clean-cut';
 import { consolidateProjectFolder, publishFinalVideo, pruneRenders } from './project-files';
 import {
   comparePreviewCandidates,
@@ -58,35 +66,36 @@ import {
 } from './media-selection';
 import { resolveRuntime, runtimePackKey, type RuntimeResolution } from './runtime';
 import type {
+  ActiveModelState,
   AiProvider,
   AiRolesState,
   AppUpdateState,
+  CatalogConnection,
+  CatalogState,
   ClaudeAccountState,
+  CleanCutState,
   CodexApprovalDecision,
   CodexEvent,
   CodexSendMessageInput,
-  ActiveModelState,
-  CatalogConnection,
-  CatalogState,
   GeminiAccountState,
   ImageGenState,
   JcutApplyResult,
   JcutSyncResult,
   MemberAuthState,
   OverlayClip,
-  ProjectOverlays,
   Phase2RenderState,
-  RuntimePackState,
   ProjectMedia,
-  SourceWaveform,
+  ProjectOverlays,
   ProjectSource,
-  ProjectSummary,
   ProjectStyleState,
+  ProjectSummary,
   ProjectTimeline,
   ProjectWorkspace,
   RemotionRuntimeState,
   RuntimeCheck,
   RuntimeName,
+  RuntimePackState,
+  SourceWaveform,
   TimelineModel,
   WhisperModelState,
 } from './shared';
@@ -2252,6 +2261,185 @@ async function consolidateProject(projectDirectory: string): Promise<void> {
   await consolidateProjectFolder(projectDirectory);
 }
 
+// --- CORTE LIMPO FEITO PELO APLICATIVO -------------------------------------
+// Transcrever, medir o silencio, cortar e concatenar sao SEMPRE os mesmos
+// comandos. Enquanto isso era tarefa do agente, dependia de o modelo decidir
+// agir: medido no provedor gratuito do aluno, ele nao agia em 13 de 20 vezes e
+// devolvia um tutorial de edicao manual. Agora e codigo, e roda igual com
+// qualquer IA conectada — ou sem IA nenhuma.
+
+let cleanCutState: CleanCutState = { status: 'idle' };
+let cleanCutJob: { directory: string; promise: Promise<CleanCutState> } | null = null;
+
+function broadcastCleanCut(state: CleanCutState): void {
+  cleanCutState = state;
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('cleancut:state', state);
+  }
+}
+
+// Roda um comando do pacote e devolve stdout. Erro traz a linha que informa,
+// nunca o quadro de pilha — mesma regra do render.
+function runTool(
+  command: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv,
+  timeoutMs: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      env: { ...process.env, ...environment },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { if (stdout.length < 262_144) stdout += chunk; });
+    child.stderr.on('data', (chunk: string) => { if (stderr.length < 262_144) stderr += chunk; });
+    child.on('error', (error) => { clearTimeout(timer); reject(error); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(stdout);
+      else reject(new Error(renderFailureMessage(stderr || stdout, code)));
+    });
+  });
+}
+
+// Os videos de origem do projeto, na MESMA ordem da timeline.
+async function cleanCutSources(projectDirectory: string): Promise<MediaCandidate[]> {
+  const candidates: MediaCandidate[] = [];
+  await collectMedia(projectDirectory, projectDirectory, 0, candidates);
+  const sources = candidates.filter(
+    (candidate) => mediaKind(candidate.relativePath, candidate.tier) === 'source',
+  );
+  const order = orderSources(sources.map((source) => source.relativePath));
+  return sources.sort(
+    (a, b) => order.indexOf(a.relativePath) - order.indexOf(b.relativePath),
+  );
+}
+
+function runCleanCut(projectDirectory: string): Promise<CleanCutState> {
+  if (cleanCutJob?.directory === projectDirectory) return cleanCutJob.promise;
+  const promise = (async (): Promise<CleanCutState> => {
+    await requireRuntimePack();
+    const python = resolveRuntime('python', appRuntimeContext());
+    const ffmpeg = resolveRuntime('ffmpeg', appRuntimeContext());
+    if (!python.command) throw new Error('O motor de transcrição não está disponível nesta instalação.');
+    if (!ffmpeg.command) throw new Error('O motor de corte não está disponível nesta instalação.');
+    const environment = agentToolsEnvironment();
+
+    const sources = await cleanCutSources(projectDirectory);
+    if (!sources.length) throw new Error('Não encontrei nenhum vídeo na pasta do projeto.');
+
+    const editDirectory = path.join(projectDirectory, EDIT_DIR);
+    const transcriptDirectory = path.join(editDirectory, 'transcricao_raw');
+    await mkdir(transcriptDirectory, { recursive: true });
+
+    // 1. Transcricao — o passo longo. Um arquivo por vez, com progresso.
+    const files: Array<{ transcript: string; media: string; source: string }> = [];
+    let originalSeconds = 0;
+    for (const [index, source] of sources.entries()) {
+      broadcastCleanCut({
+        status: 'transcrevendo',
+        done: index,
+        total: sources.length,
+        current: path.basename(source.absolutePath),
+      });
+      const base = path.basename(source.absolutePath, path.extname(source.absolutePath));
+      const transcript = path.join(transcriptDirectory, `${base}.json`);
+      // Ja transcrito e mais novo que o video? Reaproveita: refazer custa
+      // minutos e o aluno costuma repetir o corte com outro ritmo.
+      const fresh = await statOf(transcript);
+      const media = await statOf(source.absolutePath);
+      if (!fresh || !media || fresh.mtimeMs < media.mtimeMs) {
+        await runTool(
+          python.command,
+          [...python.argsPrefix, ...whisperxArgs({
+            media: source.absolutePath,
+            model: WHISPERX_MODEL_NAME,
+            outputDirectory: transcriptDirectory,
+          })],
+          environment,
+          45 * 60_000,
+        );
+      }
+      await stat(transcript).catch(() => {
+        throw new Error(`A transcrição de ${path.basename(source.absolutePath)} não ficou pronta.`);
+      });
+      originalSeconds += (await mediaDurationSeconds(source.absolutePath)) ?? 0;
+      files.push({
+        transcript,
+        media: source.absolutePath,
+        source: path.basename(source.absolutePath),
+      });
+    }
+
+    // 2. Quem decide os cortes e o helper: silencio real do audio.
+    broadcastCleanCut({ status: 'analisando', done: sources.length, total: sources.length });
+    const edlFile = path.join(editDirectory, 'edl.json');
+    await runTool(
+      python.command,
+      [...python.argsPrefix, ...cleanCutArgs({
+        helper: path.join(helpersDirectory(), 'clean_cut.py'),
+        files,
+        output: edlFile,
+      })],
+      environment,
+      10 * 60_000,
+    );
+    const edl = parseEdl(JSON.parse(await readFile(edlFile, 'utf8')));
+    if (!edl) throw new Error('Não encontrei fala suficiente para cortar este vídeo.');
+
+    // 3. Corte e concatenacao numa passagem so.
+    broadcastCleanCut({ status: 'cortando' });
+    const sourceIndex: Record<string, number> = {};
+    files.forEach((file, index) => { sourceIndex[file.source] = index; });
+    const output = path.join(editDirectory, 'corte_limpo.mp4');
+    await runFfmpeg(
+      ffmpeg.command,
+      ffmpeg.argsPrefix,
+      ffmpegCutArgs({
+        inputs: files.map((file) => file.media),
+        ranges: edl.ranges,
+        sourceIndex,
+        output,
+      }),
+      60 * 60_000,
+    );
+
+    const summary = cleanCutSummary(edl, originalSeconds);
+    return { status: 'pronto', summary };
+  })()
+    .catch((error): CleanCutState => ({
+      status: 'erro',
+      error: error instanceof Error ? error.message : String(error),
+    }))
+    .then((state) => {
+      cleanCutJob = null;
+      broadcastCleanCut(state);
+      return state;
+    });
+  cleanCutJob = { directory: projectDirectory, promise };
+  return promise;
+}
+
+// Duracao em segundos pelo ffprobe do pacote. Precisa do total original para
+// dizer ao aluno quanto foi removido.
+async function mediaDurationSeconds(filePath: string): Promise<number | null> {
+  const ffprobe = resolveRuntime('ffprobe', appRuntimeContext());
+  if (!ffprobe.command) return null;
+  try {
+    const probe = await inspectVideo(ffprobe.command, ffprobe.argsPrefix, filePath);
+    const duration = Number(probe.format?.duration);
+    return Number.isFinite(duration) ? duration : null;
+  } catch {
+    return null;
+  }
+}
+
 // O WhisperX pode estar "instalado" e mesmo assim nao abrir nesta maquina
 // (dylib/DLL ausente, pacote corrompido no download). Provar uma vez por
 // chave de pack que `python -m whisperx --help` executa transforma o defeito
@@ -3725,6 +3913,14 @@ function registerIpcHandlers(): void {
       throw new Error('Abra o projeto antes de preparar a Fase 2.');
     }
     await scaffoldRemotionProject(requestedDirectory);
+  });
+
+  ipcMain.handle('cleancut:run', (_event, input: { directory?: string }) => {
+    const requestedDirectory = path.resolve(asText(input.directory));
+    if (!selectedProjectDirectories.has(requestedDirectory)) {
+      throw new Error('Abra o projeto antes de fazer o corte limpo.');
+    }
+    return runCleanCut(requestedDirectory);
   });
 
   ipcMain.handle('phase2:render', (_event, input: { directory?: string }) => {
