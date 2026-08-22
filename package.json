@@ -28,6 +28,7 @@
     "test:render-message": "node scripts/test-render-message.mjs",
     "test:split-layout": "node scripts/test-split-layout.mjs",
     "test:chat-language": "node scripts/test-chat-language.mjs",
+    "test:member-auth": "node scripts/test-member-auth.mjs",
     "stage:python-whisperx": "node scripts/stage-python-whisperx.mjs",
     "prepare:forge-makers": "node scripts/prepare-forge-makers.mjs",
     "typecheck": "tsc --noEmit",

@@ -39,6 +39,13 @@ import {
   rewritePrompt,
   sanitizeAssistantText,
 } from './chat-language';
+import {
+  RETRY_DELAYS_MS,
+  enrollmentGrantsAccess,
+  entitlementFrom,
+  transientStatus,
+  type MemberEntitlement,
+} from './member-auth-policy';
 import { mediaKind, mediaMimeType, mediaTier, pickPreviewMedia, resolveByteRange } from './media-selection';
 import { resolveRuntime, runtimePackKey, type RuntimeResolution } from './runtime';
 import type {
@@ -1229,11 +1236,25 @@ function broadcastCodexEvent(event: CodexEvent): void {
       emitCodexEvent({ ...event, text: text || event.text });
       return;
     }
-    void deliverRewritten(event, text);
+    const task = deliverRewritten(event, text).finally(() => {
+      if (reviewInFlight.get(event.turnId) === task) reviewInFlight.delete(event.turnId);
+    });
+    reviewInFlight.set(event.turnId, task);
+    return;
+  }
+  // O resto do turno espera a revisao. Sem isso o "turno terminou" chegava
+  // antes da mensagem e o chat mostrava a conversa fora de ordem: a bolha de
+  // escrevendo sumia, o aviso de render entrava e so entao o agente falava.
+  const waiting = 'turnId' in event ? reviewInFlight.get(event.turnId) : undefined;
+  if (waiting) {
+    void waiting.then(() => emitCodexEvent(event));
     return;
   }
   emitCodexEvent(event);
 }
+
+// Revisao em andamento, por turno.
+const reviewInFlight = new Map<string, Promise<void>>();
 
 // O chat esta nas maos de um modelo do catalogo (as opcoes gratuitas)? E o
 // unico caso em que a resposta costuma sair em ingles: ChatGPT e Claude
@@ -4044,24 +4065,19 @@ function logLogin(step: string): void {
   ).catch(() => {});
 }
 
-// Tropeco de rede nao pode custar uma tentativa de login ao aluno. Tres
-// tentativas com espera curta cobrem DNS frio, troca de Wi-Fi e 429/5xx do
-// servidor; credencial errada NAO entra aqui e falha na hora.
-const MEMBER_RETRY_DELAYS_MS = [400, 1_200];
-
 async function withMemberRetry<T>(
   step: string,
   attempt: () => Promise<{ value: T; transient: boolean; detail: string }>,
 ): Promise<T> {
   let last: T | null = null;
-  for (let index = 0; index <= MEMBER_RETRY_DELAYS_MS.length; index += 1) {
+  for (let index = 0; index <= RETRY_DELAYS_MS.length; index += 1) {
     const started = Date.now();
     const result = await attempt();
     const elapsed = Date.now() - started;
     logLogin(`${step}: ${result.detail} (${elapsed}ms, tentativa ${index + 1})`);
     if (!result.transient) return result.value;
     last = result.value;
-    const wait = MEMBER_RETRY_DELAYS_MS[index];
+    const wait = RETRY_DELAYS_MS[index];
     if (wait === undefined) break;
     await new Promise((resolve) => setTimeout(resolve, wait));
   }
@@ -4155,7 +4171,7 @@ async function requestMemberTokensOnce(body: Record<string, string>, grantType: 
     return { kind: 'network' };
   }
   // 429 e 5xx sao do servidor, nao do aluno: valem nova tentativa.
-  if (response.status === 429 || response.status >= 500) return { kind: 'network' };
+  if (transientStatus(response.status)) return { kind: 'network' };
   let payload: {
     access_token?: string;
     refresh_token?: string;
@@ -4189,8 +4205,6 @@ async function requestMemberTokensOnce(body: Record<string, string>, grantType: 
   };
 }
 
-type MemberEntitlement = 'active' | 'inactive' | 'network';
-
 function checkMemberEntitlement(accessToken: string): Promise<MemberEntitlement> {
   return withMemberRetry('matricula', async () => {
     const value = await checkMemberEntitlementOnce(accessToken);
@@ -4213,10 +4227,7 @@ async function checkMemberEntitlementOnce(accessToken: string): Promise<MemberEn
   } catch {
     return 'network';
   }
-  // "Sua matricula nao esta ativa" e uma acusacao pesada: so pode sair de uma
-  // resposta VALIDA sem matricula na lista. Token recusado, permissao ou erro
-  // do servidor sao tropeco, e tropeco se tenta de novo.
-  if (!response.ok) return 'network';
+  if (!response.ok) return entitlementFrom(false, false);
   let rows: Array<{
     status?: string;
     expires_at?: string | null;
@@ -4228,15 +4239,10 @@ async function checkMemberEntitlementOnce(accessToken: string): Promise<MemberEn
     return 'network';
   }
   const now = Date.now();
-  const active = (Array.isArray(rows) ? rows : []).some((row) => {
-    if (asText(row.status) !== 'active') return false;
-    const expires = asText(row.expires_at);
-    if (expires && Date.parse(expires) <= now) return false;
-    const slug = asText(row.course?.slug).toLocaleLowerCase('pt-BR');
-    const title = asText(row.course?.title).toLocaleLowerCase('pt-BR');
-    return MEMBER_ACCESS_SLUGS.has(slug) || title === MEMBER_ACCESS_TITLE;
-  });
-  return active ? 'active' : 'inactive';
+  const active = (Array.isArray(rows) ? rows : []).some(
+    (row) => enrollmentGrantsAccess(row, now, MEMBER_ACCESS_SLUGS, MEMBER_ACCESS_TITLE),
+  );
+  return entitlementFrom(true, active);
 }
 
 async function memberLogin(email: string, password: string): Promise<MemberAuthState> {

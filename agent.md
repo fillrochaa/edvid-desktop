@@ -1260,7 +1260,10 @@ Dependências do Fill:
   VÁLIDA sem matrícula gera isso), a sessão deixou de ser jogada fora quando a
   senha foi aceita mas a matrícula não pôde ser confirmada, e tudo isso agora
   fica registrado em `userData/login.log` — o código antes descartava a causa,
-  que foi o que transformou o diagnóstico em adivinhação.
+  que foi o que transformou o diagnóstico em adivinhação. As duas decisões que
+  barravam aluno pagante saíram para `src/member-auth-policy.ts`, com teste:
+  o que vale repetir e quando é permitido dizer que a matrícula não está
+  ativa.
   ACHADO DE PASSAGEM: `src/claude-agent.ts` tinha um byte NUL cru dentro de um
   template string (separador de chave). O `file` classificava o arquivo como
   binário e QUALQUER `grep` nele voltava vazio, silenciosamente. Trocado por
@@ -1906,6 +1909,7 @@ npm run test:timeline
 npm run test:media
 npm run test:split-layout
 npm run test:chat-language
+npm run test:member-auth
 git diff --check
 ```
 
