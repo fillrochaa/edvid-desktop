@@ -694,7 +694,10 @@ export class ClaudeAgent {
 
   private approvalKey(toolName: string, input: ToolInput): string {
     const detail = toolName === 'Bash' ? String(input.command ?? '') : String(input.file_path ?? '');
-    return `${toolName} ${detail}`;
+    // Separador que nao pode aparecer em nome de ferramenta nem em caminho.
+    // Escrito como escape: um NUL cru no arquivo faz o grep tratar todo o
+    // codigo-fonte como binario e a busca por qualquer termo daqui volta vazia.
+    return `${toolName}\u0000${detail}`;
   }
 
   private requestApproval(

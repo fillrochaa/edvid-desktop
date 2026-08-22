@@ -279,6 +279,12 @@ const SplitFrame: React.FC<{
 // visibly precedes the cut.
 export const VIDEO_LAG = 1;
 
+// Altura da faixa de arte no estilo antigo de tela dividida. E a MESMA divisa
+// da tela dividida oficial (SPLIT_DIVIDER em Main.tsx, 0,39 de 1920): os dois
+// caminhos precisam cortar o quadro no mesmo lugar, senao o video muda de
+// enquadramento so por causa de qual deles montou a cena.
+const SPLIT_BAND_H = Math.round(1920 * 0.39);
+
 export const SplitScreen: React.FC<{items: SplitInsert[]}> = ({items}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
@@ -295,7 +301,7 @@ export const SplitScreen: React.FC<{items: SplitInsert[]}> = ({items}) => {
     <Sequence from={a} durationInFrames={Math.max(1, b - a)}>
       <SplitFrame
         src={active.src}
-        bandH={active.bandH ?? 750}
+        bandH={active.bandH ?? SPLIT_BAND_H}
         fit={active.fit ?? 'cover'}
         layout={active.layout ?? 'top'}
         progress={clamp((frame - a) / Math.max(1, b - a), 0, 1)}

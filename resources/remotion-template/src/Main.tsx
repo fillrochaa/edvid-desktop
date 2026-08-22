@@ -41,9 +41,11 @@ const fontFamily = POPPINS;
 // ============ TYPES + DATA ====================================================
 type Caption = {text: string; startMs: number; endMs: number};
 type Insert = {src: string; start: number; end: number};
-// Tela dividida OFICIAL: a midia ocupa uma metade e o video segue na outra.
+// Tela dividida OFICIAL: a midia ocupa uma FAIXA e o video segue no resto.
 // kind "video" toca o arquivo (mudo) em loop de cover; bandTop escolhe qual
-// faixa vertical do video 9:16 aparece na metade dele (fracao do topo).
+// faixa vertical do video 9:16 aparece na parte dele (fracao do topo);
+// divider move a divisa (fracao da altura, medida do topo) quando a cena
+// pedir — o padrao ja e o enquadramento bom.
 export type Split = {
   kind?: 'image' | 'video';
   src: string;
@@ -51,6 +53,7 @@ export type Split = {
   end: number;
   position?: 'top' | 'bottom';
   bandTop?: number;
+  divider?: number;
 };
 type BehindImage = {kind: 'image'; src: string; matte: string; start: number; dur: number};
 type BehindWords = {kind: 'words'; words: {t: string; at: number}[]; matte: string; start: number; dur: number};
@@ -144,6 +147,58 @@ export const EDVID_ACCENT = '#ff5200';
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const clamp01 = (v: number) => clamp(v, 0, 1);
+
+// A DIVISA NAO FICA NO MEIO. Meio a meio come metade do apresentador e o
+// resultado fica pesado — o aluno marcou no proprio render onde a divisa
+// devia estar, e a marca caiu em 0,39 da altura. Nao e coincidencia: e a
+// mesma medida do estilo antigo de tela dividida (750px de arte num quadro de
+// 1920), que foi tunado em video real. A divisa vale para as DUAS montagens:
+// com a arte em cima ela e o pe da arte; com o apresentador em cima ela e o
+// pe do apresentador. Quem inverte e a posicao da midia, nunca o corte.
+export const SPLIT_DIVIDER = 0.39;
+
+// Onde COMECA o recorte do video dentro da fonte. E um so para as duas
+// faixas, e o motivo e fisico: a cabeca esta sempre no mesmo lugar do quadro
+// original, entao o que precisa ser constante e a FOLGA ACIMA DELA, nao o
+// centro da faixa. Centrar cada faixa no proprio meio foi tentado e medido
+// num render real: na faixa curta o recorte descia e cortava a testa.
+// 0.20 sai de medir a cabeca no cut.mp4 do aluno (topo em 0,23 da altura) e
+// deixa folga nas duas montagens. Um split especifico pode ajustar por
+// bandTop; o clamp abaixo impede que o recorte passe do fim da fonte.
+const BAND_TOP = 0.20;
+
+export type SplitGeometry = {
+  seam: number;
+  mediaTop: number;
+  mediaHeight: number;
+  videoTop: number;
+  videoHeight: number;
+  videoOffset: number;
+};
+
+export const splitGeometry = (
+  height: number,
+  position: 'top' | 'bottom' | undefined,
+  bandTop: number | undefined,
+  divider: number | undefined,
+): SplitGeometry => {
+  const seam = Math.round(height * clamp(divider ?? SPLIT_DIVIDER, 0.15, 0.85));
+  const mediaOnTop = (position ?? 'top') === 'top';
+  const mediaHeight = mediaOnTop ? seam : height - seam;
+  const videoHeight = height - mediaHeight;
+  const fallback = BAND_TOP;
+  // O recorte nunca pode passar do fim da fonte: com faixa longa sobra pouco
+  // espaco para descer, e um bandTop alto deixaria barra preta no fim.
+  const band = clamp(bandTop ?? fallback, 0, Math.max(0, 1 - videoHeight / height));
+  return {
+    seam,
+    mediaTop: mediaOnTop ? 0 : seam,
+    mediaHeight,
+    videoTop: mediaOnTop ? seam : 0,
+    videoHeight,
+    videoOffset: -Math.round(band * height),
+  };
+};
 
 // Volume unico do whoosh de entrada. Era 0,09 (e 0,1 em alguns pontos) e
 // chamava atencao mais que a propria animacao; o pedido foi -60%, para ficar
@@ -344,7 +399,13 @@ export const captionPaddingBottomAt = (
     (x) => globalFrame >= Math.round(x.start * fps) + 1 && globalFrame < Math.round(x.end * fps) + 1,
   );
   if (w) return w.paddingBottom;
-  if (activeSplitAt(globalFrame, fps)) return height / 2 - textHalfPx;
+  const split = activeSplitAt(globalFrame, fps);
+  if (split) {
+    // Centrada na divisa de verdade: com a divisa fora do meio, height/2
+    // jogava a legenda para dentro da arte.
+    const {seam} = splitGeometry(height, split.position, split.bandTop, split.divider);
+    return height - seam - textHalfPx;
+  }
   return fallback;
 };
 
@@ -458,12 +519,10 @@ const Inserts: React.FC = () => {
   );
 };
 
-// ============ TELA DIVIDIDA (midia numa metade, video na outra) ================
-// A base do video NAO some: durante um split ela encolhe para a metade oposta,
-// mostrando a faixa vertical bandTop..bandTop+0.5 do quadro original (0.22
-// default cobre o rosto num 9:16 de fala). A midia entra com fade curto.
-const SPLIT_BAND_DEFAULT = 0.22;
-
+// ============ TELA DIVIDIDA (midia numa faixa, video na outra) ================
+// A base do video NAO some: durante um split ela encolhe para a faixa oposta,
+// mostrando um recorte vertical do quadro original (splitGeometry manda na
+// divisa). A midia entra com fade curto.
 const SplitMedia: React.FC<{split: Split; totalFrames: number}> = ({split, totalFrames}) => {
   const f = useCurrentFrame();
   const enter = interpolate(f, [0, 7], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic)});
@@ -487,20 +546,18 @@ const BaseWithSplits: React.FC = () => {
   const {width, height, fps} = useVideoConfig();
   const s = activeSplitAt(frame, fps);
   if (!s) return <DynamicVideo />;
-  const mediaOnTop = (s.position ?? 'top') === 'top';
-  const half = height / 2;
-  const band = clamp01(s.bandTop ?? SPLIT_BAND_DEFAULT);
+  const g = splitGeometry(height, s.position, s.bandTop, s.divider);
   const from = Math.round(s.start * fps);
   const duration = Math.max(1, Math.round((s.end - s.start) * fps));
   return (
     <AbsoluteFill style={{backgroundColor: 'black'}}>
-      <div style={{position: 'absolute', left: 0, width, height: half, top: mediaOnTop ? 0 : half, overflow: 'hidden'}}>
+      <div style={{position: 'absolute', left: 0, width, height: g.mediaHeight, top: g.mediaTop, overflow: 'hidden'}}>
         <Sequence from={from} durationInFrames={duration} layout="none">
           <SplitMedia split={s} totalFrames={duration} />
         </Sequence>
       </div>
-      <div style={{position: 'absolute', left: 0, width, height: half, top: mediaOnTop ? half : 0, overflow: 'hidden'}}>
-        <div style={{position: 'absolute', left: 0, top: 0, width, height, transform: `translateY(${(-band * height).toFixed(1)}px)`}}>
+      <div style={{position: 'absolute', left: 0, width, height: g.videoHeight, top: g.videoTop, overflow: 'hidden'}}>
+        <div style={{position: 'absolute', left: 0, top: 0, width, height, transform: `translateY(${g.videoOffset}px)`}}>
           <DynamicVideo />
         </div>
       </div>

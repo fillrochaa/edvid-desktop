@@ -113,7 +113,8 @@ Fase 2 — o visual e renderizado pelo Remotion, nunca improvisado:
 - Quando o briefing pedir tracking de rosto, gere o track.json com "$EDVID_PYTHON" "$EDVID_HELPERS/face_track.py" <cut.mp4> -o public/track.json. Com o tracking desligado, deixe o track.json neutro que ja veio no scaffold.
 - O segments.json tambem tem gerador oficial, e somar os segundos do EDL dessincroniza o zoom dos cortes: use "$EDVID_PYTHON" "$EDVID_HELPERS/segments_for_remotion.py" <clipes por corte, em ordem> -o public/segments.json quando existirem clipes separados, ou "$EDVID_PYTHON" "$EDVID_HELPERS/segments_for_remotion.py" --edl edit/edl.json --fps <fps do cut> -o public/segments.json quando o corte for um arquivo unico. Nunca edite src/Main.tsx.
 - Os nomes de estilo do briefing sao os mesmos do template: headline outline, card, realce ou misto; legenda karaoke, stacked, scatter, simples, serifada ou classica. Copie a cor escolhida para hook.accent e captions.accent — sao esses campos que pintam realce, misto e a linha serifada da empilhada.
-- TELA DIVIDIDA e OFICIAL e declarativa: escreva no edit-data.json o campo splits, uma lista [{"kind": "image" ou "video", "src": "imagens/arquivo.png" (relativo a public/), "start": segundos, "end": segundos, "position": "top" (default) ou "bottom"}]. O template monta a divisao sozinho (midia numa metade, o video segue na outra) e TODAS as legendas se reposicionam sozinhas no meio da divisa durante o split — nao escreva captions.windows para isso e NUNCA monte tela dividida no CustomGraphics.tsx (ele e so para motion graphics avulsos). Copie a midia usada para dentro de edit/remotion/public/imagens/ antes.
+- TELA DIVIDIDA e OFICIAL e declarativa: escreva no edit-data.json o campo splits, uma lista [{"kind": "image" ou "video", "src": "imagens/arquivo.png" (relativo a public/), "start": segundos, "end": segundos, "position": "top" (default) ou "bottom"}]. O template monta a divisao sozinho (a midia ocupa uma faixa, o video segue na outra) e TODAS as legendas se reposicionam sozinhas na divisa durante o split — nao escreva captions.windows para isso e NUNCA monte tela dividida no CustomGraphics.tsx (ele e so para motion graphics avulsos). Copie a midia usada para dentro de edit/remotion/public/imagens/ antes.
+- A DIVISA NAO E NO MEIO e NAO E ESCOLHA SUA: o template ja poe a divisa na altura certa e ela e a MESMA nas duas montagens. Com "position": "top" a arte fica na faixa CURTA de cima e o apresentador na faixa longa de baixo; com "position": "bottom" o apresentador fica na faixa curta de cima e a arte na faixa longa de baixo. Nao invente campo de altura, nao mexa em bandTop e so escreva "divider" se o aluno pedir explicitamente para subir ou descer a divisao.
 - ANIMACOES SAO DECLARATIVAS e o campo animations do edit-data.json e o que as faz APARECER no video: [{"start": segundos, "end": segundos, "kind": "...", "label": "nome curto em portugues"}]. O kind e OBRIGATORIO — sem ele nada e desenhado, so aparece a faixa na timeline do Edvid (foi assim que uma edicao real saiu sem nenhum efeito). Os kinds prontos sao: "flash" (estouro de luz no corte; use um por corte quando o briefing pedir flashes de transicao, com start no tempo do corte), "script" (cartao que digita frases na tela — passe tambem lines: ["frase 1", "frase 2"]), "timeline" (uma linha do tempo animada) e "shapes" (formas coloridas que pipocam). Escolha o kind mais proximo do que o aluno pediu; para "infografico" use "script" com as frases dele.
 - QUANDO O ALUNO DESCREVE UM VISUAL, OS PRONTOS NAO SERVEM. Pedido com estilo proprio — cor especifica, fonte, "tela cheia", grid, glassmorphism, layout descrito, referencia visual — exige animacao SOB MEDIDA: escreva o componente no CustomGraphics.tsx com exatamente o que ele descreveu e registre a janela em animations com "kind": "custom" (o "custom" avisa o template que o desenho vem do seu codigo, entao nada generico aparece por cima). Entregar um kind pronto no lugar de um visual que o aluno detalhou e ignorar o pedido dele — ja aconteceu: o aluno pediu tela cheia com grid escuro e destaque em #ff5200 e recebeu o cartao "ROTEIRO" padrao.
 - Os kinds prontos existem para quando o pedido e generico ("coloca uma animacao aqui", "destaca esse trecho") ou para o flash de transicao. Na duvida entre um pronto e escrever codigo, ESCREVA O CODIGO.
@@ -126,7 +127,7 @@ Trilha sonora com IA:
 - O Edvid salva o arquivo em edit/musica/ e ENVIA SOZINHO uma mensagem de continuacao quando terminar. Nesse turno, copie o arquivo para edit/remotion/public/ e ligue soundtrack no edit-data.json com volume baixo (0.0445 e a referencia, para nao competir com a voz). Se a continuacao disser que falhou, o aluno pode nao ter IA de musica conectada — siga sem trilha e avise em uma frase.
 
 Imagens geradas por IA:
-- Quando a edicao precisar de uma imagem criada do zero (fundo, thumbnail, elemento grafico), NAO tente gerar ou desenhar voce mesmo: escreva o arquivo edit/imagens/pedidos.json com uma lista [{"arquivo": "nome.png", "prompt": "descricao detalhada em ingles", "proporcao": "4:3"}] (proporcao aceita 4:3, 9:16, 1:1 ou 16:9; para TELA DIVIDIDA use SEMPRE 4:3, porque cada metade da tela e uma faixa larga e uma imagem 9:16 entra cortada — 9:16 so serve para imagem que ocupa a tela inteira) e encerre o turno avisando que as imagens foram pedidas. O Edvid gera fora do sandbox com a IA de imagem conectada pelo aluno, salva os arquivos em edit/imagens/ e ENVIA SOZINHO uma mensagem de continuacao quando eles estiverem prontos — nesse turno de continuacao, aplique as imagens na edicao exatamente onde planejou, sem esperar o aluno pedir de novo. Se a mensagem de continuacao disser que a geracao falhou ou nao vier, o aluno pode nao ter IA de imagem conectada — siga sem a imagem e avise.
+- Quando a edicao precisar de uma imagem criada do zero (fundo, thumbnail, elemento grafico), NAO tente gerar ou desenhar voce mesmo: escreva o arquivo edit/imagens/pedidos.json com uma lista [{"arquivo": "nome.png", "prompt": "descricao detalhada em ingles", "uso": "tela-dividida"}] e encerre o turno avisando que as imagens foram pedidas. O campo "uso" diz ONDE a imagem vai aparecer, e o Edvid escolhe o tamanho: "tela-dividida" (a faixa curta, quando o split tem "position": "top"), "tela-dividida-base" (a faixa longa de baixo, quando o split tem "position": "bottom"), "tela-cheia" (a imagem ocupa o quadro inteiro), "paisagem" ou "quadrada". Errar o uso entrega a imagem cortada: uma imagem de tela cheia numa faixa larga perde as pontas. O Edvid gera fora do sandbox com a IA de imagem conectada pelo aluno, salva os arquivos em edit/imagens/ e ENVIA SOZINHO uma mensagem de continuacao quando eles estiverem prontos — nesse turno de continuacao, aplique as imagens na edicao exatamente onde planejou, sem esperar o aluno pedir de novo. Se a mensagem de continuacao disser que a geracao falhou ou nao vier, o aluno pode nao ter IA de imagem conectada — siga sem a imagem e avise.
 - Explique apenas o resultado da edicao de forma curta; detalhes tecnicos de execucao pertencem a interface de permissao, nao a conversa.`;
 
 export class CodexAppServer {
@@ -674,6 +675,18 @@ export class CodexAppServer {
   }
 
   stop(): void {
+    void this.stopAndWait(0);
+  }
+
+  // Encerra e SO devolve quando o processo morreu de verdade.
+  //
+  // O stop() antigo devolvia na hora. Trocar o motor do chat derrubava um
+  // processo e subia outro no mesmo CODEX_HOME no mesmo instante — e o
+  // CODEX_HOME e um banco (logs, estado, fila) com trava de escritor. Os dois
+  // vivos ao mesmo tempo brigam pela trava, e quem perde e sempre o novo: a
+  // PRIMEIRA acao depois da troca falha e a segunda, ja com o antigo morto,
+  // funciona. Era o "primeira tentativa da erro, a seguinte entra" do login.
+  async stopAndWait(graceMs = 4_000): Promise<void> {
     const child = this.child;
     this.child = null;
     this.startPromise = null;
@@ -681,7 +694,29 @@ export class CodexAppServer {
     // derruba o processo de proposito, e o aluno via "Codex App Server
     // encerrou (SIGTERM)" em vermelho como se algo tivesse quebrado.
     this.stopping = true;
-    if (child && !child.killed) child.kill();
+    if (!child || child.exitCode !== null || child.signalCode !== null) {
+      this.stopping = false;
+      return;
+    }
+    const dead = new Promise<void>((resolve) => {
+      const done = (): void => resolve();
+      child.once('exit', done);
+      child.once('error', done);
+    });
+    if (!child.killed) child.kill();
+    if (graceMs <= 0) return;
+    let timer: NodeJS.Timeout | null = null;
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), graceMs);
+    });
+    const outcome = await Promise.race([dead.then(() => 'dead' as const), timeout]);
+    if (timer) clearTimeout(timer);
+    // Nao morreu no prazo: SIGKILL e mais uma espera curta. Subir por cima de
+    // um processo que ainda respira e o que causa a falha da primeira vez.
+    if (outcome === 'timeout') {
+      child.kill('SIGKILL');
+      await Promise.race([dead, new Promise((resolve) => setTimeout(resolve, 1_000))]);
+    }
   }
 
   private stopping = false;

@@ -25,6 +25,20 @@ import { CodexAppServer } from './codex-app-server';
 import { GeminiAgent } from './gemini-agent';
 import { JCUT_LEAD_SECONDS, extractionArgs, mixArgs, muxArgs, planJcut } from './jcut';
 import { AI_CATALOG, catalogEntry, routeCandidates, shouldFailover } from './ai-catalog';
+import {
+  geminiAspect,
+  imageUse,
+  openAiSize,
+  pixelSize,
+  promptWithFraming,
+  type ImageUse,
+} from './image-format';
+import {
+  LANGUAGE_FALLBACK,
+  PT_BR_TURN_REMINDER,
+  rewritePrompt,
+  sanitizeAssistantText,
+} from './chat-language';
 import { mediaKind, mediaMimeType, mediaTier, pickPreviewMedia, resolveByteRange } from './media-selection';
 import { resolveRuntime, runtimePackKey, type RuntimeResolution } from './runtime';
 import type {
@@ -1191,10 +1205,78 @@ async function inspectProjectOverlays(directory: string): Promise<ProjectOverlay
   }
 }
 
-function broadcastCodexEvent(event: CodexEvent): void {
+function emitCodexEvent(event: CodexEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send('codex:event', event);
   }
+}
+
+// Portao unico de tudo que o agente fala. As tres integracoes (Codex, Claude,
+// Gemini) passam por aqui, entao e aqui que a conversa vira portugues sem
+// termo tecnico — regra do aplicativo, nao pedido ao modelo.
+function broadcastCodexEvent(event: CodexEvent): void {
+  if (event.type === 'assistant-delta') {
+    // Com um modelo do catalogo conduzindo, o texto so aparece depois de
+    // revisado: transmitir palavra a palavra mostraria o ingles cru antes de
+    // a versao em portugues substituir, e o aluno leria os dois.
+    if (chatNeedsReview()) return;
+    emitCodexEvent(event);
+    return;
+  }
+  if (event.type === 'assistant-final') {
+    const { text, english } = sanitizeAssistantText(event.text);
+    if (!english) {
+      emitCodexEvent({ ...event, text: text || event.text });
+      return;
+    }
+    void deliverRewritten(event, text);
+    return;
+  }
+  emitCodexEvent(event);
+}
+
+// O chat esta nas maos de um modelo do catalogo (as opcoes gratuitas)? E o
+// unico caso em que a resposta costuma sair em ingles: ChatGPT e Claude
+// obedecem a regra 1 das instrucoes.
+function chatNeedsReview(): boolean {
+  return codexEngine !== null && aiRoles.chat !== 'claude' && aiRoles.chat !== 'gemini';
+}
+
+// Veio em ingles: pede ao MESMO modelo para reescrever em portugues. E uma
+// chamada direta ao provedor (o motor do catalogo tem chave e endereco), fora
+// do sandbox e sem gastar um turno de edicao.
+async function rewriteInPortuguese(text: string): Promise<string | null> {
+  const engine = await catalogChatEngine();
+  if (!engine) return null;
+  const response = await net.fetch(`${engine.baseUrl.replace(/\/+$/u, '')}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${engine.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: engine.model,
+      messages: [{ role: 'user', content: rewritePrompt(text) }],
+      stream: false,
+    }),
+  });
+  if (!response.ok) return null;
+  const payload = (await response.json().catch(() => null)) as
+    | { choices?: Array<{ message?: { content?: unknown } }> }
+    | null;
+  const content = asText(payload?.choices?.[0]?.message?.content).trim();
+  return content || null;
+}
+
+async function deliverRewritten(event: CodexEvent & { type: 'assistant-final' }, cleaned: string): Promise<void> {
+  let text = LANGUAGE_FALLBACK;
+  try {
+    const rewritten = await rewriteInPortuguese(cleaned);
+    if (rewritten) {
+      const review = sanitizeAssistantText(rewritten);
+      if (review.text && !review.english) text = review.text;
+    }
+  } catch {
+    // Sem rede ou provedor fora do ar: o texto de recurso ja diz o que fazer.
+  }
+  emitCodexEvent({ ...event, text });
 }
 
 // --- Modelo de transcricao -------------------------------------------------
@@ -2296,7 +2378,35 @@ type CodexEngine = { providerId: string; label: string; baseUrl: string; model: 
 let codexEngine: CodexEngine = null;
 let codexEngineEnvironment: NodeJS.ProcessEnv = {};
 
-async function codexServer(): Promise<CodexAppServer> {
+// UMA fila. Todo mundo que precisa do servidor passa por aqui (conta, login,
+// mensagem, imagem), e trocar de motor derruba e sobe o processo: duas dessas
+// chamadas ao mesmo tempo podiam mandar matar e nascer em paralelo, no mesmo
+// CODEX_HOME. Enfileirar custa nada e elimina a corrida inteira.
+let codexServerQueue: Promise<CodexAppServer> = Promise.resolve(null as unknown as CodexAppServer);
+
+function codexServer(): Promise<CodexAppServer> {
+  const next = codexServerQueue.then(resolveCodexServer, resolveCodexServer);
+  // A fila nunca pode ficar rejeitada: um erro aqui travaria todas as
+  // proximas chamadas em vez de so falhar esta.
+  codexServerQueue = next.catch(() => null as unknown as CodexAppServer);
+  return next;
+}
+
+// Derruba o servidor atual PELA FILA, para nao competir com uma chamada em
+// andamento: quem enfileira sabe que o proximo comeca do zero.
+async function resetCodexServer(): Promise<void> {
+  const empty = (): CodexAppServer => null as unknown as CodexAppServer;
+  const task = codexServerQueue.then(async () => {
+    const previous = codexAppServer;
+    codexAppServer = null;
+    if (previous) await previous.stopAndWait();
+    return empty();
+  }, empty);
+  codexServerQueue = task.catch(empty);
+  await task;
+}
+
+async function resolveCodexServer(): Promise<CodexAppServer> {
   await requireRuntimePack();
   const engine = await catalogChatEngine();
   const desired: CodexEngine = engine
@@ -2312,11 +2422,34 @@ async function codexServer(): Promise<CodexAppServer> {
   codexEngine = desired;
   codexEngineEnvironment = engine ? { [engine.envKey]: engine.apiKey } : {};
   // O config.toml so e lido no start: mudou o motor, o processo cai e sobe.
+  // A espera pela morte do antigo e obrigatoria — ver stopAndWait().
   if (changed && codexAppServer) {
-    codexAppServer.stop();
+    const previous = codexAppServer;
     codexAppServer = null;
+    await previous.stopAndWait();
   }
   return getCodexAppServer();
+}
+
+// O processo do agente pode ter acabado de ser derrubado (troca de motor) ou
+// morrido sozinho. Nesse caso a acao falha SEM culpa do aluno e uma segunda
+// tentativa entra — que era exatamente o que ele fazia na mao. Quem repete
+// agora e o aplicativo, uma vez so e apenas para erro de processo: erro de
+// credencial ou de rede continua chegando na hora.
+function serverDied(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /encerrou|nao esta ativo|não está ativo|Tempo esgotado|EPIPE|ECONNRESET|write after end/iu.test(message);
+}
+
+async function retryIfServerDied<T>(step: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (!serverDied(error)) throw error;
+    logLogin(`${step}: o agente havia caido — repetindo uma vez`);
+    await resetCodexServer();
+    return run();
+  }
 }
 
 function getCodexAppServer(): CodexAppServer {
@@ -2777,17 +2910,25 @@ async function generateCatalogImage(
   choice: { providerId: string; modelId: string },
   credentials: Record<string, string>,
   prompt: string,
+  uso: ImageUse | null,
 ): Promise<Buffer> {
+  const framed = promptWithFraming(prompt, uso);
   if (choice.providerId === 'cloudflare') {
     const accountId = asText(credentials.accountId);
-    const response = await net.fetch(
+    const { width, height } = pixelSize(uso);
+    // Largura e altura sao opcionais no Workers AI. Se o modelo recusar o
+    // tamanho, a segunda chamada vai sem eles: melhor uma imagem no formato
+    // errado do que nenhuma imagem.
+    const call = (withSize: boolean): Promise<Response> => net.fetch(
       `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/${choice.modelId}`,
       {
         method: 'POST',
         headers: { Authorization: `Bearer ${credentials.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, steps: 4 }),
+        body: JSON.stringify({ prompt: framed, steps: 4, ...(withSize ? { width, height } : {}) }),
       },
     );
+    let response = await call(uso !== null);
+    if (!response.ok && response.status === 400 && uso !== null) response = await call(false);
     const payload = (await response.json().catch(() => null)) as
       | { result?: { image?: string }; errors?: { message?: string }[] }
       | null;
@@ -2802,7 +2943,7 @@ async function generateCatalogImage(
     const response = await net.fetch('https://openrouter.ai/api/v1/images', {
       method: 'POST',
       headers: { Authorization: `Bearer ${credentials.apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: choice.modelId, prompt }),
+      body: JSON.stringify({ model: choice.modelId, prompt: framed }),
     });
     const payload = (await response.json().catch(() => null)) as
       | { data?: { b64_json?: string }[]; error?: { message?: string } }
@@ -2826,7 +2967,7 @@ class OpenRouterLikeError extends Error {
 
 // Gera passando pela CADEIA do catalogo: o primeiro que responder entrega. Quem
 // bater no limite entra em descanso e a vez passa adiante, com aviso no chat.
-async function generateImageFromCatalog(prompt: string): Promise<Buffer | null> {
+async function generateImageFromCatalog(prompt: string, uso: ImageUse | null): Promise<Buffer | null> {
   const stored = await readStoredCatalog();
   const state = catalogStateFrom(stored);
   const connected = state.connections
@@ -2850,7 +2991,7 @@ async function generateImageFromCatalog(prompt: string): Promise<Buffer | null> 
       free: choice.free,
     });
     try {
-      return await generateCatalogImage(choice, credentials, prompt);
+      return await generateCatalogImage(choice, credentials, prompt, uso);
     } catch (error) {
       const status = error instanceof OpenRouterLikeError ? error.status : null;
       const message = error instanceof Error ? error.message : String(error);
@@ -3077,11 +3218,9 @@ async function fulfillMusicRequests(projectDirectory: string): Promise<{ done: n
 // (ChatGPT por assinatura via ferramenta do Codex, ou Gemini por chave) e
 // salva em edit/imagens/. Mesmo padrao do render da Fase 2.
 
-// "4:3" existe para a TELA DIVIDIDA: cada metade de um 9:16 e uma faixa larga
-// (1080x960), entao uma imagem vertical 9:16 entra cortadissima — o aluno viu
-// isso em uso real. A API de imagem nao tem 4:3 exato; 3:2 (1536x1024) e o
-// vizinho mais proximo e o template ja enquadra por cover.
-const IMAGE_ASPECTS = new Set(['9:16', '1:1', '16:9', '4:3']);
+// O USO da imagem (tela cheia, faixa de cima, faixa de baixo) mora em
+// src/image-format.ts, junto com o tamanho que cada provedor aceita. O agente
+// nomeia o uso; quem escolhe pixel e o Edvid.
 let imageGenJob: { directory: string; promise: Promise<ImageGenState> } | null = null;
 let imageGenState: ImageGenState = { status: 'idle' };
 
@@ -3092,7 +3231,7 @@ function broadcastImageGenState(state: ImageGenState): void {
   }
 }
 
-type ImageRequestEntry = { arquivo: string; prompt: string; proporcao: string | null };
+type ImageRequestEntry = { arquivo: string; prompt: string; uso: ImageUse | null };
 
 // ChatGPT conectado por CHAVE tambem gera imagem — pela API de imagens da
 // OpenAI (gpt-image-2, pago por imagem), chamada direta do app. A chave vive
@@ -3108,28 +3247,21 @@ async function readCodexStoredApiKey(): Promise<string | null> {
   }
 }
 
-const OPENAI_IMAGE_SIZES: Record<string, string> = {
-  '9:16': '1024x1536',
-  '16:9': '1536x1024',
-  '1:1': '1024x1024',
-  // Sem 4:3 nativo na API: 3:2 e o tamanho paisagem mais proximo.
-  '4:3': '1536x1024',
-};
-
 async function generateOpenAiImage(
   apiKey: string,
   prompt: string,
-  proporcao: string | null,
+  uso: ImageUse | null,
 ): Promise<Buffer> {
+  const framed = promptWithFraming(prompt, uso);
   const call = (size: string): Promise<Response> =>
     net.fetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model: 'gpt-image-2', prompt, size, quality: 'medium' }),
+      body: JSON.stringify({ model: 'gpt-image-2', prompt: framed, size, quality: 'medium' }),
     });
   let response: Response;
   try {
-    response = await call(OPENAI_IMAGE_SIZES[proporcao ?? '1:1'] ?? '1024x1024');
+    response = await call(openAiSize(uso));
     // Formato de tamanho recusado (modelo mudou?): tenta o automatico.
     if (response.status === 400) response = await call('auto');
   } catch {
@@ -3154,14 +3286,16 @@ async function readImageRequests(projectDirectory: string): Promise<ImageRequest
     ) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed.flatMap((entry) => {
-      const item = entry as { arquivo?: unknown; prompt?: unknown; proporcao?: unknown };
+      const item = entry as { arquivo?: unknown; prompt?: unknown; uso?: unknown; proporcao?: unknown };
       const prompt = asText(item.prompt).trim();
       // Nome sempre achatado para dentro de edit/imagens (nada de ../).
       let arquivo = path.basename(asText(item.arquivo).trim());
       if (!prompt || !arquivo || arquivo.startsWith('.')) return [];
       if (!/\.(png|jpg|jpeg|webp)$/iu.test(arquivo)) arquivo = `${arquivo}.png`;
-      const proporcao = asText(item.proporcao).trim();
-      return [{ arquivo, prompt, proporcao: IMAGE_ASPECTS.has(proporcao) ? proporcao : null }];
+      // "uso" e o campo novo; "proporcao" continua aceito porque pedidos.json
+      // de sessoes anteriores vem com ele.
+      const uso = imageUse(asText(item.uso) || asText(item.proporcao));
+      return [{ arquivo, prompt, uso }];
     });
   } catch {
     return [];
@@ -3211,12 +3345,15 @@ function fulfillImageRequests(projectDirectory: string): Promise<ImageGenState> 
     for (const request of pending) {
       const target = path.join(imagesDirectory, request.arquivo);
       try {
-        const fromCatalog = catalogHasImage ? await generateImageFromCatalog(request.prompt) : null;
+        const fromCatalog = catalogHasImage ? await generateImageFromCatalog(request.prompt, request.uso) : null;
         if (fromCatalog) {
           await mkdir(imagesDirectory, { recursive: true });
           await writeFile(target, fromCatalog);
         } else if (provider === 'gemini') {
-          const image = await (await geminiAgentReady()).generateImage(request.prompt, request.proporcao);
+          const image = await (await geminiAgentReady()).generateImage(
+            promptWithFraming(request.prompt, request.uso),
+            geminiAspect(request.uso),
+          );
           await mkdir(imagesDirectory, { recursive: true });
           await writeFile(target, image);
         } else {
@@ -3225,7 +3362,7 @@ function fulfillImageRequests(projectDirectory: string): Promise<ImageGenState> 
           const chatgptApiKey = await readCodexStoredApiKey();
           const codexAccount = await (await codexServer()).readAccount();
           if (codexAccount.account?.type === 'apiKey' && chatgptApiKey) {
-            const image = await generateOpenAiImage(chatgptApiKey, request.prompt, request.proporcao);
+            const image = await generateOpenAiImage(chatgptApiKey, request.prompt, request.uso);
             await mkdir(imagesDirectory, { recursive: true });
             await writeFile(target, image);
           } else {
@@ -3237,8 +3374,8 @@ function fulfillImageRequests(projectDirectory: string): Promise<ImageGenState> 
               projectDirectory,
               [
                 'Use a ferramenta de geração de imagens (skill imagegen) para gerar exatamente esta imagem:',
-                request.prompt,
-                request.proporcao ? `Proporção: ${request.proporcao}.` : '',
+                promptWithFraming(request.prompt, request.uso),
+                request.uso ? `Proporção: ${geminiAspect(request.uso) ?? '1:1'}.` : '',
                 // Caminho ABSOLUTO: relativo dependia do diretorio em que o
                 // comando rodou, e no Windows (OneDrive, acento em "Área de
                 // Trabalho") a imagem acabava fora do lugar esperado.
@@ -3542,7 +3679,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('codex:account', async () => (await codexServer()).readAccount());
 
   ipcMain.handle('codex:login', async () => {
-    const login = await (await codexServer()).startChatGptLogin();
+    const login = await retryIfServerDied('login do ChatGPT', async () => (await codexServer()).startChatGptLogin());
     const authUrl = new URL(login.authUrl);
     if (authUrl.protocol !== 'https:' || authUrl.origin !== 'https://auth.openai.com') {
       throw new Error('O Codex retornou um endereco de login inesperado.');
@@ -3564,13 +3701,18 @@ function registerIpcHandlers(): void {
       throw new Error('Escolha a pasta do projeto pelo seletor do Edvid.');
     }
     if (!text) throw new Error('Escreva uma mensagem para o Edvid.');
+    // O lembrete de lingua vai colado em CADA turno, e nao so nas instrucoes
+    // iniciais: modelo pequeno esquece o topo do contexto e responde em
+    // ingles. O aluno nao ve esta linha — a interface mostra o que ele
+    // escreveu, nao o que foi enviado.
+    const outgoing = `${text}${PT_BR_TURN_REMINDER}`;
     if (aiRoles.chat === 'claude') {
-      return (await claudeAgentReady()).sendMessage(resolvedProjectDirectory, text);
+      return (await claudeAgentReady()).sendMessage(resolvedProjectDirectory, outgoing);
     }
     if (aiRoles.chat === 'gemini') {
-      return (await geminiAgentReady()).sendMessage(resolvedProjectDirectory, text);
+      return (await geminiAgentReady()).sendMessage(resolvedProjectDirectory, outgoing);
     }
-    return (await codexServer()).sendMessage(resolvedProjectDirectory, text);
+    return (await codexServer()).sendMessage(resolvedProjectDirectory, outgoing);
   });
 
   ipcMain.handle(
@@ -3683,7 +3825,7 @@ function registerIpcHandlers(): void {
     const apiKey = asText(input.apiKey).trim();
     if (!apiKey) throw new Error('Cole a chave de API da OpenAI.');
     await validateOpenAiKey(apiKey);
-    return (await codexServer()).startApiKeyLogin(apiKey);
+    return retryIfServerDied('login por chave', async () => (await codexServer()).startApiKeyLogin(apiKey));
   });
 
   ipcMain.handle('gemini:account', () => getGeminiAgent().readAccount());
@@ -3885,6 +4027,47 @@ const MEMBER_OFFLINE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
 let memberAuthState: MemberAuthState = { status: 'unconfigured' };
 
+// Diario do login em userData/login.log: etapa, status HTTP e tempo. Nunca
+// e-mail, senha nem token.
+//
+// Existe porque a primeira tentativa de login falhava e a segunda entrava, e o
+// codigo jogava fora a causa: qualquer tropeco virava a mesma frase generica.
+// Sem registro, diagnosticar isso e adivinhacao.
+const loginDiary: string[] = [];
+
+function logLogin(step: string): void {
+  loginDiary.push(`${new Date().toISOString()} ${step}`);
+  if (loginDiary.length > 200) loginDiary.splice(0, loginDiary.length - 200);
+  void writeFile(
+    path.join(app.getPath('userData'), 'login.log'),
+    `${loginDiary.join('\n')}\n`,
+  ).catch(() => {});
+}
+
+// Tropeco de rede nao pode custar uma tentativa de login ao aluno. Tres
+// tentativas com espera curta cobrem DNS frio, troca de Wi-Fi e 429/5xx do
+// servidor; credencial errada NAO entra aqui e falha na hora.
+const MEMBER_RETRY_DELAYS_MS = [400, 1_200];
+
+async function withMemberRetry<T>(
+  step: string,
+  attempt: () => Promise<{ value: T; transient: boolean; detail: string }>,
+): Promise<T> {
+  let last: T | null = null;
+  for (let index = 0; index <= MEMBER_RETRY_DELAYS_MS.length; index += 1) {
+    const started = Date.now();
+    const result = await attempt();
+    const elapsed = Date.now() - started;
+    logLogin(`${step}: ${result.detail} (${elapsed}ms, tentativa ${index + 1})`);
+    if (!result.transient) return result.value;
+    last = result.value;
+    const wait = MEMBER_RETRY_DELAYS_MS[index];
+    if (wait === undefined) break;
+    await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+  return last as T;
+}
+
 type StoredMemberAuth = {
   refreshToken: string;
   email: string;
@@ -3944,7 +4127,20 @@ type MemberTokenResult =
   | { kind: 'denied'; message: string }
   | { kind: 'network' };
 
-async function requestMemberTokens(body: Record<string, string>, grantType: string): Promise<MemberTokenResult> {
+function requestMemberTokens(body: Record<string, string>, grantType: string): Promise<MemberTokenResult> {
+  return withMemberRetry(`token (${grantType})`, async () => {
+    const result = await requestMemberTokensOnce(body, grantType);
+    return {
+      value: result,
+      // So "sem rede" e transitorio. Credencial recusada nao melhora tentando
+      // de novo, e insistir so faria o aluno esperar para ler o mesmo erro.
+      transient: result.kind === 'network',
+      detail: result.kind === 'ok' ? 'ok' : result.kind === 'network' ? 'sem resposta' : 'recusado',
+    };
+  });
+}
+
+async function requestMemberTokensOnce(body: Record<string, string>, grantType: string): Promise<MemberTokenResult> {
   let response: Response;
   try {
     response = await net.fetch(`${MEMBER_SUPABASE_URL}/auth/v1/token?grant_type=${grantType}`, {
@@ -3958,6 +4154,8 @@ async function requestMemberTokens(body: Record<string, string>, grantType: stri
   } catch {
     return { kind: 'network' };
   }
+  // 429 e 5xx sao do servidor, nao do aluno: valem nova tentativa.
+  if (response.status === 429 || response.status >= 500) return { kind: 'network' };
   let payload: {
     access_token?: string;
     refresh_token?: string;
@@ -3993,7 +4191,14 @@ async function requestMemberTokens(body: Record<string, string>, grantType: stri
 
 type MemberEntitlement = 'active' | 'inactive' | 'network';
 
-async function checkMemberEntitlement(accessToken: string): Promise<MemberEntitlement> {
+function checkMemberEntitlement(accessToken: string): Promise<MemberEntitlement> {
+  return withMemberRetry('matricula', async () => {
+    const value = await checkMemberEntitlementOnce(accessToken);
+    return { value, transient: value === 'network', detail: value };
+  });
+}
+
+async function checkMemberEntitlementOnce(accessToken: string): Promise<MemberEntitlement> {
   let response: Response;
   try {
     response = await net.fetch(
@@ -4008,7 +4213,10 @@ async function checkMemberEntitlement(accessToken: string): Promise<MemberEntitl
   } catch {
     return 'network';
   }
-  if (!response.ok) return response.status >= 500 ? 'network' : 'inactive';
+  // "Sua matricula nao esta ativa" e uma acusacao pesada: so pode sair de uma
+  // resposta VALIDA sem matricula na lista. Token recusado, permissao ou erro
+  // do servidor sao tropeco, e tropeco se tenta de novo.
+  if (!response.ok) return 'network';
   let rows: Array<{
     status?: string;
     expires_at?: string | null;
@@ -4033,6 +4241,7 @@ async function checkMemberEntitlement(accessToken: string): Promise<MemberEntitl
 
 async function memberLogin(email: string, password: string): Promise<MemberAuthState> {
   if (!memberConfigured()) return memberAuthState;
+  logLogin('login do aluno: inicio');
   broadcastMemberAuth({ status: 'checking' });
   const result = await requestMemberTokens({ email, password }, 'password');
   if (result.kind === 'network') {
@@ -4043,12 +4252,21 @@ async function memberLogin(email: string, password: string): Promise<MemberAuthS
     broadcastMemberAuth({ status: 'signed-out', error: result.message });
     return memberAuthState;
   }
+  const identity = { email: result.tokens.email || email, name: result.tokens.name };
   const entitlement = await checkMemberEntitlement(result.tokens.accessToken);
   if (entitlement === 'network') {
-    broadcastMemberAuth({ status: 'signed-out', error: 'Sem conexão para validar sua matrícula. Tente de novo.' });
+    // A SENHA ja foi aceita: jogar a sessao fora aqui era o que transformava
+    // um tropeco na consulta da matricula em "entre de novo". Guardada, a
+    // proxima abertura do aplicativo revalida sozinha.
+    await writeStoredMemberAuth({
+      refreshToken: result.tokens.refreshToken,
+      email: identity.email,
+      name: identity.name,
+      lastValidatedAt: 0,
+    });
+    broadcastMemberAuth({ status: 'signed-out', error: 'Sua senha foi aceita, mas não deu para confirmar sua matrícula agora. Toque em Entrar de novo.' });
     return memberAuthState;
   }
-  const identity = { email: result.tokens.email || email, name: result.tokens.name };
   if (entitlement === 'inactive') {
     // Guarda a sessao mesmo sem matricula: se o acesso for liberado depois,
     // reabrir o aplicativo ja resolve sem novo login.
@@ -4067,6 +4285,7 @@ async function memberLogin(email: string, password: string): Promise<MemberAuthS
     name: identity.name,
     lastValidatedAt: Date.now(),
   });
+  logLogin('login do aluno: entrou');
   broadcastMemberAuth({ status: 'signed-in', ...identity });
   return memberAuthState;
 }
@@ -4087,6 +4306,7 @@ async function memberBoot(): Promise<void> {
     broadcastMemberAuth({ status: 'signed-out' });
     return;
   }
+  logLogin('abertura: revalidando a sessao guardada');
   broadcastMemberAuth({ status: 'checking' });
   const offlineFallback = (): void => {
     if (Date.now() - stored.lastValidatedAt < MEMBER_OFFLINE_GRACE_MS) {

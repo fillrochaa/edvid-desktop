@@ -1213,6 +1213,59 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.18.0: quatro ajustes finos pedidos com o vídeo na mão.
+  (1) TELA DIVIDIDA: a divisa era `height/2` e no render real a arte comia
+  metade do apresentador. O aluno marcou no próprio quadro onde ela deveria
+  ficar e a marca caiu em 0,39 da altura — a MESMA medida do estilo antigo
+  (750px de arte em 1920), que já tinha sido tunado em vídeo real. Agora a
+  geometria é uma função pura e exportada (`splitGeometry` em Main.tsx) e a
+  divisa é a mesma nas DUAS montagens: `position: "top"` põe a arte na faixa
+  curta de cima, `position: "bottom"` põe o apresentador nela. O recorte do
+  vídeo virou UM valor para as duas faixas (0,20), porque a cabeça está sempre
+  no mesmo lugar da fonte — o que precisa ser constante é a folga acima dela.
+  Tentei antes "centrar cada faixa no próprio meio": passou no raciocínio e
+  cortou a testa no render. Medido, não deduzido — o teste guarda os limites
+  da cabeça (0,23 a 0,53 da altura no cut.mp4 real), não a regra.
+  (2) IMAGEM NO FORMATO DA FAIXA: as duas faixas têm formatos diferentes
+  (1080x749 ≈ 1,44 em cima; 1080x1171 ≈ 0,92 embaixo) e o pedido saía igual
+  para as duas. O vocabulário do `pedidos.json` deixou de ser proporção e
+  passou a ser USO (`tela-dividida`, `tela-dividida-base`, `tela-cheia`,
+  `paisagem`, `quadrada`): o agente diz onde a imagem vai aparecer e o
+  `src/image-format.ts` escolhe o tamanho de cada provedor (OpenAI, Gemini,
+  Cloudflare com largura/altura livres) e ainda escreve o enquadramento no
+  prompt — que é o que modelo de imagem realmente obedece. `4:3` e os demais
+  nomes antigos continuam valendo para projetos já existentes.
+  (3) PORTUGUÊS DEIXOU DE SER PEDIDO E VIROU REGRA DO APP. A regra nº 1 das
+  instruções não segurou um modelo pequeno (0.17.3). Agora: um lembrete curto
+  vai colado em CADA turno (modelo pequeno esquece o topo do contexto, nunca a
+  última linha), todo texto do agente passa por `src/chat-language.ts` — que
+  tira caminho, crase, JSON, opção de linha de comando, quadro de pilha e nome
+  de ferramenta — e, se ainda estiver em inglês, o app pede ao MESMO modelo
+  que reescreva, por chamada direta ao provedor, fora do sandbox. Com um
+  modelo do catálogo conduzindo, o texto só aparece depois de revisado (o
+  delta fica retido): transmitir palavra a palavra mostraria o inglês cru
+  antes da correção. As duas mensagens reais do print de 22/08 são os casos
+  de teste.
+  (4) LOGIN QUE FALHAVA NA PRIMEIRA TENTATIVA E ENTRAVA NA SEGUNDA. Causa
+  encontrada no ciclo de vida do agente: `stop()` devolvia na hora e um
+  processo novo subia no mesmo CODEX_HOME enquanto o antigo ainda respirava —
+  e o CODEX_HOME é um banco com trava de escritor. Quem perde a trava é sempre
+  o novo, então a primeira ação depois de uma troca de motor falhava e a
+  seguinte funcionava. Agora `stopAndWait()` espera a morte (com SIGKILL após
+  4s) e todas as chamadas a `codexServer()` passam por UMA fila, o que remove
+  a corrida inteira. Em cima disso: login repete uma vez sozinho quando o erro
+  é de processo (nunca de credencial), o login de aluno ganhou três tentativas
+  para tropeço de rede/429/5xx, uma resposta inválida da consulta de matrícula
+  parou de virar a acusação "sua matrícula não está ativa" (só uma resposta
+  VÁLIDA sem matrícula gera isso), a sessão deixou de ser jogada fora quando a
+  senha foi aceita mas a matrícula não pôde ser confirmada, e tudo isso agora
+  fica registrado em `userData/login.log` — o código antes descartava a causa,
+  que foi o que transformou o diagnóstico em adivinhação.
+  ACHADO DE PASSAGEM: `src/claude-agent.ts` tinha um byte NUL cru dentro de um
+  template string (separador de chave). O `file` classificava o arquivo como
+  binário e QUALQUER `grep` nele voltava vazio, silenciosamente. Trocado por
+  `\u0000`. Se uma busca voltar vazia num arquivo que você sabe que tem o
+  termo, desconfie do arquivo, não da busca.
 - 0.17.3: a trilha FOI gerada (o Treblo funcionou) e mesmo assim o vídeo
   quebrou: o render morreu com "404 ao baixar public/trilha.mp3". O arquivo
   estava em edit/musica/ e o agente — Ollama conduzindo — não copiou; pior,
@@ -1851,6 +1904,8 @@ npm run typecheck
 npm run test:codex-protocol
 npm run test:timeline
 npm run test:media
+npm run test:split-layout
+npm run test:chat-language
 git diff --check
 ```
 
