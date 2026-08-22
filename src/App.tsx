@@ -2335,6 +2335,41 @@ export function App() {
     }
   }
 
+  // O QUE O EDVID ESTÁ FAZENDO AGORA, em uma frase.
+  //
+  // Uma fonte só para todos os processos: chat, corte, render, imagem. O
+  // rodapé antes só olhava o turno do chat e dizia "Pronto" com o aplicativo
+  // renderizando — o aluno via o contrário do que estava escrito. A ordem
+  // abaixo é de prioridade: o que estiver mais em cima é o que ele lê.
+  const trabalho = useMemo((): string | null => {
+    if (cleanCut.status === 'transcrevendo') {
+      const total = cleanCut.total ?? 0;
+      return total > 1 ? `Ouvindo o vídeo · ${(cleanCut.done ?? 0) + 1} de ${total}` : 'Ouvindo o vídeo';
+    }
+    if (cleanCut.status === 'analisando') return 'Medindo as pausas';
+    if (cleanCut.status === 'cortando') return 'Montando o corte';
+    if (approvingCut) return 'Preparando a edição';
+    if (jcutBusy) return 'Antecipando o áudio dos cortes';
+    if (phase2Render.status === 'rendering') {
+      return phase2Render.totalFrames
+        ? `Renderizando a edição · ${Math.round((phase2Render.progress ?? 0) * 100)}%`
+        : 'Renderizando a edição';
+    }
+    if (imageGen.status === 'generating') {
+      const total = imageGen.total ?? 0;
+      return total > 1 ? `Gerando as imagens · ${imageGen.done ?? 0} de ${total}` : 'Gerando a imagem';
+    }
+    if (whisperModel.status === 'downloading') return 'Preparando a transcrição';
+    if (runtimePack.status === 'downloading' || runtimePack.status === 'extracting') {
+      return 'Preparando as ferramentas';
+    }
+    if (activeTurn || sending) return 'Escrevendo';
+    return null;
+  }, [
+    activeTurn, approvingCut, cleanCut, imageGen, jcutBusy,
+    phase2Render, runtimePack.status, sending, whisperModel.status,
+  ]);
+
   // O corte limpo NAO passa pelo chat: quem transcreve, mede o silencio e
   // corta e o proprio Edvid. Antes isso era um pedido ao agente, e com IA
   // gratuita ele respondia com um tutorial em vez de trabalhar.
@@ -2819,14 +2854,20 @@ export function App() {
       }]);
       return;
     }
+    // O EDVID MONTA A FASE 2 INTEIRA: copia o corte aprovado, mede o arquivo,
+    // gera legenda e segmentos e escreve os dados da edição a partir deste
+    // formulário. Isto era um pedido ao agente, e o que voltava era um corte
+    // de 91s declarado como 30s, legendas vazias, a headline de exemplo do
+    // template e nenhum vídeo na pasta — nada renderizava.
     try {
-      await window.edvidDesktop.scaffoldRemotionProject(projectDirectory);
+      await window.edvidDesktop.buildPhase2(projectDirectory, style);
     } catch (error) {
       setMessages((current) => [...current, { id: `error:${Date.now()}`, role: 'system', text: errorMessage(error) }]);
       return;
     }
     localStorage.setItem(styleStorageKey(projectDirectory), JSON.stringify(style));
     setStyleApplied(true);
+    void window.edvidDesktop.renderPhase2(projectDirectory).catch(() => {});
     const enabled = Object.entries(style.elements).filter(([, value]) => value).map(([key]) => key).join(', ') || 'nenhum';
     const disabled = Object.entries(style.elements).filter(([, value]) => !value).map(([key]) => key).join(', ') || 'nenhum';
     const prompt = [
@@ -2859,15 +2900,29 @@ export function App() {
           ]
         : []),
       '',
-      'O Edvid já montou o projeto Remotion em edit/remotion, com as dependências instaladas.',
-      'Prepare apenas os dados em edit/remotion/public/ (com os geradores oficiais), nunca legendas queimadas por FFmpeg nem imagens geradas em Python.',
-      `Escreva as escolhas acima em edit/remotion/public/edit-data.json, incluindo hook.accent e captions.accent com ${style.accent}.`,
-      'Não execute remotion render: quando os dados estiverem prontos, encerre o turno com um resumo curto — o Edvid renderiza sozinho e mostra o progresso na interface.',
-      'Use essas seleções como briefing definitivo e não peça para eu escolher os estilos novamente no chat.',
+      'O EDVID JÁ APLICOU TUDO ISSO. O corte já está em edit/remotion/public/cut.mp4, as legendas, os segmentos e o edit-data.json já foram escritos com as escolhas acima, com as medidas reais do arquivo. NÃO reescreva esses campos e NÃO monte o esqueleto de novo — sobrescrever apaga o que já está certo.',
+      'Sua parte é só o que ficou de fora: o conteúdo visual pedido acima (tela dividida, inserts, animações) e a observação do aluno. Some ao edit-data.json existente, sem apagar o que já está lá.',
+      'Não execute remotion render: quando terminar, encerre o turno com um resumo curto — o Edvid renderiza sozinho.',
     ].join('\n');
-    // O briefing técnico segue completo para o agente; no chat aparece só a
-    // intenção do usuário.
-    if (await dispatchMessage(prompt, 'Aplicar os estilos escolhidos na edição')) setWorkTab('edit');
+    setWorkTab('edit');
+    // O agente só entra quando SOBRA algo criativo: tela dividida (que precisa
+    // de imagens ilustrando a fala) ou um pedido escrito na observação. O
+    // resto — legenda, zoom, cor, trilha, medidas — o Edvid já escreveu, e
+    // pedir de novo era o que fazia o agente sobrescrever tudo com um
+    // esqueleto vazio.
+    const precisaDoAgente = style.edit !== 'limpa' || style.note.trim().length > 0;
+    if (!precisaDoAgente || !activeAiConnected) {
+      setMessages((current) => [...current,
+        { id: `user:${Date.now()}`, role: 'user', text: 'Aplicar os estilos escolhidos na edição' },
+        {
+          id: `assistant:estilos-${Date.now()}`,
+          role: 'assistant',
+          text: 'Estilos aplicados na edição. Estou renderizando o vídeo agora — ele entra no preview sozinho quando ficar pronto.',
+        },
+      ]);
+      return;
+    }
+    void dispatchMessage(prompt, 'Aplicar os estilos escolhidos na edição');
   }
 
   async function approveCleanCut(messageId: string) {
@@ -3415,19 +3470,6 @@ export function App() {
                   </article>
                 );
               })}
-              {/* O corte limpo é feito pelo Edvid, não pelo chat: o aluno
-                  precisa ver a etapa, porque a transcrição de um vídeo longo
-                  leva minutos e silêncio nessa hora parece travamento. */}
-              {cleanCutRunning && (
-                <div className="model-status">
-                  <span className="model-status-orb" />
-                  {cleanCut.status === 'transcrevendo'
-                    ? `Ouvindo o vídeo${cleanCut.total && cleanCut.total > 1 ? ` · ${(cleanCut.done ?? 0) + 1} de ${cleanCut.total}` : ''}`
-                    : cleanCut.status === 'analisando'
-                      ? 'Medindo as pausas'
-                      : 'Montando o corte'}
-                </div>
-              )}
               {/* Com um modelo do catálogo conduzindo, o texto do agente só
                   aparece depois de revisado (sem inglês cru na tela), então o
                   chat ficaria mudo durante o turno. Esta bolha é o sinal de
@@ -3463,39 +3505,26 @@ export function App() {
                   </button>
                 </div>
               )}
-              {canChat && messages.length > 0 && (
-                <div className={`chat-status work-status ${activeTurn ? 'working' : 'ready'}`}>
-                  <span />{activeTurn ? 'Trabalhando' : 'Pronto'}
+              {/* UM indicador para TUDO. Antes ele só enxergava o turno do
+                  chat e dizia "Pronto" enquanto o Edvid renderizava — o aluno
+                  via o aplicativo trabalhando e o rodapé afirmando o
+                  contrário. Agora o rótulo diz o que está acontecendo, e
+                  "Pronto" só aparece quando nada está. */}
+              {messages.length > 0 && (
+                <div className={`chat-status work-status ${trabalho ? 'working' : 'ready'}`}>
+                  <span />{trabalho ?? 'Pronto'}
                 </div>
               )}
-              {phase2Render.status === 'rendering' && (
-                <div className="phase2-render-banner" role="status">
-                  <span className="phase2-render-orb" />
-                  <div className="phase2-render-copy">
-                    <strong>Renderizando a edição estilizada</strong>
-                    <small>
-                      {phase2Render.totalFrames
-                        ? `${Math.round((phase2Render.progress ?? 0) * 100)}% · ${phase2Render.renderedFrames ?? 0}/${phase2Render.totalFrames} frames`
-                        : 'Preparando o render. O resultado entra no preview sozinho.'}
-                    </small>
-                  </div>
-                  <div className="phase2-render-track">
-                    <span style={{ width: `${Math.min(100, Math.round((phase2Render.progress ?? 0) * 100))}%` }} />
-                  </div>
+              {phase2Render.status === 'rendering' && phase2Render.totalFrames ? (
+                <div className="phase2-render-track" role="status" aria-label="Progresso do render">
+                  <span style={{ width: `${Math.min(100, Math.round((phase2Render.progress ?? 0) * 100))}%` }} />
                 </div>
-              )}
-              {imageGen.status === 'generating' && (
-                <div className="phase2-render-banner" role="status">
-                  <span className="phase2-render-orb" />
-                  <div className="phase2-render-copy">
-                    <strong>Gerando {imageGen.total === 1 ? 'a imagem pedida' : 'as imagens pedidas'}</strong>
-                    <small>{imageGen.done ?? 0}/{imageGen.total ?? 0} prontas · elas entram em edit/imagens/</small>
-                  </div>
-                  <div className="phase2-render-track">
-                    <span style={{ width: `${imageGen.total ? Math.round(((imageGen.done ?? 0) / imageGen.total) * 100) : 0}%` }} />
-                  </div>
+              ) : null}
+              {imageGen.status === 'generating' && imageGen.total ? (
+                <div className="phase2-render-track" role="status" aria-label="Progresso das imagens">
+                  <span style={{ width: `${Math.round(((imageGen.done ?? 0) / imageGen.total) * 100)}%` }} />
                 </div>
-              )}
+              ) : null}
             </div>
             {!followingOutput && <button type="button" className="scroll-to-latest" onClick={() => { setFollowingOutput(true); const element = messageListRef.current; if (element) element.scrollTop = element.scrollHeight; }}><Icon name="arrowDown" /> Ir para o fim</button>}
             <form className="chat-composer" onSubmit={sendMessage}>

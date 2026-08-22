@@ -1213,6 +1213,32 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.20.0: a FASE 2 passou a ser montada pelo aplicativo, e o indicador de
+  trabalho virou um só para tudo.
+  (1) "Aplicar os estilos" era um pedido ao agente com a lista de escolhas. Ele
+  respondeu "criei os dados da edição com todas as escolhas de estilo" e o que
+  existia na pasta era: corte de 91s declarado como `durationSec: 30`,
+  `captions.json` = `[]`, headline com o texto de exemplo do template
+  ("HEADLINE LINHA 1") e NENHUM `cut.mp4` — nada renderizaria. Nada disso é
+  criativo. Agora `buildPhase2` no main copia o corte aprovado, mede o arquivo
+  (largura, altura, fps, duração), gera `captions.json` e `segments.json` com
+  os geradores oficiais e escreve o `edit-data.json` a partir do formulário.
+  O agente só é chamado quando SOBRA algo criativo (tela dividida ou a
+  observação do aluno), e recebe ordem explícita de somar ao que já existe em
+  vez de reescrever.
+  DETALHE: não há segunda transcrição. `captions_for_remotion.py` já tinha um
+  modo que remapeia as palavras da fonte pelos offsets do EDL — ele só
+  procurava em `edit/transcripts/<nome com extensão>.json` no formato antigo e
+  devolvia `[]` em silêncio com os arquivos do Desktop. Passou a procurar
+  também em `transcricao_raw` e a usar `read_words`. No vídeo real: 326
+  palavras, terminando em 91,03s de um corte de 91,07s.
+  Duas salvaguardas que nasceram do que se viu: a headline fica DESLIGADA
+  quando não há texto escrito (melhor sem do que com "HEADLINE LINHA 1"), e a
+  trilha só liga quando o arquivo existe.
+  (2) INDICADOR ÚNICO. O rodapé só enxergava o turno do chat e dizia "Pronto"
+  com o aplicativo renderizando. Agora uma fonte só cobre corte, aprovação,
+  J-Cut, render, imagens, transcrição e chat; "Pronto" só aparece quando nada
+  está acontecendo, e o estado de trabalho virou etiqueta com o nome da etapa.
 - 0.19.2: "Aplicar ajustes da timeline" também saiu das mãos do agente, e o
   J-Cut ganhou as duas guardas que faltavam.
   O aluno trimou os blocos na linha do tempo e mandou aplicar. O botão

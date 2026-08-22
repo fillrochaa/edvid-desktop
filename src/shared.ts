@@ -455,6 +455,7 @@ export type EdvidDesktopApi = {
   onMemberAuthState: (listener: (state: MemberAuthState) => void) => () => void;
   renderPhase2: (directory: string) => Promise<Phase2RenderState>;
   onPhase2RenderState: (listener: (state: Phase2RenderState) => void) => () => void;
+  buildPhase2: (directory: string, style: ProjectStyleState) => Promise<void>;
   runCleanCut: (directory: string) => Promise<CleanCutState>;
   applyTimelineRanges: (
     directory: string,

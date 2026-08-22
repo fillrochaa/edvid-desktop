@@ -100,7 +100,10 @@ button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacit
 .work-status > span { width: 6px; height: 6px; border-radius: 50%; background: #59616d; }
 .work-status.ready { color: #62c9cb; }
 .work-status.ready > span { background: var(--teal); box-shadow: 0 0 0 3px rgba(9,181,183,.08); }
-.work-status.working { color: #ffad70; }
+/* Trabalhando é o estado que o aluno mais olha: vira etiqueta, como a das
+   etapas do corte, para ele saber O QUE está acontecendo — e não só que algo
+   acontece. "Pronto" segue discreto, porque não pede atenção. */
+.work-status.working { color: #ffbe8c; padding: 5px 9px; border: 1px solid rgba(255,82,0,.24); border-radius: 8px; background: rgba(255,82,0,.07); }
 .work-status.working > span { background: var(--orange); animation: pulse 1.2s infinite; }
 .chat-transcript { flex: 1 1 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 16px 15px 24px; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
 .chat-transcript::-webkit-scrollbar { width: 9px; }

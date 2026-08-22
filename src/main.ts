@@ -2515,6 +2515,174 @@ async function applyTimelineRanges(
   return promise;
 }
 
+// O edit-data.json a partir do formulario. Mapeamento direto: cada escolha do
+// aluno tem um campo oficial no template. A headline fica DESLIGADA quando ele
+// nao escreveu um texto — o agente deixava "HEADLINE LINHA 1" do exemplo e
+// isso ia parar no video.
+async function writeEditData(
+  publicDirectory: string,
+  style: ProjectStyleState,
+  media: { width: number; height: number; fps: number; durationSec: number },
+): Promise<void> {
+  const file = path.join(publicDirectory, 'edit-data.json');
+  // Preserva o que o agente ja tiver posto de criativo (inserts, animacoes,
+  // tela dividida, hook escrito): as escolhas de estilo nao apagam trabalho.
+  let previous: Record<string, unknown> = {};
+  try {
+    previous = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+  } catch {
+    // Primeira aplicacao de estilos neste projeto.
+  }
+  const hookBefore = (previous.hook ?? {}) as Record<string, unknown>;
+  const lines = Array.isArray(hookBefore.lines) ? (hookBefore.lines as string[]) : [];
+  // "HEADLINE LINHA 1" e o texto de exemplo do template: nunca vai ao ar.
+  const realLines = lines.filter((line) => line && !/HEADLINE LINHA/iu.test(line));
+  const zoomCount = Math.max(3, Math.min(12, Math.round(media.durationSec / 12)));
+  const document: Record<string, unknown> = {
+    ...previous,
+    width: media.width,
+    height: media.height,
+    fps: media.fps,
+    durationSec: Number(media.durationSec.toFixed(3)),
+    editType: style.edit,
+    camera: {
+      enabled: style.elements.zoomAuto || style.elements.zoomCuts,
+      zooms: Array.from({ length: zoomCount }, (_, index) => 1.1 + ((index % 5) * 0.03)),
+      pushIn: style.elements.zoomAuto ? 0.04 : 0,
+      targetX: 0.5,
+      targetY: 0.4,
+    },
+    hook: {
+      ...hookBefore,
+      // Sem texto escrito nao ha headline: melhor sem do que com o exemplo.
+      enabled: style.headline !== 'none' && realLines.length > 0,
+      endSec: Number(hookBefore.endSec) || 4,
+      style: style.headline === 'none' ? 'realce' : style.headline,
+      accent: style.accent,
+      lines: realLines,
+    },
+    captions: {
+      ...((previous.captions ?? {}) as Record<string, unknown>),
+      enabled: style.captions !== 'none',
+      style: style.captions === 'none' ? 'karaoke' : style.captions,
+      accent: style.accent,
+      fontSize: Number((previous.captions as Record<string, unknown>)?.fontSize) || 61,
+      maxWords: Number((previous.captions as Record<string, unknown>)?.maxWords) || 3,
+      safeWidth: Number((previous.captions as Record<string, unknown>)?.safeWidth) || 720,
+      paddingBottom: Number((previous.captions as Record<string, unknown>)?.paddingBottom) || 420,
+    },
+    inserts: Array.isArray(previous.inserts) ? previous.inserts : [],
+    behind: Array.isArray(previous.behind) ? previous.behind : [],
+    splits: Array.isArray(previous.splits) ? previous.splits : [],
+    animations: Array.isArray(previous.animations) ? previous.animations : [],
+    soundtrack: {
+      ...((previous.soundtrack ?? {}) as Record<string, unknown>),
+      // Liga so quando o arquivo existir: soundtrack ligado apontando arquivo
+      // ausente mata o render com 404 (defeito ja visto).
+      enabled: false,
+      file: 'trilha.mp3',
+      volume: 0.0445,
+    },
+  };
+  await writeFile(file, `${JSON.stringify(document, null, 2)}\n`);
+  // Se a trilha ja estiver na pasta, liga na hora.
+  await ensureSoundtrackFile(path.resolve(publicDirectory, '..', '..', '..'), publicDirectory).catch(() => {});
+}
+
+// FASE 2 MONTADA PELO APLICATIVO.
+//
+// Isto era um pedido ao agente com a lista de escolhas do aluno. Medido na
+// pasta dele depois de "Aplicar os estilos": o agente respondeu "criei os
+// dados da edicao com todas as escolhas" e o que existia era um corte de 91s
+// declarado como 30s, legendas VAZIAS, a headline com o texto de exemplo do
+// template ("HEADLINE LINHA 1") e NENHUM cut.mp4 — ou seja, nada renderizaria.
+// Copiar o corte, medir o arquivo, gerar legenda e segmentos e escrever as
+// escolhas de um formulario nao tem nada de criativo.
+async function buildPhase2(
+  projectDirectory: string,
+  style: ProjectStyleState,
+): Promise<void> {
+  await scaffoldRemotionProject(projectDirectory);
+  const python = resolveRuntime('python', appRuntimeContext());
+  const ffprobe = resolveRuntime('ffprobe', appRuntimeContext());
+  if (!python.command || !ffprobe.command) {
+    throw new Error('As ferramentas do Edvid não estão disponíveis nesta instalação.');
+  }
+  const environment = agentToolsEnvironment();
+  const editDirectory = path.join(projectDirectory, EDIT_DIR);
+  const publicDirectory = path.join(editDirectory, 'remotion', 'public');
+  await mkdir(publicDirectory, { recursive: true });
+
+  // 1. O corte aprovado E o material da Fase 2. Sem ele o render nem comeca.
+  const targets = await findJcutTargets(projectDirectory);
+  const approved = targets.primary ?? targets.mirror;
+  if (!approved) throw new Error('Faça o corte limpo antes de aplicar os estilos.');
+  const cut = path.join(publicDirectory, 'cut.mp4');
+  if (path.resolve(approved) !== path.resolve(cut)) await copyFile(approved, cut);
+
+  // 2. As medidas vem do arquivo, nunca de chute.
+  const probe = await inspectVideo(ffprobe.command, ffprobe.argsPrefix, cut);
+  const stream = probe.streams?.[0];
+  const rotated = Math.abs(
+    Number(stream?.side_data_list?.find((item) => item.rotation !== undefined)?.rotation)
+    || Number(stream?.tags?.rotate) || 0,
+  ) % 180 === 90;
+  const width = (rotated ? stream?.height : stream?.width) ?? 1080;
+  const height = (rotated ? stream?.width : stream?.height) ?? 1920;
+  const fps = parseFrameRate(stream?.avg_frame_rate || stream?.r_frame_rate);
+  const durationSec = Number(probe.format?.duration) || 0;
+  if (durationSec <= 0) throw new Error('Não consegui medir a duração do corte aprovado.');
+
+  // 3. Legenda: as palavras do corte, remapeadas pelo EDL. Nao ha segunda
+  //    transcricao — os tempos da fonte passam pelos offsets dos blocos.
+  const edlFile = path.join(editDirectory, 'edl.json');
+  const captionsFile = path.join(publicDirectory, 'captions.json');
+  await runTool(
+    python.command,
+    [...python.argsPrefix, '-B', path.join(helpersDirectory(), 'captions_for_remotion.py'),
+      edlFile, '-o', captionsFile],
+    environment,
+    5 * 60_000,
+  );
+  const captions = JSON.parse(await readFile(captionsFile, 'utf8')) as Array<{
+    text: string; startMs: number; endMs: number;
+  }>;
+
+  // 4. A legenda empilhada precisa das deixas, e o helper delas quer uma
+  //    transcricao NA LINHA DO CORTE. As palavras acima ja estao nela.
+  const cutTranscriptDirectory = path.join(editDirectory, 'transcricao_corte_raw');
+  await mkdir(cutTranscriptDirectory, { recursive: true });
+  const cutTranscript = path.join(cutTranscriptDirectory, 'cut.json');
+  await writeFile(cutTranscript, `${JSON.stringify({
+    words: captions.map((caption) => ({
+      type: 'word', text: caption.text, start: caption.startMs / 1000, end: caption.endMs / 1000,
+    })),
+  }, null, 2)}\n`);
+  if (style.captions === 'stacked') {
+    await runTool(
+      python.command,
+      [...python.argsPrefix, '-B', path.join(helpersDirectory(), 'caption_style.py'),
+        '--transcript', cutTranscript, '-o', path.join(publicDirectory, 'caption-cues.json'),
+        '--lang', 'pt'],
+      environment,
+      5 * 60_000,
+    ).catch(() => {});
+  }
+
+  // 5. Segmentos: o zoom por corte precisa das juncoes em FRAME, nao da soma
+  //    ingenua dos segundos do EDL.
+  await runTool(
+    python.command,
+    [...python.argsPrefix, '-B', path.join(helpersDirectory(), 'segments_for_remotion.py'),
+      '--edl', edlFile, '--fps', String(fps), '-o', path.join(publicDirectory, 'segments.json')],
+    environment,
+    5 * 60_000,
+  ).catch(() => {});
+
+  // 6. As escolhas do formulario viram os campos oficiais do template.
+  await writeEditData(publicDirectory, style, { width, height, fps, durationSec });
+}
+
 // Duracao em segundos pelo ffprobe do pacote. Precisa do total original para
 // dizer ao aluno quanto foi removido.
 async function mediaDurationSeconds(filePath: string): Promise<number | null> {
@@ -4065,6 +4233,17 @@ function registerIpcHandlers(): void {
       throw new Error('Abra o projeto antes de preparar a Fase 2.');
     }
     await scaffoldRemotionProject(requestedDirectory);
+  });
+
+  // Monta a Fase 2 INTEIRA a partir do formulario de estilos: copia o corte,
+  // mede o arquivo, gera legenda e segmentos e escreve os dados da edicao.
+  ipcMain.handle('phase2:build', async (_event, input: { directory?: string; style?: ProjectStyleState }) => {
+    const requestedDirectory = path.resolve(asText(input.directory));
+    if (!selectedProjectDirectories.has(requestedDirectory)) {
+      throw new Error('Abra o projeto antes de aplicar os estilos.');
+    }
+    if (!input.style) throw new Error('Escolha os estilos antes de aplicar.');
+    await buildPhase2(requestedDirectory, input.style);
   });
 
   ipcMain.handle('cleancut:run', (_event, input: { directory?: string }) => {

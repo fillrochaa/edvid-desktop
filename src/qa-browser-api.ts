@@ -512,6 +512,7 @@ export function createQaBrowserApi(): EdvidDesktopApi {
       }, 3_000);
       return { status: 'transcrevendo', done: 0, total: 1 };
     },
+    buildPhase2: async () => {},
     applyTimelineRanges: async (_directory, ranges) => {
       window.setTimeout(() => emitCleanCut({ status: 'cortando' }), 200);
       window.setTimeout(() => {

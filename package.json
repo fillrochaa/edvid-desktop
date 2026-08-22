@@ -1,7 +1,7 @@
 {
   "name": "@edvid/desktop",
   "productName": "Edvid",
-  "version": "0.19.2",
+  "version": "0.20.0",
   "description": "Aplicativo desktop do editor de video por conversa Edvid",
   "main": ".vite/build/main.js",
   "private": true,

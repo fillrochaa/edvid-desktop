@@ -110,6 +110,7 @@ const api: EdvidDesktopApi = {
   },
   scaffoldRemotionProject: (directory) =>
     ipcRenderer.invoke('remotion:scaffold', { directory }),
+  buildPhase2: (directory, style) => ipcRenderer.invoke('phase2:build', { directory, style }),
   getSourceWaveform: (mediaUrl) => ipcRenderer.invoke('waveform:get', { url: mediaUrl }),
   installAppUpdate: () => ipcRenderer.invoke('update:install'),
   getMemberAuth: () => ipcRenderer.invoke('member:get'),

@@ -46,9 +46,24 @@ def captions_from_transcript(transcript_path: Path) -> list[dict]:
     return caps
 
 
+def find_transcript(edit_dir: Path, source: str) -> Path | None:
+    """A transcricao daquela fonte, onde quer que ela esteja.
+
+    O Edvid Desktop grava em edit/transcricao_raw/<nome sem extensao>.json; a
+    skill gravava em edit/transcripts/<nome com extensao>.json. Sem procurar
+    nos dois lugares, este modo devolvia captions.json VAZIO sem erro nenhum —
+    o video saia sem legenda e ninguem sabia por que.
+    """
+    stem = Path(source).stem
+    for folder in ("transcricao_raw", "transcripts", "transcricao_corte_raw"):
+        for name in (f"{source}.json", f"{stem}.json"):
+            candidate = edit_dir / folder / name
+            if candidate.exists():
+                return candidate
+    return None
+
+
 def build_captions(edl: dict, edit_dir: Path) -> list[dict]:
-    transcripts_dir = edit_dir / "transcripts"
-    sources = edl["sources"]
     caps: list[dict] = []
     off = 0.0  # output-timeline offset (seconds)
 
@@ -56,20 +71,21 @@ def build_captions(edl: dict, edit_dir: Path) -> list[dict]:
         src = r["source"]
         a, b = float(r["start"]), float(r["end"])
         dur = b - a
-        tr_path = transcripts_dir / f"{src}.json"
-        if not tr_path.exists():
+        tr_path = find_transcript(edit_dir, src)
+        if tr_path is None:
             off += dur
             continue
-        words = [w for w in json.loads(tr_path.read_text()).get("words", [])
-                 if w.get("type") == "word" and w.get("start") is not None]
+        # read_words normaliza WhisperX e o formato da skill: sem isso o
+        # parsing na mao devolvia zero palavras no arquivo do Desktop.
+        words = read_words(tr_path)
         seg = [w for w in words if (a - 0.08) <= w["start"] < b]
         seg.sort(key=lambda w: w["start"])
         for w in seg:
             t = max(0.0, w["start"] - a) + off
-            e = min(dur, max(0.0, (w.get("end") or w["start"]) - a)) + off
+            e = min(dur, max(0.0, w["end"] - a)) + off
             if e <= t:
                 e = t + 0.12
-            text = (w.get("text") or "").strip()
+            text = (w["text"] or "").strip()
             if not text:
                 continue
             caps.append({
