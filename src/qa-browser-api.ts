@@ -500,6 +500,24 @@ export function createQaBrowserApi(): EdvidDesktopApi {
         }), 90);
         return { threadId, turnId };
       }
+      // "simular revisão" reproduz o turno de um modelo do catálogo: o texto
+      // NÃO chega em delta (seria o inglês cru na tela), só no fim, revisado.
+      // É o estado em que o chat fica mudo — e onde a bolha de escrevendo tem
+      // de aparecer.
+      if (/simular revis[ãa]o/iu.test(text)) {
+        window.setTimeout(() => emit({ type: 'turn-state', threadId, turnId, status: 'started' }), 20);
+        window.setTimeout(() => {
+          emit({
+            type: 'assistant-final',
+            threadId,
+            turnId,
+            itemId: `qa-item-${turnNumber}`,
+            text: 'Aumentei o volume da trilha sonora em 5 dB e deixei a versão anterior guardada.',
+          });
+          emit({ type: 'turn-state', threadId, turnId, status: 'completed' });
+        }, 3_000);
+        return { threadId, turnId };
+      }
       const response = /inicie a edição|corte limpo/iu.test(text) &&
         !/oficialmente aprovado|j-cut/iu.test(text)
         ? cleanCutQaResponse

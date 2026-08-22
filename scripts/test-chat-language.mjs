@@ -82,6 +82,19 @@ try {
     assert.equal(stripTechnical(texto), texto, `mexeu em texto limpo: ${texto}`);
   }
 
+  // --- 3b. O que o modelo DEVOLVE na reescrita precisa passar ---------------
+  // Estes dois textos nao sao inventados: sao a resposta real do Ollama Cloud
+  // (gpt-oss:120b) reescrevendo as duas mensagens do print, medida em 22/08.
+  // Se o detector reprovasse a reescrita, o aluno cairia no texto de recurso
+  // mesmo com a traducao pronta na mao.
+  const reescritosReais = [
+    'Você poderia esclarecer que tipo de “trilha” você quer continuar gerando? Por exemplo, seria um arquivo de registro, um acompanhamento de processamento de dados ou algo diferente?',
+    '- Aumentei o volume da trilha sonora em 5 dB.\n- Substituí o arquivo original pela versão com volume maior.',
+  ];
+  for (const texto of reescritosReais) {
+    assert.equal(sanitizeAssistantText(texto).english, false, `reescrita real reprovada: ${texto}`);
+  }
+
   // --- 4. A limpeza nao pode ESCONDER o ingles ------------------------------
   // Se limpar o caminho apagasse os marcadores, o resumo em ingles passaria
   // batido — exatamente o jeito de o defeito voltar sem ninguem ver.

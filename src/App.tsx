@@ -3352,6 +3352,16 @@ export function App() {
                   </article>
                 );
               })}
+              {/* Com um modelo do catálogo conduzindo, o texto do agente só
+                  aparece depois de revisado (sem inglês cru na tela), então o
+                  chat ficaria mudo durante o turno. Esta bolha é o sinal de
+                  que ele está escrevendo. */}
+              {activeTurn && !messages.some((message) => message.id === `assistant:${activeTurn.turnId}`) && (
+                <article className="chat-message assistant pending">
+                  <span className="chat-role">Edvid</span>
+                  <p className="chat-typing"><span /><span /><span /></p>
+                </article>
+              )}
               {showPinnedCutGate && (
                 <div className="clean-cut-gate">
                   <div><strong>Corte limpo pronto</strong><span>Assista no preview e confirme para escolher os estilos.</span></div>
