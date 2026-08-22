@@ -126,6 +126,7 @@ const api: EdvidDesktopApi = {
     return () => ipcRenderer.removeListener('update:state', handler);
   },
   runCleanCut: (directory) => ipcRenderer.invoke('cleancut:run', { directory }),
+  applyTimelineRanges: (directory, ranges) => ipcRenderer.invoke('cleancut:apply-timeline', { directory, ranges }),
   onCleanCutState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: CleanCutState) => listener(state);
     ipcRenderer.on('cleancut:state', handler);

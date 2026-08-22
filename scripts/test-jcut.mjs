@@ -21,7 +21,7 @@ try {
     '--bundle', '--platform=node', '--format=esm',
     `--outfile=${path.join(work, 'jcut.mjs')}`,
   ], { stdio: 'inherit' });
-  const { planJcut, extractionArgs, mixArgs, muxArgs } = await import(pathToFileURL(path.join(work, 'jcut.mjs')).href);
+  const { planJcut, extractionArgs, mixArgs, muxArgs, cutMatchesEdl, tracksInSync } = await import(pathToFileURL(path.join(work, 'jcut.mjs')).href);
 
   // --- Plano: clamps e recusas -------------------------------------------
   assert.equal(planJcut([{ start: 0, end: 5 }]), null, 'um range so nao tem juncao');
@@ -103,7 +103,26 @@ try {
   assert.ok(rmsOf(cut, 5.88, 5.98) < -60, 'pre-juncao C silenciosa no corte simples');
   assert.ok(rmsOf(out, 5.88, 5.98) > -35, 'J-cut antecipa a fala do take C');
 
-  console.log('test:jcut ok — leads com clamp, timeline 1:1, video byte a byte identico e antecipacao audivel nas duas juncoes.');
+  // --- Guardas de sincronia -------------------------------------------------
+  // Números reais da máquina do aluno: os ajustes da linha do tempo
+  // reescreveram o EDL para 90,613s e o vídeo continuou o antigo, de 94,533s.
+  // O J-Cut rodou assim mesmo, montou o áudio pelo EDL novo e o som saiu 3,9s
+  // fora do lugar do início ao fim.
+  assert.equal(cutMatchesEdl(94.533, 90.613), false, 'vídeo que não bate com o EDL precisa barrar o J-Cut');
+  assert.equal(cutMatchesEdl(90.613, 90.613), true);
+  // Meio quadro de folga: arredondamento de container não pode barrar.
+  assert.equal(cutMatchesEdl(90.62, 90.613), true);
+  assert.equal(cutMatchesEdl(90.9, 90.613), false, '0,3s já é um erro visível');
+  // Sem medida confiável, não inventa bloqueio.
+  assert.equal(cutMatchesEdl(NaN, 90.613), true);
+
+  // E o arquivo pronto: a duração do CONTAINER é a do stream mais longo, então
+  // só medir trilha por trilha revela o áudio curto. Foi o que faltava.
+  assert.equal(tracksInSync(94.533, 90.613), false, 'áudio 3,9s mais curto não pode ser publicado');
+  assert.equal(tracksInSync(94.533, 94.538), true, 'diferença de milissegundos é normal');
+  assert.equal(tracksInSync(NaN, 94.5), true);
+
+  console.log('test:jcut ok — leads, timeline 1:1, video identico, antecipacao audivel e sincronia verificada trilha a trilha.');
 } finally {
   rmSync(work, { recursive: true, force: true });
 }

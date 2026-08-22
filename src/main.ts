@@ -23,7 +23,7 @@ import { Readable } from 'node:stream';
 import { ClaudeAgent } from './claude-agent';
 import { CodexAppServer } from './codex-app-server';
 import { GeminiAgent } from './gemini-agent';
-import { JCUT_LEAD_SECONDS, extractionArgs, mixArgs, muxArgs, planJcut } from './jcut';
+import { JCUT_LEAD_SECONDS, cutMatchesEdl, extractionArgs, mixArgs, muxArgs, planJcut, tracksInSync } from './jcut';
 import { AI_CATALOG, catalogEntry, routeCandidates, shouldFailover } from './ai-catalog';
 import {
   geminiAspect,
@@ -2426,6 +2426,95 @@ function runCleanCut(projectDirectory: string): Promise<CleanCutState> {
   return promise;
 }
 
+// AJUSTES DA TIMELINE aplicados pelo APLICATIVO.
+//
+// Isto era um pedido ao agente: "atualize o edl.json com estes ranges e
+// re-renderize". Ele escrevia o EDL, dizia que o Edvid renderizaria e nada
+// acontecia — o video continuava o antigo. Pior: o J-Cut seguinte montou o
+// audio a partir do EDL NOVO e colou no video VELHO, e o som saiu 3,9s fora
+// do lugar. Recortar segundo uma lista de intervalos e exatamente o que o
+// corte limpo ja faz; a unica diferenca e de onde vem a lista.
+async function applyTimelineRanges(
+  projectDirectory: string,
+  ranges: ReadonlyArray<{ sourceId: string; start: number; end: number; label: string }>,
+): Promise<CleanCutState> {
+  if (cleanCutJob?.directory === projectDirectory) return cleanCutState;
+  const promise = (async (): Promise<CleanCutState> => {
+    if (!ranges.length) throw new Error('Não há nenhum trecho para manter na linha do tempo.');
+    await requireRuntimePack();
+    const ffmpeg = resolveRuntime('ffmpeg', appRuntimeContext());
+    if (!ffmpeg.command) throw new Error('O motor de corte não está disponível nesta instalação.');
+    const existing = await readEdlDocument(projectDirectory);
+    if (!existing) throw new Error('Faça o corte limpo antes de ajustar a linha do tempo.');
+
+    // Cada fonte citada pelos trechos vira uma entrada do FFmpeg, uma vez só.
+    const inputs: string[] = [];
+    const sourceIndex: Record<string, number> = {};
+    for (const range of ranges) {
+      if (sourceIndex[range.sourceId] !== undefined) continue;
+      const resolved = resolveJcutSource(projectDirectory, existing.document, range.sourceId);
+      if (!resolved || !(await statOf(resolved))) {
+        throw new Error('Não encontrei na pasta do projeto o vídeo de origem deste trecho.');
+      }
+      sourceIndex[range.sourceId] = inputs.length;
+      inputs.push(resolved);
+    }
+
+    broadcastCleanCut({ status: 'cortando' });
+    const editDirectory = path.join(projectDirectory, EDIT_DIR);
+    const output = path.join(editDirectory, 'corte_limpo.mp4');
+    await runFfmpeg(
+      ffmpeg.command,
+      ffmpeg.argsPrefix,
+      ffmpegCutArgs({
+        inputs,
+        ranges: ranges.map((range) => ({
+          source: range.sourceId, beat: range.label, start: range.start, end: range.end,
+        })),
+        sourceIndex,
+        output,
+      }),
+      60 * 60_000,
+    );
+
+    // O EDL passa a descrever o video que ACABOU de sair, e o J-Cut antigo
+    // deixa de valer: o audio dele foi calculado para outro corte.
+    const document = { ...existing.document } as Record<string, unknown>;
+    document.ranges = ranges.map((range, index) => ({
+      source: range.sourceId,
+      beat: range.label || `Bloco ${String(index + 1).padStart(2, '0')}`,
+      start: Number(range.start.toFixed(3)),
+      end: Number(range.end.toFixed(3)),
+    }));
+    document.total_duration_s = Number(
+      ranges.reduce((total, range) => total + (range.end - range.start), 0).toFixed(3),
+    );
+    delete document.jcut_timeline;
+    await writeFile(existing.path, `${JSON.stringify(document, null, 2)}\n`);
+    await rm(jcutMarkerPath(projectDirectory), { force: true });
+    await rm(path.join(editDirectory, 'corte_limpo-sem-jcut-tmp.mp4'), { force: true });
+
+    const kept = Number(document.total_duration_s);
+    const minutes = Math.floor(Math.round(kept) / 60);
+    const seconds = String(Math.round(kept) % 60).padStart(2, '0');
+    return {
+      status: 'pronto',
+      summary: `Ajustes aplicados: o corte ficou com ${ranges.length} ${ranges.length === 1 ? 'trecho' : 'trechos'} e ${minutes}min ${seconds}s. Assista no preview e aprove para escolher os estilos.`,
+    };
+  })()
+    .catch((error): CleanCutState => ({
+      status: 'erro',
+      error: error instanceof Error ? error.message : String(error),
+    }))
+    .then((state) => {
+      cleanCutJob = null;
+      broadcastCleanCut(state);
+      return state;
+    });
+  cleanCutJob = { directory: projectDirectory, promise };
+  return promise;
+}
+
 // Duracao em segundos pelo ffprobe do pacote. Precisa do total original para
 // dizer ao aluno quanto foi removido.
 async function mediaDurationSeconds(filePath: string): Promise<number | null> {
@@ -2897,6 +2986,44 @@ function runFfmpeg(command: string, argsPrefix: string[], args: string[], timeou
 
 // Resolve o arquivo-fonte de um range do EDL (id do mapa sources, nome de
 // arquivo direto ou a fonte unica do documento), sempre dentro do projeto.
+// Duracao de CADA trilha, separadamente.
+//
+// A duracao do container e a do stream mais longo: um audio 3,9s mais curto
+// que o video nao muda esse numero, e foi assim que um J-Cut fora de
+// sincronia passou pela verificacao e chegou ao aluno.
+async function trackDurations(
+  ffprobe: string,
+  argsPrefix: string[],
+  filePath: string,
+): Promise<{ video: number; audio: number }> {
+  return new Promise((resolve) => {
+    const child = spawn(ffprobe, [
+      ...argsPrefix,
+      '-v', 'error',
+      '-show_entries', 'stream=codec_type,duration',
+      '-of', 'json',
+      filePath,
+    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    let stdout = '';
+    const timer = setTimeout(() => child.kill(), 30_000);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+    child.on('error', () => { clearTimeout(timer); resolve({ video: NaN, audio: NaN }); });
+    child.on('close', () => {
+      clearTimeout(timer);
+      try {
+        const parsed = JSON.parse(stdout) as { streams?: Array<{ codec_type?: string; duration?: string }> };
+        const of = (kind: string): number => Number(
+          parsed.streams?.find((stream) => stream.codec_type === kind)?.duration,
+        );
+        resolve({ video: of('video'), audio: of('audio') });
+      } catch {
+        resolve({ video: NaN, audio: NaN });
+      }
+    });
+  });
+}
+
 function resolveJcutSource(
   projectDirectory: string,
   document: EdlDocument,
@@ -2960,6 +3087,23 @@ function applyJcutToProject(projectDirectory: string): Promise<JcutApplyResult> 
     if (!primary) {
       return { applied: false, cuts: 0, error: 'Não encontrei o vídeo do corte limpo em edit/ para aplicar o J-Cut.' };
     }
+    // O J-CUT MONTA O AUDIO A PARTIR DO EDL e cola no video que ja existe: se
+    // os dois nao descrevem o mesmo corte, o som inteiro sai do lugar. Foi o
+    // que aconteceu quando os ajustes da linha do tempo reescreveram o EDL
+    // (90,6s) sem re-renderizar o video (94,5s): o audio ficou 3,9s curto.
+    const plannedSeconds = ranges.reduce(
+      (total, range) => total + Math.max(0, Number(range.end) - Number(range.start)),
+      0,
+    );
+    const primaryProbe = await inspectVideo(ffprobe.command, ffprobe.argsPrefix, primary).catch(() => null);
+    const primarySeconds = Number(primaryProbe?.format?.duration);
+    if (!cutMatchesEdl(primarySeconds, plannedSeconds)) {
+      return {
+        applied: false,
+        cuts: 0,
+        error: 'O vídeo do corte não corresponde mais aos trechos da linha do tempo. Aplique os ajustes primeiro e depois o J-Cut.',
+      };
+    }
     const sourcePaths: string[] = [];
     for (const segment of plan.segments) {
       const resolved = resolveJcutSource(projectDirectory, edl.document, segment.sourceId);
@@ -2992,6 +3136,14 @@ function applyJcutToProject(projectDirectory: string): Promise<JcutApplyResult> 
       const originalDuration = Number(probeOriginal.format?.duration);
       if (!Number.isFinite(outDuration) || !Number.isFinite(originalDuration) || Math.abs(outDuration - originalDuration) > 0.1) {
         throw new Error('A verificação de duração do J-Cut falhou; o corte original foi mantido.');
+      }
+      // A duracao do CONTAINER e a do stream mais longo, entao ela nao muda
+      // quando so o audio encurta — foi assim que um audio 3,9s mais curto
+      // que o video passou por esta verificacao e chegou ao aluno fora de
+      // sincronia. Agora as duas trilhas sao medidas separadamente.
+      const tracks = await trackDurations(ffprobe.command, ffprobe.argsPrefix, rendered);
+      if (!tracksInSync(tracks.video, tracks.audio)) {
+        throw new Error('O áudio do J-Cut não ficou do mesmo tamanho do vídeo; o corte original foi mantido.');
       }
 
       // Backup com marca de intermediario (o preview ignora "-tmp") e troca
@@ -3921,6 +4073,24 @@ function registerIpcHandlers(): void {
       throw new Error('Abra o projeto antes de fazer o corte limpo.');
     }
     return runCleanCut(requestedDirectory);
+  });
+
+  ipcMain.handle('cleancut:apply-timeline', (
+    _event,
+    input: { directory?: string; ranges?: Array<{ sourceId?: string; start?: number; end?: number; label?: string }> },
+  ) => {
+    const requestedDirectory = path.resolve(asText(input.directory));
+    if (!selectedProjectDirectories.has(requestedDirectory)) {
+      throw new Error('Abra o projeto antes de aplicar os ajustes.');
+    }
+    const ranges = (input.ranges ?? []).flatMap((range) => {
+      const start = Number(range.start);
+      const end = Number(range.end);
+      const sourceId = asText(range.sourceId);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return [];
+      return [{ sourceId, start, end, label: asText(range.label) }];
+    });
+    return applyTimelineRanges(requestedDirectory, ranges);
   });
 
   ipcMain.handle('phase2:render', (_event, input: { directory?: string }) => {

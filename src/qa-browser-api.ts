@@ -512,6 +512,19 @@ export function createQaBrowserApi(): EdvidDesktopApi {
       }, 3_000);
       return { status: 'transcrevendo', done: 0, total: 1 };
     },
+    applyTimelineRanges: async (_directory, ranges) => {
+      window.setTimeout(() => emitCleanCut({ status: 'cortando' }), 200);
+      window.setTimeout(() => {
+        const total = ranges.reduce((soma, r) => soma + (r.end - r.start), 0);
+        const minutos = Math.floor(Math.round(total) / 60);
+        const segundos = String(Math.round(total) % 60).padStart(2, '0');
+        emitCleanCut({
+          status: 'pronto',
+          summary: `Ajustes aplicados: o corte ficou com ${ranges.length} ${ranges.length === 1 ? 'trecho' : 'trechos'} e ${minutos}min ${segundos}s. Assista no preview e aprove para escolher os estilos.`,
+        });
+      }, 1_800);
+      return { status: 'cortando' };
+    },
     onCleanCutState: (listener) => {
       cleanCutListeners.add(listener);
       return () => cleanCutListeners.delete(listener);

@@ -173,3 +173,29 @@ export function muxArgs(cutPath: string, mixedWav: string, outputPath: string): 
     outputPath,
   ];
 }
+
+// --- GUARDAS DE SINCRONIA --------------------------------------------------
+// O J-Cut monta o audio a partir do EDL e cola no video que JA EXISTE, com
+// `-c:v copy`. Isso so funciona se os dois descreverem o mesmo corte.
+//
+// Caso real, medido na maquina do aluno: os ajustes da linha do tempo
+// reescreveram o EDL para 90,613s e o video continuou o antigo, de 94,533s. O
+// J-Cut rodou assim mesmo e o som saiu 3,9s fora do lugar do inicio ao fim.
+// A verificacao que existia comparava a duracao do CONTAINER antes e depois —
+// e a duracao do container e a do stream mais longo, entao um audio curto nao
+// mexe nela. Passou batido.
+
+// Meio quadro a 30 fps, com folga para o arredondamento do container.
+const SYNC_TOLERANCE_SECONDS = 0.25;
+
+// O video do corte ainda corresponde aos trechos do EDL?
+export function cutMatchesEdl(videoSeconds: number, plannedSeconds: number): boolean {
+  if (!Number.isFinite(videoSeconds) || !Number.isFinite(plannedSeconds)) return true;
+  return Math.abs(videoSeconds - plannedSeconds) <= SYNC_TOLERANCE_SECONDS;
+}
+
+// As duas trilhas do arquivo pronto tem o mesmo tamanho?
+export function tracksInSync(videoSeconds: number, audioSeconds: number): boolean {
+  if (!Number.isFinite(videoSeconds) || !Number.isFinite(audioSeconds)) return true;
+  return Math.abs(videoSeconds - audioSeconds) <= SYNC_TOLERANCE_SECONDS;
+}

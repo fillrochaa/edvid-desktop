@@ -2938,25 +2938,34 @@ export function App() {
     }, 400);
   }
 
+  // Recortar segundo uma lista de intervalos é exatamente o que o corte limpo
+  // faz — a única diferença é de onde vem a lista. Isto era um pedido ao
+  // agente, que escrevia o EDL, dizia que o Edvid renderizaria e nada
+  // acontecia; e o J-Cut seguinte colava o áudio novo no vídeo antigo.
   async function applyTimelineEdits() {
+    const directory = activeProjectDirectoryRef.current;
     const model = workspace?.timelineModel;
-    if (!model) return false;
+    if (!directory || !model || cleanCutRunning) return false;
     const ranges = edlRangesFromModel(model);
     if (ranges.length === 0) return false;
-    const sourceName = (id: string) => workspace?.sources.find((source) => source.id === id)?.name ?? id;
-    const prompt = [
-      'Editei a timeline diretamente no Edvid Desktop (trims, cortes e exclusões de takes).',
-      'Atualize o edit/edl.json para conter exatamente estes ranges, nesta ordem. Os tempos são em segundos no arquivo-fonte indicado:',
-      ...ranges.map((range, index) => (
-        `${index + 1}. [${range.label}] fonte "${range.sourceId}" (${sourceName(range.sourceId)}): IN ${range.start.toFixed(3)}s | OUT ${range.end.toFixed(3)}s${range.gainDb ? ` | ganho ${range.gainDb} dB` : ''}`
-      )),
-      'Mantenha os demais campos do EDL (sources, grade, voice_master), recalcule total_duration_s e regenere o jcut_timeline ao re-renderizar.',
-      'Depois re-renderize o corte com esses ranges e atualize o preview. Não peça para eu reenviar estes tempos.',
-    ].join('\n');
-    return dispatchMessage(
-      prompt,
-      `Aplicar ajustes da timeline (${ranges.length} ${ranges.length === 1 ? 'trecho' : 'trechos'})`,
-    );
+    setFollowingOutput(true);
+    setMessages((current) => [...current, {
+      id: `user:${Date.now()}`,
+      role: 'user',
+      text: `Aplicar ajustes da timeline (${ranges.length} ${ranges.length === 1 ? 'trecho' : 'trechos'})`,
+    }]);
+    setCleanCut({ status: 'cortando' });
+    try {
+      await window.edvidDesktop.applyTimelineRanges(directory, ranges.map((range) => ({
+        sourceId: range.sourceId,
+        start: range.start,
+        end: range.end,
+        label: range.label,
+      })));
+    } catch (error) {
+      setCleanCut({ status: 'erro', error: errorMessage(error) });
+    }
+    return true;
   }
 
   async function applyTimelineCorrections(items: CorrectionRange[]) {

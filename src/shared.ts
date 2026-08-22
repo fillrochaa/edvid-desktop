@@ -456,6 +456,10 @@ export type EdvidDesktopApi = {
   renderPhase2: (directory: string) => Promise<Phase2RenderState>;
   onPhase2RenderState: (listener: (state: Phase2RenderState) => void) => () => void;
   runCleanCut: (directory: string) => Promise<CleanCutState>;
+  applyTimelineRanges: (
+    directory: string,
+    ranges: Array<{ sourceId: string; start: number; end: number; label: string }>,
+  ) => Promise<CleanCutState>;
   onCleanCutState: (listener: (state: CleanCutState) => void) => () => void;
   sendCodexMessage: (input: CodexSendMessageInput) => Promise<CodexSendMessageResult>;
   interruptCodexTurn: (threadId: string, turnId: string) => Promise<void>;

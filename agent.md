@@ -1213,6 +1213,32 @@ Dependências do Fill:
   — só a tag datada é imutável; e o n7.1 já saiu de linha por lá, por
   isso o compartilhado compila da fonte. Validação real pendente (seção
   14).
+- 0.19.2: "Aplicar ajustes da timeline" também saiu das mãos do agente, e o
+  J-Cut ganhou as duas guardas que faltavam.
+  O aluno trimou os blocos na linha do tempo e mandou aplicar. O botão
+  DESPACHAVA UM PEDIDO AO AGENTE ("atualize o edl.json com estes ranges e
+  re-renderize"). O agente escreveu o EDL, respondeu que o Edvid renderizaria
+  — e ninguém renderizou. Medido na pasta dele:
+    corte_limpo-sem-jcut-tmp.mp4   vídeo 94,533s   áudio 94,538s   ok
+    corte_limpo.mp4 (com J-Cut)    vídeo 94,533s   áudio 90,613s   -3,9s
+  O EDL estava em 90,613s (13 trechos) e o vídeo em 94,533s. O J-Cut montou o
+  áudio a partir do EDL novo e colou, com `-c:v copy`, no vídeo antigo: som
+  fora do lugar do início ao fim.
+  (1) Recortar por uma lista de intervalos é o que o corte limpo já faz — a
+  única diferença é de onde vem a lista. Agora o botão chama
+  `applyTimelineRanges` no main: recorta com FFmpeg, reescreve o EDL para
+  descrever o vídeo que ACABOU de sair, apaga o `jcut_timeline` e o marcador
+  do J-Cut (o áudio dele foi calculado para outro corte) e some com o backup
+  velho.
+  (2) A verificação do J-Cut comparava a duração do CONTAINER antes e depois.
+  Container reporta o stream mais longo, então áudio curto não mexe nela — foi
+  exatamente por aí que o defeito passou. Duas guardas puras em `src/jcut.ts`,
+  com os números reais no teste: `cutMatchesEdl` recusa rodar quando o vídeo
+  não corresponde aos trechos do EDL, e `tracksInSync` mede TRILHA A TRILHA no
+  arquivo pronto antes de publicar.
+  LIÇÃO, quarta vez do mesmo padrão: passo mecânico delegado ao agente falha, e
+  quando falha em silêncio o estrago aparece dois passos depois, em outro
+  lugar.
 - 0.19.1: corte apertado de verdade e take refeito fora. O corte pelo app
   ficou rápido, mas o aluno viu "muitos silêncios e repetições que deveriam
   ter ficado de fora" e "muitos frames em silêncio no fim e no começo". Medido
